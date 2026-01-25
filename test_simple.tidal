@@ -1,0 +1,10 @@
+-- Simple Tidal Test - Should definitely make sound!
+
+-- Basic kick drum pattern
+d1 $ sound "bd bd bd bd"
+
+-- Wait a bit, then add a snare
+-- d2 $ sound "~ sn ~ sn"
+
+-- Or try this classic house beat
+-- d1 $ sound "bd [~ bd] sn:1 [bd sn:3]"
