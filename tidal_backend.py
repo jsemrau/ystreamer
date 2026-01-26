@@ -11,6 +11,11 @@ import subprocess
 import tempfile
 from queue import Queue
 from smolagents import CodeAgent, LiteLLMModel, tool
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(dotenv_path=env_path)
 
 # Environment configuration
 os.environ['HF_HOME'] = "/home/moebius/Models/hfmodels/.cache/"
@@ -29,16 +34,19 @@ stop_event = threading.Event()
 task_queue = []
 accumulated_logs = []
 current_song_context = "(No patterns playing yet)"
+current_patterns = {}  # Maps channel (d1, d2, etc.) to current pattern
+song_history = []  # Full history of all sent patterns
 executed_tasks_log = []
 
 # Test mode configuration
 TEST_MODE = False
 TEST_SAMPLE = 'd1 $ sound "bd [~ bd] sn:1 [bd sn:3]"\n'
 
-# Model configuration
-model = LiteLLMModel(
-    model_id="ollama/qwen2.5-coder:14b",
-)
+# Model configuration (default models, will be overridden during startup)
+default_composer_model = "ollama/qwen2.5-coder:14b"
+default_director_model = "ollama/qwen2.5-coder:14b"
+composer_agent = None
+creative_director_agent = None
 
 # ============================================================================
 # LOGGING
@@ -61,9 +69,22 @@ def get_logs():
     return ""
 
 def get_song_context():
-    """Get current song context (all playing code) for UI display"""
-    global current_song_context
-    return current_song_context
+    """Get current song context (currently playing patterns) for UI display"""
+    global current_patterns
+    if not current_patterns:
+        return "(No patterns playing yet)"
+    
+    result = []
+    for channel in sorted(current_patterns.keys()):
+        result.append(current_patterns[channel])
+    return "\n\n".join(result)
+
+def get_song_history():
+    """Get full history of all patterns sent"""
+    global song_history
+    if not song_history:
+        return "(No patterns sent yet)"
+    return "\n\n".join(song_history)
 
 def get_executed_tasks():
     """Get log of executed tasks for UI display"""
@@ -211,15 +232,27 @@ def start_recording() -> tuple[str, str]:
         filename = f"tidal_session_{timestamp}.mp3"
         filepath = os.path.join(recordings_dir, filename)
         
+        # Try to detect the correct audio source
+        # Check if PulseAudio monitor is available
+        try:
+            sources_result = subprocess.run(['pactl', 'list', 'sources', 'short'], 
+                                          capture_output=True, text=True, timeout=2)
+            log_message(f"[Recording] Available audio sources detected")
+        except:
+            log_message("[Recording] Warning: Could not query PulseAudio sources")
+        
         recording_process = subprocess.Popen([
             'ffmpeg',
             '-f', 'pulse',
-            '-i', '@DEFAULT_MONITOR@',
+            '-i', 'default',  # Changed from @DEFAULT_MONITOR@ to 'default'
             '-acodec', 'libmp3lame',
             '-b:a', '192k',
             '-y',
             filepath
         ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        log_message(f"[Recording] Started recording to: {filename}")
+        log_message("[Recording] If file is silent, check SuperCollider audio output routing")
         
         return f"Recording started: {filename}", filepath
         
@@ -282,9 +315,64 @@ def validate_tidal_syntax(code: str) -> str:
         r'\beff\b',  # Not a TidalCycles function - use specific effects
     ]
     
+    # Check for waveform names being used as sounds (common mistake)
+    waveform_as_sound_patterns = [
+        r'\bs\s+"[^"]*\b(sine|saw|tri|square)\b[^"]*"',  # s "sine" or s "bd sine"
+        r'\bsound\s+"[^"]*\b(sine|saw|tri|square)\b[^"]*"',  # sound "sine"
+    ]
+    
+    for pattern in waveform_as_sound_patterns:
+        match = re.search(pattern, code, re.IGNORECASE)
+        if match:
+            waveform = match.group(1)
+            return f"Error: '{waveform}' is a waveform function for modulation, NOT a playable sound. Use it with 'range' like: # speed (range 0.5 2 $ {waveform}). For sounds, use sample names like 'bd', 'sn', 'bass3', 'superpiano', etc. Please fix and try again."
+    
     for pattern in invalid_functions:
         if re.search(pattern, code):
             return "Error: Invalid function detected. Use 'range' with 'saw' or 'sine' for linear interpolation, or use specific effects like 'room', 'delay', 'lpf'. Please fix and try again."
+    
+    # BLACKLIST: Anti-patterns that cause cognitive overload or listening fatigue
+    warnings = []
+    
+    # Check for machine-gun repetition (*16, *32, etc.)
+    machine_gun = re.findall(r'\*(\d+)', code)
+    for count in machine_gun:
+        if int(count) >= 16:
+            warnings.append(f"⚠️  Excessive repetition '*{count}' detected - causes cognitive overload. Reduce to *8 or less for relaxing music.")
+    
+    # Check for saw wave on speed/pitch (causes jarring jumps)
+    if re.search(r'\bspeed\s*\([^)]*\bsaw\b', code):
+        return "Error: Using 'saw' waveform on 'speed' causes jarring pitch discontinuities. Use 'sine' or 'tri' for smooth modulation. Please fix and try again."
+    
+    # Check for high fast factor on transient sounds
+    fast_match = re.search(r'\bfast\s+(\d+)', code)
+    if fast_match and int(fast_match.group(1)) >= 8:
+        warnings.append(f"⚠️  'fast {fast_match.group(1)}' is very aggressive - causes harsh noise. Consider 'fast 6' or less for smoother results.")
+    
+    # Check for fast filter sweeps (fast 2+ on lpf/hpf)
+    if re.search(r'\b(lpf|hpf)\s*\([^)]*\bfast\s+[2-9]', code):
+        warnings.append("⚠️  Fast filter sweep detected - causes 'wah' fatigue. Use 'slow 2' or slower for relaxing modulation.")
+    
+    # Check for reverb/room on low-frequency sounds without HPF (causes mud and fatigue)
+    # Check each line separately to avoid false positives
+    for line in code.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        
+        # Check if this line has a low-frequency sound
+        low_freq_match = re.search(r'\b(bd|reverbkick|bass\d*|kick)\b', line)
+        if low_freq_match:
+            # Check if THIS SAME LINE has reverb/room
+            if re.search(r'#\s*(room|reverb|rv)', line):
+                # Check if THIS SAME LINE has high-pass filter to clean it up
+                if not re.search(r'#\s*hpf\s+\d', line):
+                    sound_name = low_freq_match.group(1)
+                    return f"Error: Reverb/room on low-frequency sound '{sound_name}' without high-pass filter causes low-frequency smear and listening fatigue. Add '# hpf 150' or higher to remove sub-bass tail, or remove reverb from this sound. This violates the critical mixing rule: NEVER allow sustained energy below 120 Hz that is not the main bass voice. Please fix and try again."
+    
+    # Check for looped reverbkick (creates continuous low-frequency pressure)
+    if re.search(r'\breverbkick\b', code) and re.search(r'#\s*loop\s+[4-9]', code):
+        warnings.append("⚠️  'reverbkick' with 'loop 4+' creates continuous low-frequency pressure. Use 'slow 4' instead or remove loop for cleaner rhythm.")
     
     found_valid = False
     for pattern in valid_patterns:
@@ -307,6 +395,11 @@ def validate_tidal_syntax(code: str) -> str:
     
     if errors:
         return f"Syntax errors found: {', '.join(errors)}. Please fix these errors and try again."
+    
+    # Return code with warnings if any
+    if warnings:
+        warning_text = "\n".join(warnings)
+        return f"{code}\n\n⚠️  WARNINGS:\n{warning_text}\n\nCode is valid but may cause listening fatigue. Consider revising."
     
     return code
 
@@ -333,165 +426,67 @@ def execute_tidal_code(code: str) -> str:
         return f"Error: {str(e)}"
 
 # ============================================================================
+# PROMPT LOADING
+# ============================================================================
+
+def load_prompt(filename):
+    """Load prompt from external markdown file"""
+    prompt_path = os.path.join(
+        os.path.dirname(__file__), 
+        "prompts", 
+        filename
+    )
+    try:
+        with open(prompt_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        log_message(f"Error loading prompt from {prompt_path}: {e}")
+        return ""
+
+# ============================================================================
 # AGENT CONFIGURATION
 # ============================================================================
 
-composer_prompt = """
-You are an expert TidalCycles live coder and composer.
-Your job is to generate TidalCycles code for musical patterns.
+composer_prompt = load_prompt("composer_prompt.md")
+creative_director_prompt = load_prompt("creative_director_prompt.md")
 
-CONTEXT AWARENESS:
-You will be given the CURRENT PATTERNS that are playing. When asked to:
-- ADD: Create a NEW pattern on an unused channel (d2, d3, d4, etc.)
-- MODIFY: Update an existing pattern by changing its parameters or effects
-- REMOVE: Use "silence" to stop a channel (e.g., "d2 silence")
-- TRANSFORM: Change an existing pattern with new effects or variations
-
-Use proper Tidal syntax with DIVERSE sounds:
-
-PERCUSSION:
-- d1 $ sound "bd sn"
-- d1 $ s "drum*4" # speed "0.5 1 2"
-- d1 $ s "hh*16" # gain "0.8 0.6"
-- d1 $ s "cp rim cp rim"
-
-MELODIC & HARMONIC:
-- d2 $ n "c a f e" # s "superpiano" # room 0.3
-- d2 $ n "<0 7 12>" # s "superfm" # lpf 2000 # lpq 0.2
-- d2 $ n "0 4 7 12" # s "supermandolin" # delay 0.5
-- d2 $ n (scale "minor" "0 2 4 7") # s "supersaw" # room 0.4
-
-BASS & LOW END:
-- d3 $ n "c2 c2 e2 g2" # s "bass3" # lpf 400
-- d3 $ n "0 0 7 5" # s "reverbkick" # shape 0.6
-- d3 $ n "0 7 12" # s "bass1" # lpf 300 # lpq 0.3
-- d3 $ s "casio:0" # speed "0.5" # room 0.2
-
-ATMOSPHERIC & TEXTURE:
-- d4 $ s "pad:0*4" # room 1 # size 0.9 # orbit 1
-- d4 $ s "space:2" # slow 4 # gain 0.7
-- d4 $ s "arpy*8" # speed (range 0.5 2 $ slow 8 $ sine) # room 0.8
-- d4 $ s "amencutup*16" # n (irand 32) # speed 0.125
-
-EFFECTS & MODULATION:
-- d1 $ s "bd*8" # speed (range 1 2 $ slow 8 $ saw)  -- for linear ramps
-- d1 $ s "bd cp" # gain (range 0.5 1 $ sine)  -- for sine wave modulation
-- d1 $ s "hh*8" # lpf (range 500 5000 $ slow 4 $ tri)
-- d1 $ s "sn" # delay 0.5 # delaytime (1/3) # delayfb 0.6
-- d2 silence  -- to stop a channel
-
-IMPORTANT SYNTAX RULES:
-- For linear/ramping values, use: range <start> <end> $ slow <cycles> $ saw
-- For oscillating values, use: range <min> <max> $ sine
-- NEVER use 'lin' or 'eff' - they don't exist in TidalCycles
-
-MANDATORY WORKFLOW:
-You MUST write Python code that:
-1. Stores your TidalCycles code in a variable using triple quotes
-2. Calls validate_tidal_syntax() to validate it
-3. Returns the result using final_answer()
-
-CRITICAL - YOU WILL FAIL IF YOU DO THIS WRONG:
-❌ NEVER return raw TidalCycles code directly
-❌ NEVER execute: d1 $ sound "bd sn"
-✅ ALWAYS wrap in Python: tidal_code = '''d1 $ sound "bd sn"'''
-
-CRITICAL OUTPUT FORMAT:
-Write Python code in this EXACT format:
-
-<code>
-tidal_code = '''d1 $ sound "bd sn"'''
-result = validate_tidal_syntax(tidal_code)
-final_answer(result)
-</code>
-
-The <code> tags are REQUIRED. The triple quotes are REQUIRED.
-
-REMEMBER: Always wrap TidalCycles code in Python with triple quotes!
-
-EXAMPLE 1 - Percussion:
-<code>
-tidal_code = '''d1 $ s "bd*4 sn*2" # gain "0.8"'''
-result = validate_tidal_syntax(tidal_code)
-final_answer(result)
-</code>
-
-EXAMPLE 2 - Melodic:
-<code>
-tidal_code = '''d2 $ n "c e g c5" # s "superpiano" # room 0.3'''
-result = validate_tidal_syntax(tidal_code)
-final_answer(result)
-</code>
-
-EXAMPLE 3 - Bass with effects:
-<code>
-tidal_code = '''d3 $ n "c2 c2 e2 g2" # s "bass3" # lpf (range 100 800 $ slow 2 $ saw)'''
-result = validate_tidal_syntax(tidal_code)
-final_answer(result)
-</code>
-
-CRITICAL: Use final_answer(result) at the end, NOT print(result).
-Use triple quotes (''') for the TidalCycles code string.
-Always call validate_tidal_syntax() to check syntax before returning.
-"""
-
-composer_agent = CodeAgent(
-    tools=[validate_tidal_syntax], 
-    model=model,
-    additional_authorized_imports=["re"],
-    add_base_tools=True,
-    max_steps=10,    
-)
-
-creative_director_prompt = """
-You are a creative musical director and arranger with deep understanding of musical flow, dynamics, and composition.
-You analyze TidalCycles code that is currently playing and decide what should happen next.
-
-You will be given the ACTUAL TidalCycles patterns currently playing. Analyze:
-- What channels (d1, d2, d3, etc.) are being used
-- What sounds and patterns are active
-- Rhythmic density and complexity
-- Whether patterns are simple or complex
-- What's missing or what could be enhanced
-- What should be removed or modified
-
-SONIC PALETTE - Consider adding variety from:
-- MELODIC: superpiano, supermandolin, superfm, supersaw, superzow
-- BASS: bass1, bass2, bass3, reverbkick, casio, sid
-- ATMOSPHERIC: pad, space, arpy (with effects)
-- PERCUSSION: bd, sn, hh, cp, rim, clap, click
-- TEXTURAL: amencutup, glitch, breath, wind
-- EFFECTS: room, delay, lpf, hpf, shape, distort
-
-Consider:
-- Musical progression and build-up (intro → development → climax → resolution)
-- SONIC DIVERSITY - balance percussion with melodic, bass, and atmospheric elements
-- Rhythmic complexity and variation
-- Harmonic movement and tension/release
-- Textural layering (adding/removing elements)
-- Energy levels and dynamics
-- Contrast and surprise elements
-- Overall coherence and structure
-
-Based on the CURRENT CODE you see, suggest ONE specific next action:
-1. ADD new patterns on unused channels (prioritize non-percussion if missing)
-2. MODIFY existing patterns (e.g., "change d1 to add reverb effect")
-3. REMOVE or SIMPLIFY patterns (e.g., "stop d2 to reduce density")
-4. TRANSFORM patterns (e.g., "add gradual speed increase to d1")
-
-CRITICAL: Return ONLY ONE suggestion. No list. Just a single task description.
-Be specific about channels, sounds, and musical elements.
-
-Example output (ONLY ONE LINE):
-add melodic pattern on d2 using superpiano with notes from C minor scale
-"""
-
-creative_director_agent = CodeAgent(
-    tools=[],
-    model=model,
-    add_base_tools=False,
-    max_steps=1,
-)
+def create_agents(composer_model_id, director_model_id):
+    """Create agents with specified models"""
+    global composer_agent, creative_director_agent
+    
+    # Log API key availability
+    has_openai = bool(os.getenv('OPENAI_API_KEY'))
+    has_anthropic = bool(os.getenv('ANTHROPIC_API_KEY'))
+    
+    if 'gpt' in composer_model_id.lower() or 'gpt' in director_model_id.lower():
+        if not has_openai:
+            log_message("⚠️  Warning: OpenAI models selected but OPENAI_API_KEY not found in .env")
+    
+    if 'claude' in composer_model_id.lower() or 'claude' in director_model_id.lower():
+        if not has_anthropic:
+            log_message("⚠️  Warning: Claude models selected but ANTHROPIC_API_KEY not found in .env")
+    
+    log_message(f"Creating Composer Agent with model: {composer_model_id}")
+    composer_model = LiteLLMModel(model_id=composer_model_id)
+    composer_agent = CodeAgent(
+        tools=[validate_tidal_syntax], 
+        model=composer_model,
+        additional_authorized_imports=["re"],
+        add_base_tools=True,
+        max_steps=10,    
+    )
+    
+    log_message(f"Creating Creative Director Agent with model: {director_model_id}")
+    director_model = LiteLLMModel(model_id=director_model_id)
+    creative_director_agent = CodeAgent(
+        tools=[],
+        model=director_model,
+        add_base_tools=False,
+        max_steps=1,
+        planning_interval=None,  # Disable planning for simple text output
+    )
+    
+    log_message("✓ Agents created successfully")
 
 # ============================================================================
 # MUSIC GENERATION ENGINE
@@ -499,12 +494,15 @@ creative_director_agent = CodeAgent(
 
 def run_music_generation(task_text, test_mode, director_interval, use_creative_director=True):
     """Main function to run the music generation agent"""
-    global is_running, tidal_process, stop_event, task_queue, current_song_context, executed_tasks_log
+    global is_running, tidal_process, stop_event, task_queue, current_patterns, song_history, executed_tasks_log
     
     stop_event.clear()
-    song_context = "Current patterns playing:\n(none yet)\n"
-    current_song_context = "(No patterns playing yet)"
+    current_patterns = {}  # Track currently playing patterns per channel
+    song_history = []  # Full history
     executed_tasks_log = []
+    
+    # Store the overall musical goal (not just a task - this is the creative vision)
+    musical_goal = task_text.split('\n')[0].strip() if task_text else "create music"
     
     tasks = [t.strip() for t in task_text.split('\n') if t.strip()]
     task_queue = []
@@ -525,8 +523,15 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                 
                 try:
                     director_start = time.time()
+                    
+                    # Build current context string from currently playing patterns
+                    if current_patterns:
+                        current_context = "\n\n".join([current_patterns[ch] for ch in sorted(current_patterns.keys())])
+                    else:
+                        current_context = "(no patterns playing yet)"
+                    
                     suggestions = creative_director_agent.run(
-                        f"{creative_director_prompt}\n\nCurrent song state:\n{song_context}\n\nSuggest what should come next to enhance the musical flow."
+                        f"{creative_director_prompt}\n\n=== YOUR CREATIVE GOAL ===\n{musical_goal}\n\nThis is the overall musical vision you are working towards.\n\n=== CURRENT PATTERNS ===\n{current_context}\n\nSuggest ONE next development that serves this goal."
                     )
                     director_time = time.time() - director_start
                     
@@ -551,14 +556,17 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                             tasks.extend(suggestion_lines)
                             for idx, sugg in enumerate(suggestion_lines, 1):
                                 log_message(f"   {idx}. {sugg}")
+                            # DO NOT use continue here - we want to process the new task immediately
                         else:
                             log_message("[Creative Director] No new tasks extracted from suggestions")
+                            log_message(f"\n   Waiting {director_interval}s before next iteration...")
+                            time.sleep(director_interval)
+                            continue
                     else:
                         log_message("[Creative Director] No suggestions received")
-                    
-                    log_message(f"\n   Waiting {director_interval}s before next iteration...")
-                    time.sleep(director_interval)
-                    continue
+                        log_message(f"\n   Waiting {director_interval}s before next iteration...")
+                        time.sleep(director_interval)
+                        continue
                     
                 except Exception as e:
                     log_message(f"[Creative Director] Error: {e}")
@@ -586,14 +594,24 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
             composer_time = 0
         else:
             log_message(f"\n[Agent: Composer] Generating code...")
-            log_message(f"[Context] Current patterns:\n{song_context}")
+            
+            # Build current context string
+            if current_patterns:
+                current_context = "\n\n".join([current_patterns[ch] for ch in sorted(current_patterns.keys())])
+            else:
+                current_context = "(no patterns playing yet)"
+            
+            log_message(f"[Context] Current patterns:\n{current_context}")
             log_message(f"[Task] {task}")
             start_time = time.time()
             
             full_prompt = f"""{composer_prompt}
 
+                                === MUSICAL GOAL ===
+                                {musical_goal}
+
                                 CURRENT STATE:
-                                {song_context}
+                                {current_context}
 
                                 TASK:
                                 {task}
@@ -639,18 +657,49 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                 log_message(f"\n▶ Executing AI-generated pattern...")
                 log_message(f"   Code: {tidal_code}")
                 
-                tidal_process.stdin.write(tidal_code + "\n")
-                tidal_process.stdin.flush()
-                log_message("   ✓ Code sent to TidalCycles!")
+                # Split multi-line code and send each line separately to ensure proper execution
+                code_lines = [line.strip() for line in tidal_code.split('\n') if line.strip()]
+                
+                for idx, line in enumerate(code_lines, 1):
+                    log_message(f"   → Sending pattern {idx}/{len(code_lines)}: {line[:60]}{'...' if len(line) > 60 else ''}")
+                    tidal_process.stdin.write(line + "\n")
+                    tidal_process.stdin.flush()
+                    time.sleep(0.2)  # Increased delay to ensure TidalCycles processes each pattern
+                
+                log_message(f"   ✓ Sent {len(code_lines)} pattern(s) to TidalCycles!")
+                time.sleep(0.5)  # Wait for all patterns to be processed before continuing
                 
                 task_queue.append(tidal_code)
+                song_history.append(tidal_code)
                 
-                if i == 0:
-                    song_context = "Current patterns playing:\n" + tidal_code + "\n"
-                    current_song_context = tidal_code
-                else:
-                    song_context += "\n" + tidal_code + "\n"
-                    current_song_context += "\n\n" + tidal_code
+                # Parse and update current patterns per channel
+                log_message(f"   Parsing {len(tidal_code.split(chr(10)))} lines of code...")
+                for line in tidal_code.split('\n'):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    # Check if it's a channel assignment (d1, d2, etc.)
+                    # Match patterns like: d1 $, d1 silence, d10 $, etc.
+                    channel_match = re.match(r'^(d\d+)\s+(.+)', line)
+                    if channel_match:
+                        channel = channel_match.group(1)
+                        rest_of_line = channel_match.group(2)
+                        
+                        # Check if it's silencing the channel
+                        if rest_of_line.strip().lower() in ['silence', '$ silence']:
+                            # Remove channel from current patterns
+                            if channel in current_patterns:
+                                del current_patterns[channel]
+                                log_message(f"   → Removed {channel} from current patterns (silenced)")
+                        else:
+                            # Update or add channel pattern
+                            current_patterns[channel] = line
+                            log_message(f"   → Updated {channel} in current patterns")
+                    else:
+                        log_message(f"   ⚠ Line didn't match channel pattern: {line[:50]}...")
+                
+                log_message(f"   Total active channels: {len(current_patterns)} - {sorted(current_patterns.keys())}")
                 
                 executed_tasks_log.append(f"Task {i+1}: {task}")
                 
@@ -671,12 +720,18 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
     
     log_message("\n✓ All tasks completed!")
 
-def start_system(task_text, test_mode, director_interval):
+def start_system(task_text, test_mode, director_interval, composer_model_id=None, director_model_id=None):
     """Start the TidalCycles system and agent"""
     global is_running, agent_thread, stop_event, accumulated_logs
     
     if is_running:
         return "System is already running!"
+    
+    # Use default models if not specified
+    if composer_model_id is None:
+        composer_model_id = default_composer_model
+    if director_model_id is None:
+        director_model_id = default_director_model
     
     while not log_queue.empty():
         log_queue.get()
@@ -685,6 +740,10 @@ def start_system(task_text, test_mode, director_interval):
     log_message("="*60)
     log_message("Initializing TidalCycles Environment")
     log_message("="*60)
+    
+    # Create agents with selected models
+    log_message("\nCreating AI agents...")
+    create_agents(composer_model_id, director_model_id)
     
     log_message("\nStarting SuperDirt...")
     start_result = start_superdirt()
@@ -702,6 +761,8 @@ def start_system(task_text, test_mode, director_interval):
     
     log_message("\n" + "="*60)
     log_message("Environment Ready")
+    log_message(f"🎼 Composer Model: {composer_model_id}")
+    log_message(f"🎨 Director Model: {director_model_id}")
     log_message("🎨 Creative Director: ENABLED")
     log_message("🔴 Recording: ACTIVE")
     log_message("="*60)

@@ -22,6 +22,38 @@ with gr.Blocks(title="TidalCycles AI Music Generator") as demo:
                     info="Use test sample instead of AI generation"
                 )
                 
+                composer_model_dropdown = gr.Dropdown(
+                    choices=[
+                        "ollama/qwen2.5-coder:14b",
+                        "ollama/qwen2.5-coder:32b",
+                        "ollama/deepseek-coder-v2:16b",
+                        "ollama/codestral:22b",
+                        "gpt-4o",
+                        "gpt-4o-mini",
+                        "claude-3-5-sonnet-20241022",
+                        "claude-3-5-haiku-20241022"
+                    ],
+                    value="ollama/qwen2.5-coder:14b",
+                    label="Composer Model",
+                    info="AI model for generating TidalCycles code"
+                )
+                
+                director_model_dropdown = gr.Dropdown(
+                    choices=[
+                        "ollama/qwen2.5-coder:14b",
+                        "ollama/qwen2.5-coder:32b",
+                        "ollama/deepseek-coder-v2:16b",
+                        "ollama/codestral:22b",
+                        "gpt-4o",
+                        "gpt-4o-mini",
+                        "claude-3-5-sonnet-20241022",
+                        "claude-3-5-haiku-20241022"
+                    ],
+                    value="ollama/qwen2.5-coder:14b",
+                    label="Creative Director Model",
+                    info="AI model for suggesting musical directions"
+                )
+                
                 director_interval_slider = gr.Slider(
                     minimum=3,
                     maximum=30,
@@ -32,10 +64,11 @@ with gr.Blocks(title="TidalCycles AI Music Generator") as demo:
                 )
                 
                 task_input = gr.Textbox(
-                    label="Initial Task",
-                    placeholder="melodic pattern with superpiano using C minor scale",
+                    label="Musical Goal",
+                    placeholder="Example: create a relaxing atmospheric soundscape",
                     lines=5,
-                    value="create a deep bass pattern using bass3 with slow filter modulation"
+                    value="create a relaxing atmospheric low-tempo song to cure ADHD",
+                    info="The overall creative direction for this musical piece"
                 )
             
             with gr.Row():
@@ -67,8 +100,8 @@ with gr.Blocks(title="TidalCycles AI Music Generator") as demo:
                     )
     
     # Event handlers
-    def start_handler(task_text, test_mode, director_interval):
-        result = backend.start_system(task_text, test_mode, director_interval)
+    def start_handler(task_text, test_mode, composer_model, director_model, director_interval):
+        result = backend.start_system(task_text, test_mode, director_interval, composer_model, director_model)
         return result, gr.update(interactive=False), gr.update(interactive=True)
     
     def stop_handler():
@@ -77,7 +110,7 @@ with gr.Blocks(title="TidalCycles AI Music Generator") as demo:
     
     start_btn.click(
         fn=start_handler,
-        inputs=[task_input, test_mode_checkbox, director_interval_slider],
+        inputs=[task_input, test_mode_checkbox, composer_model_dropdown, director_model_dropdown, director_interval_slider],
         outputs=[status_text, start_btn, stop_btn]
     )
     
