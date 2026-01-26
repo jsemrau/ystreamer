@@ -27,7 +27,8 @@ superdirt_process = None
 # Use Ollama for GGUF model support
 model = LiteLLMModel(
     model_id="ollama/qwen2.5-coder:14b",
-
+    temperature=0.01,
+    max_new_tokens=1024,
 )
 
 def start_superdirt() -> str:
@@ -318,20 +319,6 @@ composer_agent = CodeAgent(
     max_steps=3,    
 )
 
-# Agent 2: Executes TidalCycles code
-executor_prompt = """
-                You are a TidalCycles code executor.
-                Your job is to take validated TidalCycles code and execute it in the session.
-                Use the execute_tidal_code tool to send code to the running TidalCycles session.
-                """
-
-executor_agent = CodeAgent(
-    tools=[execute_tidal_code], 
-    model=model,
-    additional_authorized_imports=["subprocess"],
-    add_base_tools=False,
-    max_steps=2,    
-)
 
 # Parse command-line arguments
 import argparse
@@ -342,19 +329,20 @@ args = parser.parse_args()
 
 PLAY_DURATION = args.time
 
-# Context of the existing song
-song_context = """
-Current TidalCycles session state:
-- No patterns currently playing
-- Available channels: d1, d2, d3, d4, etc.
-- Tempo: default (setcps can be used to change)
-- Available sounds: bd (bass drum), sn (snare), cp (clap), hh (hihat), etc.
-"""
-
 # Array of tasks to execute
 tasks = [
     "base drum pattern with increasing speed over 8 cycles"
 ]
+
+# Context of the existing song
+song_context = f"""
+Current TidalCycles session state:
+- No patterns currently playing
+- Available channels: d1, d2, d3, d4, etc.
+- Tempo: cps=0.8
+
+Initial goal: {tasks[0]}
+"""
 
 # Initialize TidalCycles environment at startup
 print("="*60)
