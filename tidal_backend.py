@@ -9,13 +9,15 @@ import threading
 import re
 import subprocess
 import tempfile
+import signal
 from queue import Queue
-from smolagents import CodeAgent, LiteLLMModel, tool
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 env_path = os.path.join(os.path.dirname(__file__), '.env')
-load_dotenv(dotenv_path=env_path)
+load_dotenv(dotenv_path=env_path, override=True)
+
+from smolagents import CodeAgent, LiteLLMModel, tool
 
 # Environment configuration
 os.environ['HF_HOME'] = "/home/moebius/Models/hfmodels/.cache/"
@@ -38,13 +40,19 @@ current_patterns = {}  # Maps channel (d1, d2, etc.) to current pattern
 song_history = []  # Full history of all sent patterns
 executed_tasks_log = []
 
+# SuperDirt instrument aliases (avoid missing instrument errors)
+INSTRUMENT_ALIASES = {
+    # SuperDirt doesn't ship a plain "piano" instrument; use its synth instead.
+    "piano": "superpiano",
+}
+
 # Test mode configuration
 TEST_MODE = False
 TEST_SAMPLE = 'd1 $ sound "bd [~ bd] sn:1 [bd sn:3]"\n'
 
 # Model configuration (default models, will be overridden during startup)
-default_composer_model = "ollama/qwen2.5-coder:14b"
-default_director_model = "ollama/qwen2.5-coder:14b"
+default_composer_model = "gpt-5-mini"
+default_director_model = "gpt-5-mini"
 composer_agent = None
 creative_director_agent = None
 
@@ -102,8 +110,10 @@ def start_superdirt() -> str:
     global superdirt_process
     
     try:
-        if superdirt_process is not None:
+        if superdirt_process is not None and superdirt_process.poll() is None:
             return "SuperDirt is already running"
+        if superdirt_process is not None and superdirt_process.poll() is not None:
+            superdirt_process = None
         
         sc_code = """
                     s.boot;
@@ -150,8 +160,10 @@ def start_tidal_session() -> str:
     global tidal_process
     
     try:
-        if tidal_process is not None:
+        if tidal_process is not None and tidal_process.poll() is None:
             return "TidalCycles session is already running"
+        if tidal_process is not None and tidal_process.poll() is not None:
+            tidal_process = None
         
         boot_file = "/home/moebius/Projects/youtube-stream-music-generation/tidal/BootTidal.hs"
         
@@ -232,27 +244,92 @@ def start_recording() -> tuple[str, str]:
         filename = f"tidal_session_{timestamp}.mp3"
         filepath = os.path.join(recordings_dir, filename)
         
+        def pick_pulse_source() -> tuple[str, str]:
+            """Pick a PulseAudio/PipeWire source that captures system output (monitor)."""
+            try:
+                default_sink = subprocess.run(
+                    ["pactl", "get-default-sink"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                ).stdout.strip()
+            except Exception:
+                default_sink = ""
+
+            try:
+                sources_text = subprocess.run(
+                    ["pactl", "list", "sources", "short"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                ).stdout
+            except Exception:
+                sources_text = ""
+
+            sources = []
+            for line in sources_text.splitlines():
+                parts = line.split()
+                if len(parts) >= 2:
+                    sources.append(parts[1])
+
+            if default_sink:
+                monitor = f"{default_sink}.monitor"
+                if monitor in sources:
+                    return monitor, f"default sink monitor ({default_sink})"
+
+            monitors = [s for s in sources if s.endswith(".monitor")]
+            if monitors:
+                # Prefer analog monitor over hdmi to match typical desktop playback
+                monitors_sorted = sorted(
+                    monitors,
+                    key=lambda s: (0 if "analog" in s else 1, 0 if "stereo" in s else 1, s),
+                )
+                return monitors_sorted[0], "first available monitor source"
+
+            return "default", "fallback to Pulse default (may be mic)"
+
+        pulse_source, pulse_reason = pick_pulse_source()
+
         # Try to detect the correct audio source
-        # Check if PulseAudio monitor is available
+        # Check if PulseAudio/PipeWire sources are available
         try:
-            sources_result = subprocess.run(['pactl', 'list', 'sources', 'short'], 
-                                          capture_output=True, text=True, timeout=2)
-            log_message(f"[Recording] Available audio sources detected")
-        except:
+            subprocess.run(
+                ['pactl', 'list', 'sources', 'short'],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            log_message(f"[Recording] Using source: {pulse_source} ({pulse_reason})")
+        except Exception:
             log_message("[Recording] Warning: Could not query PulseAudio sources")
         
         recording_process = subprocess.Popen([
             'ffmpeg',
+            '-hide_banner',
+            '-loglevel', 'warning',
+            '-nostats',
             '-f', 'pulse',
-            '-i', 'default',  # Changed from @DEFAULT_MONITOR@ to 'default'
+            '-i', pulse_source,
+            '-vn',
             '-acodec', 'libmp3lame',
             '-b:a', '192k',
             '-y',
             filepath
-        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, bufsize=1)
+
+        def drain_ffmpeg_stderr(proc: subprocess.Popen):
+            try:
+                assert proc.stderr is not None
+                for line in proc.stderr:
+                    if line:
+                        log_message(f"[Recording/ffmpeg] {line.rstrip()}")
+            except Exception:
+                pass
+
+        threading.Thread(target=drain_ffmpeg_stderr, args=(recording_process,), daemon=True).start()
         
         log_message(f"[Recording] Started recording to: {filename}")
-        log_message("[Recording] If file is silent, check SuperCollider audio output routing")
+        log_message("[Recording] If file is silent, ensure SuperCollider outputs to PipeWire/Pulse (monitor) and not JACK-only")
         
         return f"Recording started: {filename}", filepath
         
@@ -267,12 +344,124 @@ def stop_recording() -> str:
         return "No recording in progress"
     
     try:
-        recording_process.terminate()
-        recording_process.wait(timeout=5)
+        # Graceful stop so the MP3 header/trailer is finalized properly
+        recording_process.send_signal(signal.SIGINT)
+        recording_process.wait(timeout=10)
         recording_process = None
         return "Recording stopped and saved"
     except Exception as e:
+        try:
+            recording_process.terminate()
+            recording_process.wait(timeout=5)
+        except Exception:
+            pass
+        recording_process = None
         return f"Error stopping recording: {str(e)}"
+
+# ============================================================================
+# TIDAL CODE NORMALIZATION (DEFENSIVE REWRITES)
+# ============================================================================
+
+def normalize_tidal_code(code: str) -> tuple[str, list[str]]:
+    """Rewrite common non-existent instruments to known SuperDirt equivalents."""
+    if not code:
+        return code, []
+
+    replacements: list[str] = []
+
+    def replace_instrument_tokens(sound_string: str) -> str:
+        updated = sound_string
+        for src, dst in INSTRUMENT_ALIASES.items():
+            # Replace bare tokens and indexed variants like piano:2, keeping any
+            # mini-notation suffixes like (3,8) intact.
+            pattern = re.compile(rf"(?<!\w){re.escape(src)}(?::\d+)?(?!\w)", re.IGNORECASE)
+            if pattern.search(updated):
+                updated = pattern.sub(dst, updated)
+                replacements.append(f"{src}->{dst}")
+        return updated
+
+    def repl(match: re.Match) -> str:
+        keyword = match.group(1)  # sound|s
+        quoted = match.group(2)
+        updated = replace_instrument_tokens(quoted)
+        if updated == quoted:
+            return match.group(0)
+        return f'{keyword} "{updated}"'
+
+    updated_code = re.sub(r'\b(sound|s)\s+"([^"]*)"', repl, code)
+
+    # Defensive mix fix: if a low-frequency sound has room but no HPF, add one.
+    fixed_lines: list[str] = []
+    for raw_line in updated_code.split("\n"):
+        leading_ws = raw_line[: len(raw_line) - len(raw_line.lstrip())]
+        line = raw_line.strip()
+        if not line:
+            fixed_lines.append(raw_line)
+            continue
+
+        low_freq_match = re.search(r"\b(bd|reverbkick|bass\d*|kick)\b", line)
+        if low_freq_match and re.search(r"#\s*(room|reverb|rv)\b", line, flags=re.IGNORECASE):
+            if not re.search(r"#\s*hpf\s+\d+", line, flags=re.IGNORECASE):
+                sound_name = low_freq_match.group(1)
+                line = f"{line} # hpf 150"
+                replacements.append(f"add_hpf:{sound_name}")
+
+        fixed_lines.append(f"{leading_ws}{line}")
+
+    updated_code = "\n".join(fixed_lines)
+
+    # De-dup replacement notes while preserving order
+    deduped: list[str] = []
+    for item in replacements:
+        if item not in deduped:
+            deduped.append(item)
+    return updated_code, deduped
+
+def extract_tidal_code(code_snippet) -> str | None:
+    """Extract runnable Tidal lines from an agent response (handles markdown fences/bullets)."""
+    if not code_snippet:
+        return None
+
+    if isinstance(code_snippet, list):
+        raw_text = "\n".join(str(x) for x in code_snippet if x is not None)
+    else:
+        raw_text = str(code_snippet)
+
+    raw_text = raw_text.strip()
+    if not raw_text:
+        return None
+
+    fenced_blocks = re.findall(r"```(?:[a-zA-Z0-9_-]+)?\n(.*?)```", raw_text, flags=re.DOTALL)
+    candidates_text = "\n".join(fenced_blocks) if fenced_blocks else raw_text
+
+    def clean_line(line: str) -> str:
+        s = line.strip()
+        if not s:
+            return ""
+        if s.startswith("```"):
+            return ""
+        s = s.strip("`")
+        s = re.sub(r"^(tidal>\s*)", "", s, flags=re.IGNORECASE)
+        s = re.sub(r"^\s*(?:[-*•]|\d+[\.\)]|\d+\s*-\s*)\s*", "", s)
+        return s.strip()
+
+    def is_tidal_line(line: str) -> bool:
+        return bool(
+            re.match(r"^d\d+\s*[\$=]", line)
+            or re.match(r"^d\d+\s+silence\b", line, flags=re.IGNORECASE)
+            or re.match(r"^(setcps|cps|hush|once|silence|let)\b", line)
+        )
+
+    lines = [clean_line(l) for l in candidates_text.splitlines()]
+    tidal_lines = [l for l in lines if l and is_tidal_line(l)]
+
+    if not tidal_lines:
+        stripped = clean_line(candidates_text)
+        if is_tidal_line(stripped):
+            return stripped
+        return None
+
+    return "\n".join(tidal_lines)
 
 # ============================================================================
 # VALIDATION TOOL
@@ -326,6 +515,14 @@ def validate_tidal_syntax(code: str) -> str:
         if match:
             waveform = match.group(1)
             return f"Error: '{waveform}' is a waveform function for modulation, NOT a playable sound. Use it with 'range' like: # speed (range 0.5 2 $ {waveform}). For sounds, use sample names like 'bd', 'sn', 'bass3', 'superpiano', etc. Please fix and try again."
+
+    # Common missing instrument: "piano" (not a default SuperDirt instrument)
+    if re.search(r'\b(sound|s)\s+"[^"]*(?<![\w])piano(?::\d+)?(?![\w])[^"]*"', code, re.IGNORECASE):
+        return (
+            "Error: 'piano' is not a default SuperDirt instrument, so SuperCollider can't find it. "
+            "Use 'superpiano' instead (with notes), e.g. "
+            'd2 $ n "c e g c5" # s "superpiano" # room 0.3'
+        )
     
     for pattern in invalid_functions:
         if re.search(pattern, code):
@@ -353,22 +550,35 @@ def validate_tidal_syntax(code: str) -> str:
     if re.search(r'\b(lpf|hpf)\s*\([^)]*\bfast\s+[2-9]', code):
         warnings.append("⚠️  Fast filter sweep detected - causes 'wah' fatigue. Use 'slow 2' or slower for relaxing modulation.")
     
-    # Check for reverb/room on low-frequency sounds without HPF (causes mud and fatigue)
-    # Check each line separately to avoid false positives
-    for line in code.split('\n'):
-        line = line.strip()
+    # Auto-fix: reverb/room on low-frequency sounds without HPF (prevents mud/fatigue)
+    fixed_lines: list[str] = []
+    hpf_fixes: list[str] = []
+    for raw_line in code.split("\n"):
+        line = raw_line.strip()
         if not line:
+            fixed_lines.append(raw_line)
             continue
-        
-        # Check if this line has a low-frequency sound
-        low_freq_match = re.search(r'\b(bd|reverbkick|bass\d*|kick)\b', line)
-        if low_freq_match:
-            # Check if THIS SAME LINE has reverb/room
-            if re.search(r'#\s*(room|reverb|rv)', line):
-                # Check if THIS SAME LINE has high-pass filter to clean it up
-                if not re.search(r'#\s*hpf\s+\d', line):
-                    sound_name = low_freq_match.group(1)
-                    return f"Error: Reverb/room on low-frequency sound '{sound_name}' without high-pass filter causes low-frequency smear and listening fatigue. Add '# hpf 150' or higher to remove sub-bass tail, or remove reverb from this sound. This violates the critical mixing rule: NEVER allow sustained energy below 120 Hz that is not the main bass voice. Please fix and try again."
+
+        low_freq_match = re.search(r"\b(bd|reverbkick|bass\d*|kick)\b", line)
+        if low_freq_match and re.search(r"#\s*(room|reverb|rv)\b", line, flags=re.IGNORECASE):
+            if not re.search(r"#\s*hpf\s+\d+", line, flags=re.IGNORECASE):
+                sound_name = low_freq_match.group(1)
+                line = f"{line} # hpf 150"
+                hpf_fixes.append(sound_name)
+
+        fixed_lines.append(line)
+
+    if hpf_fixes:
+        code = "\n".join(fixed_lines)
+        unique = []
+        for s in hpf_fixes:
+            if s not in unique:
+                unique.append(s)
+        warnings.append(
+            "⚠️  Added '# hpf 150' to low-frequency sound(s) with room: "
+            + ", ".join(unique)
+            + ". This prevents low-frequency smear and listening fatigue."
+        )
     
     # Check for looped reverbkick (creates continuous low-frequency pressure)
     if re.search(r'\breverbkick\b', code) and re.search(r'#\s*loop\s+[4-9]', code):
@@ -413,14 +623,21 @@ def execute_tidal_code(code: str) -> str:
     global tidal_process
     
     try:
-        if tidal_process is None:
-            return "Error: No TidalCycles session running. Call start_tidal_session() first."
+        if tidal_process is None or tidal_process.poll() is not None:
+            start_msg = start_tidal_session()
+            log_message(start_msg)
+            if tidal_process is None or tidal_process.poll() is not None:
+                return "Error: No TidalCycles session running. Call start_tidal_session() first."
+
+        normalized, replacements = normalize_tidal_code(code)
+        if replacements:
+            log_message(f"[Normalize] Rewrote instruments: {', '.join(replacements)}")
         
-        tidal_process.stdin.write(code + "\n")
+        tidal_process.stdin.write(normalized + "\n")
         tidal_process.stdin.flush()
         time.sleep(0.5)
         
-        return f"TidalCycles code sent to session:\n{code}"
+        return f"TidalCycles code sent to session:\n{normalized}"
             
     except Exception as e:
         return f"Error: {str(e)}"
@@ -627,33 +844,25 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
         log_message(f"[Agent: Composer] Time: {composer_time:.2f}s")
         log_message(f"[Agent: Composer] Generated:\n{code_snippet}")
         
-        # Extract TidalCycles code from agent response
-        tidal_code = None
-        if code_snippet and isinstance(code_snippet, str):
-            stripped = code_snippet.strip()
-            if re.match(r'^d\d+\s*[\$]', stripped) or re.match(r'^(setcps|cps|hush|silence)\s', stripped):
-                tidal_code = stripped
-            else:
-                lines = code_snippet.split('\n')
-                tidal_lines = []
-                
-                for line in lines:
-                    line = line.strip()
-                    if (re.match(r'^d\d+\s*[\$\=]', line) or 
-                        re.match(r'^(setcps|cps|hush|once|silence|let)\s', line)):
-                        tidal_lines.append(line)
-                
-                if tidal_lines:
-                    tidal_code = '\n'.join(tidal_lines)
+        tidal_code = extract_tidal_code(code_snippet)
         
         log_message(f"\n[Extracted Code]:\n{tidal_code if tidal_code else 'None'}")
         
         if not tidal_code and code_snippet:
-            log_message(f"[Debug] Could not extract code. Raw output length: {len(code_snippet)} chars")
-            log_message(f"[Debug] First 500 chars: {code_snippet[:500]}")
+            raw = str(code_snippet)
+            log_message(f"[Debug] Could not extract code. Raw output length: {len(raw)} chars")
+            log_message(f"[Debug] First 500 chars: {raw[:500]}")
         
-        if tidal_code and tidal_process is not None:
+        if tidal_code:
             try:
+                if tidal_process is None or tidal_process.poll() is not None:
+                    log_message("[Tidal] Session not running; restarting...")
+                    log_message(start_tidal_session())
+
+                tidal_code, replacements = normalize_tidal_code(tidal_code)
+                if replacements:
+                    log_message(f"[Normalize] Rewrote instruments before send: {', '.join(replacements)}")
+
                 log_message(f"\n▶ Executing AI-generated pattern...")
                 log_message(f"   Code: {tidal_code}")
                 
@@ -680,14 +889,15 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                         continue
                     
                     # Check if it's a channel assignment (d1, d2, etc.)
-                    # Match patterns like: d1 $, d1 silence, d10 $, etc.
-                    channel_match = re.match(r'^(d\d+)\s+(.+)', line)
+                    # Match patterns like: d1 $, d1$ ..., d1 silence, d10$ ..., etc.
+                    channel_match = re.match(r'^(d\d+)\s*(.+)', line)
                     if channel_match:
                         channel = channel_match.group(1)
                         rest_of_line = channel_match.group(2)
                         
                         # Check if it's silencing the channel
-                        if rest_of_line.strip().lower() in ['silence', '$ silence']:
+                        rest_normalized = rest_of_line.strip().lower().replace(" ", "")
+                        if rest_normalized in ['silence', '$silence']:
                             # Remove channel from current patterns
                             if channel in current_patterns:
                                 del current_patterns[channel]

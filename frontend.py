@@ -28,12 +28,13 @@ with gr.Blocks(title="TidalCycles AI Music Generator") as demo:
                         "ollama/qwen2.5-coder:32b",
                         "ollama/deepseek-coder-v2:16b",
                         "ollama/codestral:22b",
+                        "gpt-5-mini",
                         "gpt-4o",
                         "gpt-4o-mini",
                         "claude-3-5-sonnet-20241022",
                         "claude-3-5-haiku-20241022"
                     ],
-                    value="ollama/qwen2.5-coder:14b",
+                    value="gpt-5-mini",
                     label="Composer Model",
                     info="AI model for generating TidalCycles code"
                 )
@@ -44,12 +45,13 @@ with gr.Blocks(title="TidalCycles AI Music Generator") as demo:
                         "ollama/qwen2.5-coder:32b",
                         "ollama/deepseek-coder-v2:16b",
                         "ollama/codestral:22b",
+                        "gpt-5-mini",
                         "gpt-4o",
                         "gpt-4o-mini",
                         "claude-3-5-sonnet-20241022",
                         "claude-3-5-haiku-20241022"
                     ],
-                    value="ollama/qwen2.5-coder:14b",
+                    value="gpt-5-mini",
                     label="Creative Director Model",
                     info="AI model for suggesting musical directions"
                 )
@@ -67,7 +69,7 @@ with gr.Blocks(title="TidalCycles AI Music Generator") as demo:
                     label="Musical Goal",
                     placeholder="Example: create a relaxing atmospheric soundscape",
                     lines=5,
-                    value="create a relaxing atmospheric low-tempo song to cure ADHD",
+                    value="Atmospheric relaxing music with gentle rhythms and soothing melodies.",
                     info="The overall creative direction for this musical piece"
                 )
             
@@ -125,4 +127,4 @@ with gr.Blocks(title="TidalCycles AI Music Generator") as demo:
     timer.tick(fn=backend.get_executed_tasks, outputs=executed_tasks_output)
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860, theme=gr.themes.Soft())
+    demo.launch(server_name="0.0.0.0", server_port=7863, theme=gr.themes.Soft())

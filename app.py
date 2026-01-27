@@ -1,9 +1,14 @@
 import os
 import time
+from dotenv import load_dotenv
 
 # Test mode configuration
 TEST_MODE = False  # Set to True to use test sample instead of agent
 TEST_SAMPLE = 'd1 $ sound "bd [~ bd] sn:1 [bd sn:3]"\n'
+
+# Load environment variables from .env file (e.g. OPENAI_API_KEY)
+env_path = os.path.join(os.path.dirname(__file__), ".env")
+load_dotenv(dotenv_path=env_path, override=True)
 
 # Environment configuration
 os.environ['HF_HOME'] = "/home/moebius/Models/hfmodels/.cache/"
@@ -26,7 +31,7 @@ superdirt_process = None
 
 # Use Ollama for GGUF model support
 model = LiteLLMModel(
-    model_id="ollama/qwen2.5-coder:14b",
+    model_id="gpt-5-mini",
     temperature=0.01,
     max_new_tokens=1024,
 )
