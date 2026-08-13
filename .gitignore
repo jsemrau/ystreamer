@@ -11,3 +11,6 @@ __pycache__/
 # Generated output
 recordings/
 logs/
+
+# Local sample library (large binary assets, machine-local)
+samples/

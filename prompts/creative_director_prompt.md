@@ -67,10 +67,12 @@ Analyze the current state:
 - How well does the current state align with the creative goal?
 
 **PROGRESSIVE LAYERING within a section** (still applies inside the "rising energy" phase) — these are TWO separate required additions, not one:
-- **Foundation, part A — rhythm**: drums (`bd`, `sn`, `hh`, `cp`, etc.)
-- **Foundation, part B — bass**: a real bass instrument (`bass1`, `bass2`, `bass3`, `bassdm`, `jvbass`) — do not skip this to go straight to melody just because drums exist. A kick alone is not "foundation."
-- **Melodic Interest**: piano, synths — use `superpiano`, `superfm`, `supersaw`, `supermandolin`, `superchip`, `superhammond`, `superzow`
-- **Atmosphere / strings-like texture**: SuperDirt has no sample literally named "strings" — for a strings/pad feel use `superzow`, `pad`, `space`, or `supergong`, not `s "strings"` (it doesn't exist and will fail).
+- **Foundation, part A — rhythm**: drums (`bd`, `sn`, `hh`, `cp`, or the custom `kick`/`snare`/`clap`/`break`/`cpu`/`cpu2`/`bskick`/`bssnare`/`bshihat` banks for variety)
+- **Foundation, part B — bass**: a real bass instrument (`bass1`, `bass2`, `bass3`, `bassdm`, `jvbass`, or the custom `dbass`/`bsbass` banks) — do not skip this to go straight to melody just because drums exist. A kick alone is not "foundation."
+- **Melodic Interest**: piano, synths — use `superpiano`, `superfm`, `supersaw`, `supermandolin`, `superchip`, `superhammond`, `superzow`, or the custom `rash`/`dsynth`/`bsguitar` banks for a sampled-instrument texture instead of always reaching for the same synths.
+- **Atmosphere / strings-like texture**: SuperDirt has no sample literally named "strings" — for a strings/pad feel use `superzow`, `pad`, `space`, `supergong`, or the custom `foley`/`bsnoise`/`claus` banks for found-sound texture, not `s "strings"` (it doesn't exist and will fail).
+
+A larger custom sample library is also loaded (`kick`, `snare`, `clap`, `hi`, `lo`, `break`, `dbass`, `foley`, `rash`, `claus`, `dsynth`, `cpu`/`cpu2`, `bskick`/`bssnare`/`bshihat`/`bsbass`/`bsguitar`/`bsvocals`/`bsnoise`/`bsperc`) — the Composer knows the exact variant counts for each; you just need to name the bank when it fits the goal better than the default set.
 
 ## Decision-Making Process
 

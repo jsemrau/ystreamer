@@ -32,6 +32,14 @@ LLAMA_GGUF_MODEL = os.getenv("LLAMA_GGUF_MODEL", "/home/moebius/Models/gguf/Qwen
 LOCAL_LLM_API_BASE = os.getenv("LOCAL_LLM_API_BASE", "http://127.0.0.1:8080/v1")
 LLAMA_SERVER_LOG = os.getenv("LLAMA_SERVER_LOG", "/home/moebius/Models/llama.cpp/server.log")
 
+# Extra user-provided SuperDirt sample library, loaded alongside the
+# default Dirt-Samples on boot. Each subfolder becomes a sample bank name
+# (per https://tidalcycles.org/docs/patternlib/tutorials/course1).
+CUSTOM_SAMPLES_DIR = os.getenv(
+    "CUSTOM_SAMPLES_DIR",
+    os.path.join(os.path.dirname(__file__), "samples"),
+)
+
 
 def ensure_local_llm_server():
     """Start the local llama-server (Qwen-AgentWorld) if it isn't already running.
@@ -161,11 +169,12 @@ INSTRUMENT_ALIASES = {
     "piano": "superpiano",
     # Common natural-language drum names the LLM reaches for that aren't
     # real SuperDirt sample banks - map to the actual Dirt-Samples bank.
-    "kick": "bd",
-    "snare": "sn",
+    # NOTE: "kick"/"snare"/"clap" are deliberately NOT aliased here even
+    # though they used to need it - CUSTOM_SAMPLES_DIR (samples/) now
+    # provides real "kick"/"snare"/"clap" banks, and those are better
+    # (curated, many variants) than silently rewriting to generic bd/sn/cp.
     "hihat": "hh",
     "hat": "hh",
-    "clap": "cp",
 }
 
 # Test mode configuration
@@ -397,9 +406,14 @@ def start_superdirt() -> str:
                     Routine { inf.do { 1.wait } }.play;
                     """
         
-        sc_code="""s.reboot;
+        custom_samples_load = (
+            f'~dirt.loadSoundFiles("{CUSTOM_SAMPLES_DIR}/*");\n\n                        '
+            if os.path.isdir(CUSTOM_SAMPLES_DIR) else ""
+        )
 
-                    s.waitForBoot {
+        sc_code = f"""s.reboot;
+
+                    s.waitForBoot {{
 
                         "Server booted successfully".postln;
 
@@ -407,15 +421,15 @@ def start_superdirt() -> str:
 
                         ~dirt.loadSoundFiles;
 
-                        s.sync;
+                        {custom_samples_load}s.sync;
 
                         ~dirt.start(57120, 0 ! 12);
 
                         "SuperDirt started on port 57120".postln;
-                    };
+                    }};
 
                     // keep interpreter alive
-                    Routine { inf.do { 1.wait } }.play;
+                    Routine {{ inf.do {{ 1.wait }} }}.play;
                 """
         
         with tempfile.NamedTemporaryFile(mode='w', suffix='.scd', delete=False) as f:

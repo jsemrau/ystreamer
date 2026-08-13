@@ -91,6 +91,31 @@ Do not put a root sequence in a plain `"0 5 2 6"` list without `<>` — that
 plays all four notes as a chord/arpeggio every cycle instead of cycling the
 root, which is not what a chord progression means.
 
+## CUSTOM SAMPLE LIBRARY (in addition to the default Dirt-Samples set)
+
+These extra banks are loaded from a local sample pack — use them for
+variety instead of only ever reaching for `bd`/`sn`/`superpiano`. Pick a
+specific variant with `bankname:N` (0-indexed; counts below are how many
+variants exist, so stay under that number).
+
+| Bank | Count | Character |
+|---|---|---|
+| `kick` | 21 | curated kick drum variants |
+| `snare` | 90 | large curated snare variety |
+| `clap` | 8 | claps |
+| `hi` | 8 | higher-pitched percussion |
+| `lo` | 8 | low hand percussion (bongo/conga-style) |
+| `break` | 33 | breakbeat one-shots/loops |
+| `dbass` | 12 | bass hits/riffs |
+| `foley` | 287 | large foley/found-sound texture library |
+| `rash` | 72 | pitched one-shot notes — good for melodic use with `n`/`note` |
+| `claus` | 16 | varied found/metallic percussion |
+| `dsynth` | 3 | synth audio clips |
+| `cpu` / `cpu2` | 23 / 29 | electro-style drum machine hits (kicks, hats, claps, FX) |
+| `bskick` / `bssnare` / `bshihat` | 9 / 8 / 3 | a distinct drum-kit sample pack |
+| `bsbass` / `bsguitar` | 9 / 19 | bass and guitar one-shots/loops |
+| `bsvocals` / `bsnoise` / `bsperc` | 13 / 22 / 7 | vocals, noise textures, extra percussion |
+
 ## STYLE CONSTRAINTS (atmospheric/relaxing contexts)
 
 - **Drums**: sparse (`bd`, `sn`), `lpf` 500-1500 Hz, `gain` 0.5-0.7
