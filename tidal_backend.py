@@ -880,15 +880,56 @@ CHORD_PROGRESSIONS = [
     {"name": "Simple ambient drone", "numerals": "i-i-iv-i", "roots": "0 0 3 0", "mood": "meditative sparse minimal steady focused", "genre": "ambient drone focused-programming"},
 ]
 
+# Each profile: structural description, which instruments suit the mood
+# ("prefer"), and which ones actively clash with it ("avoid" - explicit
+# because prose-only guidance wasn't enough to stop superzow/supersaw
+# (bright, buzzy, EDM-lead synths) getting suggested for mellow goals).
 GENRE_STYLE_PROFILES = {
-    "trance": "kick (four-on-the-floor) + rolling bassline are mandatory foundation; bright supersaw lead/pad; filter sweeps over the arc; energetic, driving.",
-    "house": "kick + hi-hat groove + bass + chord stabs; moderate steady tempo; danceable.",
-    "techno": "driving kick + minimal bass; hypnotic repetitive percussion; darker atmosphere, less melody.",
-    "ambient": "sparse or no drums; slow pads/drones; gentle melody; spacious reverb; very low energy throughout.",
-    "lo-fi": "laid-back drums; warm bass; jazzy/mellow chords (try the Jazzy resolve or Deep house loop progressions); relaxed tempo.",
-    "downtempo": "soft drums; mellow bass; atmospheric pads; unhurried.",
-    "cinematic": "sparse rhythm or none; dramatic chord progressions (Andalusian/dramatic, Suspended tension); wide dynamic range.",
-    "focused programming": "steady, unobtrusive rhythm; repetitive but not chaotic; avoid jarring changes; sustain moderate energy rather than big peaks/drops.",
+    "balearic": {
+        "description": "Ibiza-sunset chillout - warm, dreamy, unhurried; light or no four-on-the-floor.",
+        "prefer": "superpiano or the custom bsguitar bank for warm melody; pad/space/foley for atmosphere; jvbass/dbass for round bass",
+        "avoid": "superzow and supersaw - too bright/buzzy/aggressive for this mood",
+    },
+    "trance": {
+        "description": "kick (four-on-the-floor) + rolling bassline are mandatory foundation; filter sweeps over the arc; energetic, driving.",
+        "prefer": "supersaw or superzow for bright driving leads; jvbass/bass1-3 for rolling bass",
+        "avoid": "",
+    },
+    "house": {
+        "description": "kick + hi-hat groove + bass + chord stabs; moderate steady tempo; danceable.",
+        "prefer": "superpiano/superfm for chord stabs; jvbass/bass1-3 for bass",
+        "avoid": "",
+    },
+    "techno": {
+        "description": "driving kick + minimal bass; hypnotic repetitive percussion; darker atmosphere, less melody.",
+        "prefer": "space/pad for dark atmosphere; bass2/bass3 for minimal bass",
+        "avoid": "",
+    },
+    "ambient": {
+        "description": "sparse or no drums; slow pads/drones; gentle melody; spacious reverb; very low energy throughout.",
+        "prefer": "pad/space/foley for drones; superpiano for gentle melody; jvbass/dbass for a round sub if bass is used at all",
+        "avoid": "superzow and supersaw - too bright/buzzy for this mood",
+    },
+    "lo-fi": {
+        "description": "laid-back drums; warm bass; jazzy/mellow chords (try the Jazzy resolve or Deep house loop progressions); relaxed tempo.",
+        "prefer": "superpiano or bsguitar for warm/jazzy chords; jvbass/dbass for bass",
+        "avoid": "superzow and supersaw - too bright/buzzy for this mood",
+    },
+    "downtempo": {
+        "description": "soft drums; mellow bass; atmospheric pads; unhurried.",
+        "prefer": "pad/space/foley for atmosphere; superpiano or bsguitar for melody; jvbass/dbass for bass",
+        "avoid": "superzow and supersaw - too bright/buzzy for this mood",
+    },
+    "cinematic": {
+        "description": "sparse rhythm or none; dramatic chord progressions (Andalusian/dramatic, Suspended tension); wide dynamic range.",
+        "prefer": "superpiano/superhammond for dramatic melody; space/pad/claus for texture; bass2/bass3 for deep bass",
+        "avoid": "",
+    },
+    "focused programming": {
+        "description": "steady, unobtrusive rhythm; repetitive but not chaotic; avoid jarring changes; sustain moderate energy rather than big peaks/drops.",
+        "prefer": "",
+        "avoid": "",
+    },
 }
 
 def _parse_key_string(key_str: str):
@@ -925,16 +966,25 @@ def get_chord_progression(mood: str, genre: str = "") -> str:
         best = CHORD_PROGRESSIONS[0]
     return f"{best['name']}: {best['numerals']} (roots {best['roots']}) - typically {best['mood']}"
 
+def _format_genre_profile(genre: str, profile: dict) -> str:
+    parts = [f"{genre}: {profile['description']}"]
+    if profile.get("prefer"):
+        parts.append(f"prefer {profile['prefer']}")
+    if profile.get("avoid"):
+        parts.append(f"AVOID {profile['avoid']}")
+    return " - ".join(parts)
+
 @tool
 def get_genre_style_profile(goal_text: str) -> str:
-    """Look up genre/style conventions (expected instrumentation, energy)
-    matching keywords found in the given creative-goal text.
+    """Look up genre/style conventions (expected instrumentation, energy,
+    and which instruments to prefer or avoid for the mood) matching
+    keywords found in the given creative-goal text.
 
     Args:
         goal_text: The creative goal text to match against known genres.
     """
-    lower = goal_text.lower()
-    matches = [f"{genre}: {desc}" for genre, desc in GENRE_STYLE_PROFILES.items() if genre in lower]
+    lower = (goal_text or "").lower()
+    matches = [_format_genre_profile(genre, profile) for genre, profile in GENRE_STYLE_PROFILES.items() if genre in lower]
     if not matches:
         return "No specific genre convention matched - use general PROGRESSIVE LAYERING guidance."
     return " | ".join(matches)
@@ -1445,9 +1495,10 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                         recent_history = "(nothing developed yet)"
 
                     arrangement_check = _arrangement_completeness_report(current_patterns)
+                    genre_guidance = get_genre_style_profile(musical_goal)
 
                     suggestions = creative_director_agent.run(
-                        f"{creative_director_prompt}\n\n{_get_song_state_lines()}\n=== YOUR CREATIVE GOAL ===\n{musical_goal}\n\nThis is the overall musical vision you are working towards.\n\n=== CURRENT PATTERNS ===\n{current_context}\n\n=== {arrangement_check} ===\nIf anything is MISSING, prioritize adding it before more melody/atmosphere layers.\n\n=== RECENT DEVELOPMENTS ===\n{recent_history}\n\nSuggest ONE next development that serves this goal."
+                        f"{creative_director_prompt}\n\n{_get_song_state_lines()}\n=== YOUR CREATIVE GOAL ===\n{musical_goal}\n\nThis is the overall musical vision you are working towards.\n\n=== CURRENT PATTERNS ===\n{current_context}\n\n=== {arrangement_check} ===\nIf anything is MISSING, prioritize adding it before more melody/atmosphere layers.\n\n=== GENRE/STYLE GUIDANCE ===\n{genre_guidance}\nAny instrument named after AVOID is off-limits for this suggestion, no exceptions.\n\n=== RECENT DEVELOPMENTS ===\n{recent_history}\n\nSuggest ONE next development that serves this goal."
                     )
                     director_time = time.time() - director_start
                     
