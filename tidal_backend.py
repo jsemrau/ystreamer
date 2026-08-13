@@ -272,6 +272,34 @@ def _looks_like_valid_suggestion(text: str) -> bool:
     lower = text.lower()
     return not any(marker in lower for marker in _SUGGESTION_META_MARKERS)
 
+_ACTIONABLE_SUGGESTION_RE = re.compile(
+    r"^\s*(?:[A-Za-z][A-Za-z _-]{2,}:\s*)?"
+    r"(add|modify|remove|refine|change|update|silence|swap|transpose|thin|bring|raise|lower|reduce|increase)\b",
+    re.IGNORECASE,
+)
+
+def _extract_actionable_suggestion(text) -> str | None:
+    """Pull the single actionable instruction out of a (possibly rambling)
+    Director response. Prefers the LAST matching line: a model that reasons
+    at length in prose before landing on a decision usually states that
+    decision last, and taking only one line (instead of every line) also
+    stops a rambling response from flooding the task queue with fragments."""
+    if not text:
+        return None
+    combined = "\n".join(str(s) for s in text) if isinstance(text, list) else str(text)
+
+    candidates = []
+    for raw_line in combined.split('\n'):
+        line = raw_line.strip()
+        match = re.match(r'^\d+[\.\)]\s*(.+)$', line)
+        if match:
+            line = match.group(1).strip()
+        elif line.startswith('#') or line.startswith('/'):
+            continue
+        if line and _looks_like_valid_suggestion(line) and _ACTIONABLE_SUGGESTION_RE.match(line):
+            candidates.append(line)
+    return candidates[-1] if candidates else None
+
 def _current_bar() -> int:
     started_at = SONG_STATE.get("started_at")
     if started_at is None:
@@ -1221,24 +1249,9 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                     log_message(f"[Creative Director] Suggestions:\n{suggestions}")
                     
                     if suggestions:
-                        suggestion_lines = []
-                        if isinstance(suggestions, list):
-                            suggestion_lines = [
-                                s.strip() for s in suggestions
-                                if s.strip() and _looks_like_valid_suggestion(s.strip())
-                            ]
-                        elif isinstance(suggestions, str):
-                            for line in suggestions.split('\n'):
-                                line = line.strip()
-                                candidate = None
-                                match = re.match(r'^\d+[\.\.\)]\s*(.+)$', line)
-                                if match:
-                                    candidate = match.group(1).strip()
-                                elif line and not line.startswith('#') and not line.startswith('/'):
-                                    candidate = line
-                                if candidate and _looks_like_valid_suggestion(candidate):
-                                    suggestion_lines.append(candidate)
-                        
+                        picked = _extract_actionable_suggestion(suggestions)
+                        suggestion_lines = [picked] if picked else []
+
                         if suggestion_lines:
                             log_message(f"\n✨ Adding {len(suggestion_lines)} new creative tasks to the queue")
                             tasks.extend(suggestion_lines)
