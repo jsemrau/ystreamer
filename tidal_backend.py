@@ -25,12 +25,70 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = "expandable_segments:True"
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 
+# Local llama.cpp server (Qwen-AgentWorld-35B-A3B) configuration
+LLAMA_SERVER_BIN = os.getenv("LLAMA_SERVER_BIN", "/home/moebius/Models/llama.cpp/build/bin/llama-server")
+LLAMA_GGUF_MODEL = os.getenv("LLAMA_GGUF_MODEL", "/home/moebius/Models/gguf/Qwen-AgentWorld-35B-A3B-UD-IQ4_XS.gguf")
+LOCAL_LLM_API_BASE = os.getenv("LOCAL_LLM_API_BASE", "http://127.0.0.1:8080/v1")
+LLAMA_SERVER_LOG = os.getenv("LLAMA_SERVER_LOG", "/home/moebius/Models/llama.cpp/server.log")
+
+
+def ensure_local_llm_server():
+    """Start the local llama-server (Qwen-AgentWorld) if it isn't already running.
+
+    Runs once at import time so the server is up by the time the app is
+    ready, without blocking the cloud/Ollama model options if it fails.
+    """
+    import requests
+
+    try:
+        requests.get(f"{LOCAL_LLM_API_BASE}/models", timeout=2)
+        print(f"[llama-server] already running at {LOCAL_LLM_API_BASE}")
+        return
+    except requests.exceptions.RequestException:
+        pass
+
+    if not os.path.exists(LLAMA_SERVER_BIN) or not os.path.exists(LLAMA_GGUF_MODEL):
+        print(f"[llama-server] binary or model not found ({LLAMA_SERVER_BIN}, {LLAMA_GGUF_MODEL}); "
+              "skipping local model auto-start")
+        return
+
+    print(f"[llama-server] not running, launching {LLAMA_SERVER_BIN}...")
+    log_file = open(LLAMA_SERVER_LOG, "a")
+    subprocess.Popen(
+        [
+            LLAMA_SERVER_BIN,
+            "-m", LLAMA_GGUF_MODEL,
+            "-ngl", "999",
+            "--port", "8080",
+            "--ctx-size", "32768",
+            "--parallel", "2",
+        ],
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        try:
+            requests.get(f"{LOCAL_LLM_API_BASE}/models", timeout=2)
+            print("[llama-server] ready")
+            return
+        except requests.exceptions.RequestException:
+            time.sleep(2)
+    print(f"[llama-server] did not become ready within 60s; see {LLAMA_SERVER_LOG}")
+
+
+ensure_local_llm_server()
+
 # Global state
 tidal_process = None
 superdirt_process = None
 recording_process = None
 is_running = False
 agent_thread = None
+_last_composer_model_id = None
+_last_director_model_id = None
 log_queue = Queue()
 stop_event = threading.Event()
 task_queue = []
@@ -39,6 +97,60 @@ current_song_context = "(No patterns playing yet)"
 current_patterns = {}  # Maps channel (d1, d2, etc.) to current pattern
 song_history = []  # Full history of all sent patterns
 executed_tasks_log = []
+audio_output_info = "(Audio output not detected yet)"
+current_agent_label = "Idle"
+agent_conversation_log = []
+
+# Song state (keeps the Creative Director consistent across iterations)
+CURRENT_CPS = 0.8
+ENABLE_COGNITIVE_WARNINGS = False
+
+def _parse_cps_value(raw: str) -> float | None:
+    """Parse a cps value from a numeric string or simple arithmetic expression."""
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    if re.match(r"^[0-9]*\.?[0-9]+$", text):
+        try:
+            return float(text)
+        except Exception:
+            return None
+    if not re.match(r"^[0-9\.\s\(\)\+\-\*\/]+$", text):
+        return None
+    try:
+        import ast
+        import operator
+
+        ops = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+        }
+
+        def eval_node(node):
+            if isinstance(node, ast.Expression):
+                return eval_node(node.body)
+            if isinstance(node, ast.BinOp) and type(node.op) in ops:
+                return ops[type(node.op)](eval_node(node.left), eval_node(node.right))
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+                value = eval_node(node.operand)
+                return value if isinstance(node.op, ast.UAdd) else -value
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                return float(node.value)
+            raise ValueError("Unsupported cps expression")
+
+        parsed = ast.parse(text, mode="eval")
+        return float(eval_node(parsed))
+    except Exception:
+        return None
+SONG_STATE = {
+    "key": "C minor",
+    "section": "intro",
+    "started_at": None,  # epoch seconds
+}
 
 # SuperDirt instrument aliases (avoid missing instrument errors)
 INSTRUMENT_ALIASES = {
@@ -101,6 +213,99 @@ def get_executed_tasks():
         return "(No tasks executed yet)"
     return "\n\n".join(executed_tasks_log)
 
+def get_agent_conversation():
+    """Get agent conversation log for UI display."""
+    global agent_conversation_log
+    return agent_conversation_log
+
+def get_audio_output_info():
+    """Get detected audio output/source info for UI display."""
+    global audio_output_info
+    return audio_output_info or "(Audio output not detected yet)"
+
+def get_current_agent():
+    """Get which agent is currently working for UI display."""
+    global current_agent_label
+    return current_agent_label or "Idle"
+
+def _parse_initial_song_state(task_text: str) -> dict:
+    key = SONG_STATE.get("key", "C minor")
+    section = SONG_STATE.get("section", "intro")
+
+    for line in (task_text or "").splitlines():
+        m_key = re.match(r"^\\s*key\\s*:\\s*(.+?)\\s*$", line, flags=re.IGNORECASE)
+        if m_key:
+            key = m_key.group(1).strip()
+        m_section = re.match(r"^\\s*section\\s*:\\s*(.+?)\\s*$", line, flags=re.IGNORECASE)
+        if m_section:
+            section = m_section.group(1).strip()
+        m_cps = re.match(r"^\\s*(?:cps|setcps)\\s*[:\\s]+(.+?)\\s*$", line, flags=re.IGNORECASE)
+        if m_cps:
+            cps_value = _parse_cps_value(m_cps.group(1))
+            if cps_value:
+                global CURRENT_CPS
+                CURRENT_CPS = cps_value
+
+    return {"key": key, "section": section}
+
+def _maybe_update_song_state_from_task(task: str) -> None:
+    """Update KEY/SECTION from task text when explicitly specified."""
+    if not task:
+        return
+
+    m_key = re.search(r"\\bkey\\s*:\\s*([^\\n]+)", task, flags=re.IGNORECASE)
+    if m_key:
+        SONG_STATE["key"] = m_key.group(1).strip()
+
+    m_cps = re.search(r"\\b(?:cps|setcps)\\s*[:\\s]+([^\\n]+)", task, flags=re.IGNORECASE)
+    if m_cps:
+        cps_value = _parse_cps_value(m_cps.group(1))
+        if cps_value:
+            global CURRENT_CPS
+            CURRENT_CPS = cps_value
+
+    # Accept both "SECTION: build" and a "BUILD:" prefix.
+    m_section = re.search(r"\\bsection\\s*:\\s*([^\\n]+)", task, flags=re.IGNORECASE)
+    if m_section:
+        SONG_STATE["section"] = m_section.group(1).strip()
+        return
+
+    prefix = re.match(r"^\\s*([A-Za-z][A-Za-z _-]{2,})\\s*:\\s*", task)
+    if not prefix:
+        return
+
+    normalized = prefix.group(1).strip().lower().replace(" ", "_").replace("-", "_")
+    allowed = {
+        "intro",
+        "verse",
+        "build",
+        "drop",
+        "breakdown",
+        "bridge",
+        "outro",
+        "chorus",
+        "prechorus",
+        "pre_chorus",
+    }
+    if normalized in allowed:
+        SONG_STATE["section"] = normalized.replace("prechorus", "pre_chorus")
+
+def _get_song_state_lines() -> str:
+    started_at = SONG_STATE.get("started_at")
+    if started_at is None:
+        bar = 0
+    else:
+        cycles = max(0.0, (time.time() - float(started_at)) * float(CURRENT_CPS))
+        bar = int(cycles) + 1
+
+    return (
+        "=== SONG STATE ===\\n"
+        f"KEY: {SONG_STATE.get('key', 'C minor')}\\n"
+        f"SECTION: {SONG_STATE.get('section', 'intro')}\\n"
+        f"BAR: {bar}\\n"
+        f"CPS: {CURRENT_CPS}\\n"
+    )
+
 # ============================================================================
 # TIDAL & SUPERDIRT MANAGEMENT
 # ============================================================================
@@ -129,12 +334,33 @@ def start_superdirt() -> str:
                     Routine { inf.do { 1.wait } }.play;
                     """
         
+        sc_code="""s.reboot;
+
+                    s.waitForBoot {
+
+                        "Server booted successfully".postln;
+
+                        ~dirt = SuperDirt(2, s);
+
+                        ~dirt.loadSoundFiles;
+
+                        s.sync;
+
+                        ~dirt.start(57120, 0 ! 12);
+
+                        "SuperDirt started on port 57120".postln;
+                    };
+
+                    // keep interpreter alive
+                    Routine { inf.do { 1.wait } }.play;
+                """
+        
         with tempfile.NamedTemporaryFile(mode='w', suffix='.scd', delete=False) as f:
             f.write(sc_code)
             temp_file = f.name
         
         superdirt_process = subprocess.Popen(
-            ['sclang', temp_file],
+            ['pw-jack', 'sclang', temp_file],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -157,7 +383,7 @@ def start_superdirt() -> str:
 
 def start_tidal_session() -> str:
     """Starts a persistent TidalCycles session with ghci."""
-    global tidal_process
+    global tidal_process, CURRENT_CPS
     
     try:
         if tidal_process is not None and tidal_process.poll() is None:
@@ -184,7 +410,8 @@ def start_tidal_session() -> str:
         
         time.sleep(3)
         
-        tidal_process.stdin.write("setcps 0.8\n")
+        CURRENT_CPS = 0.8
+        tidal_process.stdin.write(f"setcps {CURRENT_CPS}\n")
         tidal_process.stdin.flush()
         time.sleep(0.5)
         
@@ -221,7 +448,15 @@ def stop_tidal_session() -> str:
             messages.append(f"Error stopping SuperDirt: {str(e)}")
     else:
         messages.append("No SuperDirt session running")
-    
+
+    # sclang spawns scsynth (the actual audio engine) as its own child process,
+    # which survives sclang's termination as an orphan holding the audio
+    # device. Best-effort clean it up too.
+    try:
+        subprocess.run(["pkill", "-f", "scsynth"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
     return " | ".join(messages)
 
 # ============================================================================
@@ -244,7 +479,7 @@ def start_recording() -> tuple[str, str]:
         filename = f"tidal_session_{timestamp}.mp3"
         filepath = os.path.join(recordings_dir, filename)
         
-        def pick_pulse_source() -> tuple[str, str]:
+        def pick_pulse_source() -> tuple[str, str, str]:
             """Pick a PulseAudio/PipeWire source that captures system output (monitor)."""
             try:
                 default_sink = subprocess.run(
@@ -275,7 +510,7 @@ def start_recording() -> tuple[str, str]:
             if default_sink:
                 monitor = f"{default_sink}.monitor"
                 if monitor in sources:
-                    return monitor, f"default sink monitor ({default_sink})"
+                    return monitor, f"default sink monitor ({default_sink})", default_sink
 
             monitors = [s for s in sources if s.endswith(".monitor")]
             if monitors:
@@ -284,11 +519,16 @@ def start_recording() -> tuple[str, str]:
                     monitors,
                     key=lambda s: (0 if "analog" in s else 1, 0 if "stereo" in s else 1, s),
                 )
-                return monitors_sorted[0], "first available monitor source"
+                return monitors_sorted[0], "first available monitor source", default_sink
 
-            return "default", "fallback to Pulse default (may be mic)"
+            return "default", "fallback to Pulse default (may be mic)", default_sink
 
-        pulse_source, pulse_reason = pick_pulse_source()
+        pulse_source, pulse_reason, default_sink = pick_pulse_source()
+        global audio_output_info
+        if default_sink:
+            audio_output_info = f"Default sink: {default_sink} | Source: {pulse_source} ({pulse_reason})"
+        else:
+            audio_output_info = f"Source: {pulse_source} ({pulse_reason})"
 
         # Try to detect the correct audio source
         # Check if PulseAudio/PipeWire sources are available
@@ -368,6 +608,9 @@ def normalize_tidal_code(code: str) -> tuple[str, list[str]]:
         return code, []
 
     replacements: list[str] = []
+    fx_aliases = {
+        "phaser": "phasr",
+    }
 
     def replace_instrument_tokens(sound_string: str) -> str:
         updated = sound_string
@@ -410,6 +653,12 @@ def normalize_tidal_code(code: str) -> tuple[str, list[str]]:
 
     updated_code = "\n".join(fixed_lines)
 
+    for src, dst in fx_aliases.items():
+        pattern = re.compile(rf"(?<!\w){re.escape(src)}(?!\w)", re.IGNORECASE)
+        if pattern.search(updated_code):
+            updated_code = pattern.sub(dst, updated_code)
+            replacements.append(f"{src}->{dst}")
+
     # De-dup replacement notes while preserving order
     deduped: list[str] = []
     for item in replacements:
@@ -445,19 +694,44 @@ def extract_tidal_code(code_snippet) -> str | None:
         s = re.sub(r"^\s*(?:[-*•]|\d+[\.\)]|\d+\s*-\s*)\s*", "", s)
         return s.strip()
 
-    def is_tidal_line(line: str) -> bool:
+    def is_directive_line(line: str) -> bool:
+        return bool(re.match(r"^(setcps|cps|hush|once|silence|let)\b", line, flags=re.IGNORECASE))
+
+    def is_channel_start(line: str) -> bool:
         return bool(
             re.match(r"^d\d+\s*[\$=]", line)
+            or re.match(r"^d\d+\s*$", line)
             or re.match(r"^d\d+\s+silence\b", line, flags=re.IGNORECASE)
-            or re.match(r"^(setcps|cps|hush|once|silence|let)\b", line)
         )
 
     lines = [clean_line(l) for l in candidates_text.splitlines()]
-    tidal_lines = [l for l in lines if l and is_tidal_line(l)]
+    tidal_lines: list[str] = []
+    in_channel = False
+
+    for line in lines:
+        if not line:
+            continue
+
+        if is_channel_start(line):
+            tidal_lines.append(line)
+            in_channel = not bool(re.match(r"^d\d+\s+silence\b", line, flags=re.IGNORECASE))
+            continue
+
+        if is_directive_line(line):
+            tidal_lines.append(line)
+            in_channel = False
+            continue
+
+        if line.startswith("--"):
+            tidal_lines.append(line)
+            continue
+
+        if in_channel:
+            tidal_lines.append(line)
 
     if not tidal_lines:
         stripped = clean_line(candidates_text)
-        if is_tidal_line(stripped):
+        if is_channel_start(stripped) or is_directive_line(stripped):
             return stripped
         return None
 
@@ -503,6 +777,9 @@ def validate_tidal_syntax(code: str) -> str:
         r'\blin\b',  # Use 'range' with 'saw'/'sine' instead
         r'\beff\b',  # Not a TidalCycles function - use specific effects
     ]
+
+    if re.search(r'\blp\b', code):
+        return "Error: 'lp' is not a TidalCycles function or parameter. Use 'lpf' for low-pass cutoff in Hz (or 'rlpf' for normalized cutoff) and try again."
     
     # Check for waveform names being used as sounds (common mistake)
     waveform_as_sound_patterns = [
@@ -528,61 +805,62 @@ def validate_tidal_syntax(code: str) -> str:
         if re.search(pattern, code):
             return "Error: Invalid function detected. Use 'range' with 'saw' or 'sine' for linear interpolation, or use specific effects like 'room', 'delay', 'lpf'. Please fix and try again."
     
-    # BLACKLIST: Anti-patterns that cause cognitive overload or listening fatigue
     warnings = []
-    
-    # Check for machine-gun repetition (*16, *32, etc.)
-    machine_gun = re.findall(r'\*(\d+)', code)
-    for count in machine_gun:
-        if int(count) >= 16:
-            warnings.append(f"⚠️  Excessive repetition '*{count}' detected - causes cognitive overload. Reduce to *8 or less for relaxing music.")
-    
-    # Check for saw wave on speed/pitch (causes jarring jumps)
-    if re.search(r'\bspeed\s*\([^)]*\bsaw\b', code):
-        return "Error: Using 'saw' waveform on 'speed' causes jarring pitch discontinuities. Use 'sine' or 'tri' for smooth modulation. Please fix and try again."
-    
-    # Check for high fast factor on transient sounds
-    fast_match = re.search(r'\bfast\s+(\d+)', code)
-    if fast_match and int(fast_match.group(1)) >= 8:
-        warnings.append(f"⚠️  'fast {fast_match.group(1)}' is very aggressive - causes harsh noise. Consider 'fast 6' or less for smoother results.")
-    
-    # Check for fast filter sweeps (fast 2+ on lpf/hpf)
-    if re.search(r'\b(lpf|hpf)\s*\([^)]*\bfast\s+[2-9]', code):
-        warnings.append("⚠️  Fast filter sweep detected - causes 'wah' fatigue. Use 'slow 2' or slower for relaxing modulation.")
-    
-    # Auto-fix: reverb/room on low-frequency sounds without HPF (prevents mud/fatigue)
-    fixed_lines: list[str] = []
-    hpf_fixes: list[str] = []
-    for raw_line in code.split("\n"):
-        line = raw_line.strip()
-        if not line:
-            fixed_lines.append(raw_line)
-            continue
+    ENABLE_COGNITIVE_WARNINGS=False
+    # BLACKLIST: Anti-patterns that cause cognitive overload or listening fatigue
+    if ENABLE_COGNITIVE_WARNINGS:
+        # Check for machine-gun repetition (*16, *32, etc.)
+        machine_gun = re.findall(r'\*(\d+)', code)
+        for count in machine_gun:
+            if int(count) >= 16:
+                warnings.append(f"⚠️  Excessive repetition '*{count}' detected - causes cognitive overload. Reduce to *8 or less for relaxing music.")
 
-        low_freq_match = re.search(r"\b(bd|reverbkick|bass\d*|kick)\b", line)
-        if low_freq_match and re.search(r"#\s*(room|reverb|rv)\b", line, flags=re.IGNORECASE):
-            if not re.search(r"#\s*hpf\s+\d+", line, flags=re.IGNORECASE):
-                sound_name = low_freq_match.group(1)
-                line = f"{line} # hpf 150"
-                hpf_fixes.append(sound_name)
+        # Check for saw wave on speed/pitch (causes jarring jumps)
+        if re.search(r'\bspeed\s*\([^)]*\bsaw\b', code):
+            return "Error: Using 'saw' waveform on 'speed' causes jarring pitch discontinuities. Use 'sine' or 'tri' for smooth modulation. Please fix and try again."
 
-        fixed_lines.append(line)
+        # Check for high fast factor on transient sounds
+        fast_match = re.search(r'\bfast\s+(\d+)', code)
+        if fast_match and int(fast_match.group(1)) >= 8:
+            warnings.append(f"⚠️  'fast {fast_match.group(1)}' is very aggressive - causes harsh noise. Consider 'fast 6' or less for smoother results.")
 
-    if hpf_fixes:
-        code = "\n".join(fixed_lines)
-        unique = []
-        for s in hpf_fixes:
-            if s not in unique:
-                unique.append(s)
-        warnings.append(
-            "⚠️  Added '# hpf 150' to low-frequency sound(s) with room: "
-            + ", ".join(unique)
-            + ". This prevents low-frequency smear and listening fatigue."
-        )
-    
-    # Check for looped reverbkick (creates continuous low-frequency pressure)
-    if re.search(r'\breverbkick\b', code) and re.search(r'#\s*loop\s+[4-9]', code):
-        warnings.append("⚠️  'reverbkick' with 'loop 4+' creates continuous low-frequency pressure. Use 'slow 4' instead or remove loop for cleaner rhythm.")
+        # Check for fast filter sweeps (fast 2+ on lpf/hpf)
+        if re.search(r'\b(lpf|hpf)\s*\([^)]*\bfast\s+[2-9]', code):
+            warnings.append("⚠️  Fast filter sweep detected - causes 'wah' fatigue. Use 'slow 2' or slower for relaxing modulation.")
+
+        # Auto-fix: reverb/room on low-frequency sounds without HPF (prevents mud/fatigue)
+        fixed_lines: list[str] = []
+        hpf_fixes: list[str] = []
+        for raw_line in code.split("\n"):
+            line = raw_line.strip()
+            if not line:
+                fixed_lines.append(raw_line)
+                continue
+
+            low_freq_match = re.search(r"\b(bd|reverbkick|bass\d*|kick)\b", line)
+            if low_freq_match and re.search(r"#\s*(room|reverb|rv)\b", line, flags=re.IGNORECASE):
+                if not re.search(r"#\s*hpf\s+\d+", line, flags=re.IGNORECASE):
+                    sound_name = low_freq_match.group(1)
+                    line = f"{line} # hpf 150"
+                    hpf_fixes.append(sound_name)
+
+            fixed_lines.append(line)
+
+        if hpf_fixes:
+            code = "\n".join(fixed_lines)
+            unique = []
+            for s in hpf_fixes:
+                if s not in unique:
+                    unique.append(s)
+            warnings.append(
+                "⚠️  Added '# hpf 150' to low-frequency sound(s) with room: "
+                + ", ".join(unique)
+                + ". This prevents low-frequency smear and listening fatigue."
+            )
+
+        # Check for looped reverbkick (creates continuous low-frequency pressure)
+        if re.search(r'\breverbkick\b', code) and re.search(r'#\s*loop\s+[4-9]', code):
+            warnings.append("⚠️  'reverbkick' with 'loop 4+' creates continuous low-frequency pressure. Use 'slow 4' instead or remove loop for cleaner rhythm.")
     
     found_valid = False
     for pattern in valid_patterns:
@@ -620,7 +898,7 @@ def execute_tidal_code(code: str) -> str:
     Args:
         code: The TidalCycles code to execute.
     """
-    global tidal_process
+    global tidal_process, CURRENT_CPS
     
     try:
         if tidal_process is None or tidal_process.poll() is not None:
@@ -632,6 +910,16 @@ def execute_tidal_code(code: str) -> str:
         normalized, replacements = normalize_tidal_code(code)
         if replacements:
             log_message(f"[Normalize] Rewrote instruments: {', '.join(replacements)}")
+
+        cps_match = re.search(
+            r"^\\s*(?:setcps|cps)\\s+(.+?)\\s*$",
+            normalized,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+        if cps_match:
+            cps_value = _parse_cps_value(cps_match.group(1))
+            if cps_value:
+                CURRENT_CPS = cps_value
         
         tidal_process.stdin.write(normalized + "\n")
         tidal_process.stdin.flush()
@@ -639,6 +927,65 @@ def execute_tidal_code(code: str) -> str:
         
         return f"TidalCycles code sent to session:\n{normalized}"
             
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+def _update_current_patterns_from_code(tidal_code: str) -> None:
+    """Update current patterns and song history based on raw Tidal code."""
+    global current_patterns, song_history
+    if not tidal_code:
+        return
+    song_history.append(tidal_code)
+    for line in tidal_code.split("\n"):
+        line = line.strip()
+        if not line or line.startswith("--"):
+            continue
+        if re.match(r"^\s*(?:setcps|cps)\b", line, flags=re.IGNORECASE):
+            continue
+        channel_match = re.match(r"^(d\d+)\s*(.+)", line)
+        if not channel_match:
+            continue
+        channel = channel_match.group(1)
+        rest_of_line = channel_match.group(2)
+        rest_normalized = rest_of_line.strip().lower().replace(" ", "")
+        if rest_normalized in ["silence", "$silence"]:
+            if channel in current_patterns:
+                del current_patterns[channel]
+        else:
+            current_patterns[channel] = line
+
+
+def play_sample_pattern(code: str) -> str:
+    """Play a sample pattern immediately and update current pattern context."""
+    global tidal_process, CURRENT_CPS
+    try:
+        if tidal_process is None or tidal_process.poll() is not None:
+            start_msg = start_tidal_session()
+            log_message(start_msg)
+            if tidal_process is None or tidal_process.poll() is not None:
+                return "Error: No TidalCycles session running. Call start_tidal_session() first."
+
+        normalized, replacements = normalize_tidal_code(code)
+        if replacements:
+            log_message(f"[Normalize] Rewrote instruments: {', '.join(replacements)}")
+
+        cps_match = re.search(
+            r"^\s*(?:setcps|cps)\s+(.+?)\s*$",
+            normalized,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+        if cps_match:
+            cps_value = _parse_cps_value(cps_match.group(1))
+            if cps_value:
+                CURRENT_CPS = cps_value
+
+        tidal_process.stdin.write(normalized + "\n")
+        tidal_process.stdin.flush()
+        time.sleep(0.2)
+        _update_current_patterns_from_code(normalized)
+
+        return f"Sample pattern sent to session:\n{normalized}"
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -667,6 +1014,24 @@ def load_prompt(filename):
 composer_prompt = load_prompt("composer_prompt.md")
 creative_director_prompt = load_prompt("creative_director_prompt.md")
 
+def _build_model(model_id):
+    """Build a LiteLLMModel, routing "local/..." ids to the local llama-server."""
+    if model_id.startswith("local/"):
+        real_id = "openai/" + model_id.split("/", 1)[1]
+        # This model's chat template has an extended-thinking mode that, left
+        # enabled, reasons for 5000+ tokens per ReAct step without ever
+        # reaching a final_answer() (observed: 6 steps, 24k+ tokens, no
+        # answer). Disabling it via chat_template_kwargs drops a full
+        # composer run to ~10s. max_tokens stays as a safety ceiling.
+        return LiteLLMModel(
+            model_id=real_id,
+            api_base=LOCAL_LLM_API_BASE,
+            api_key="sk-no-key-required",
+            max_tokens=2048,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
+    return LiteLLMModel(model_id=model_id)
+
 def create_agents(composer_model_id, director_model_id):
     """Create agents with specified models"""
     global composer_agent, creative_director_agent
@@ -684,17 +1049,17 @@ def create_agents(composer_model_id, director_model_id):
             log_message("⚠️  Warning: Claude models selected but ANTHROPIC_API_KEY not found in .env")
     
     log_message(f"Creating Composer Agent with model: {composer_model_id}")
-    composer_model = LiteLLMModel(model_id=composer_model_id)
+    composer_model = _build_model(composer_model_id)
     composer_agent = CodeAgent(
-        tools=[validate_tidal_syntax], 
+        tools=[validate_tidal_syntax],
         model=composer_model,
         additional_authorized_imports=["re"],
         add_base_tools=True,
-        max_steps=10,    
+        max_steps=10,
     )
-    
+
     log_message(f"Creating Creative Director Agent with model: {director_model_id}")
-    director_model = LiteLLMModel(model_id=director_model_id)
+    director_model = _build_model(director_model_id)
     creative_director_agent = CodeAgent(
         tools=[],
         model=director_model,
@@ -702,7 +1067,11 @@ def create_agents(composer_model_id, director_model_id):
         max_steps=1,
         planning_interval=None,  # Disable planning for simple text output
     )
-    
+
+    global _last_composer_model_id, _last_director_model_id
+    _last_composer_model_id = composer_model_id
+    _last_director_model_id = director_model_id
+
     log_message("✓ Agents created successfully")
 
 # ============================================================================
@@ -711,17 +1080,31 @@ def create_agents(composer_model_id, director_model_id):
 
 def run_music_generation(task_text, test_mode, director_interval, use_creative_director=True):
     """Main function to run the music generation agent"""
-    global is_running, tidal_process, stop_event, task_queue, current_patterns, song_history, executed_tasks_log
+    global is_running, tidal_process, stop_event, task_queue, current_patterns, song_history, executed_tasks_log, SONG_STATE, CURRENT_CPS, current_agent_label, agent_conversation_log
     
     stop_event.clear()
     current_patterns = {}  # Track currently playing patterns per channel
     song_history = []  # Full history
     executed_tasks_log = []
+    agent_conversation_log = []
+    consecutive_composer_failures = 0
+    COMPOSER_FAILURE_RECOVERY_THRESHOLD = 3
+    SONG_STATE.update(_parse_initial_song_state(task_text))
+    SONG_STATE["started_at"] = time.time()
     
     # Store the overall musical goal (not just a task - this is the creative vision)
     musical_goal = task_text.split('\n')[0].strip() if task_text else "create music"
     
-    tasks = [t.strip() for t in task_text.split('\n') if t.strip()]
+    # Allow optional metadata lines like "KEY: C minor" and "SECTION: intro"
+    # without treating them as executable tasks.
+    tasks = []
+    for raw in (task_text or "").split("\n"):
+        t = raw.strip()
+        if not t:
+            continue
+        if re.match(r"^(key|section)\s*:", t, flags=re.IGNORECASE):
+            continue
+        tasks.append(t)
     task_queue = []
     
     if not tasks:
@@ -736,6 +1119,7 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
     while not stop_event.is_set():
         if task_index >= len(tasks):
             if use_creative_director and not test_mode:
+                current_agent_label = "Creative Director"
                 log_message(f"\n   💡 No more tasks. Running Creative Director to suggest next task...")
                 
                 try:
@@ -748,7 +1132,7 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                         current_context = "(no patterns playing yet)"
                     
                     suggestions = creative_director_agent.run(
-                        f"{creative_director_prompt}\n\n=== YOUR CREATIVE GOAL ===\n{musical_goal}\n\nThis is the overall musical vision you are working towards.\n\n=== CURRENT PATTERNS ===\n{current_context}\n\nSuggest ONE next development that serves this goal."
+                        f"{creative_director_prompt}\n\n{_get_song_state_lines()}\n=== YOUR CREATIVE GOAL ===\n{musical_goal}\n\nThis is the overall musical vision you are working towards.\n\n=== CURRENT PATTERNS ===\n{current_context}\n\nSuggest ONE next development that serves this goal."
                     )
                     director_time = time.time() - director_start
                     
@@ -773,6 +1157,7 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                             tasks.extend(suggestion_lines)
                             for idx, sugg in enumerate(suggestion_lines, 1):
                                 log_message(f"   {idx}. {sugg}")
+                                agent_conversation_log.append({"role": "user", "content": sugg})
                             # DO NOT use continue here - we want to process the new task immediately
                         else:
                             log_message("[Creative Director] No new tasks extracted from suggestions")
@@ -791,12 +1176,14 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                     continue
             else:
                 log_message(f"\n   🎵 All tasks completed. Music playing... (press Stop to end)")
+                current_agent_label = "Idle"
                 while not stop_event.is_set():
                     time.sleep(0.5)
                 break
         
         i = task_index
         task = tasks[i]
+        _maybe_update_song_state_from_task(task)
         if stop_event.is_set():
             log_message("\n⏹ Stopped by user")
             break
@@ -807,9 +1194,11 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
         
         if test_mode:
             log_message(f"\n[TEST MODE] Using test sample instead of agent")
+            current_agent_label = "Test Mode"
             code_snippet = TEST_SAMPLE
             composer_time = 0
         else:
+            current_agent_label = "Composer"
             log_message(f"\n[Agent: Composer] Generating code...")
             
             # Build current context string
@@ -823,6 +1212,8 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
             start_time = time.time()
             
             full_prompt = f"""{composer_prompt}
+
+                                {_get_song_state_lines()}
 
                                 === MUSICAL GOAL ===
                                 {musical_goal}
@@ -865,19 +1256,30 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
 
                 log_message(f"\n▶ Executing AI-generated pattern...")
                 log_message(f"   Code: {tidal_code}")
+                agent_conversation_log.append({"role": "assistant", "content": tidal_code})
                 
                 # Split multi-line code and send each line separately to ensure proper execution
                 code_lines = [line.strip() for line in tidal_code.split('\n') if line.strip()]
                 
                 for idx, line in enumerate(code_lines, 1):
                     log_message(f"   → Sending pattern {idx}/{len(code_lines)}: {line[:60]}{'...' if len(line) > 60 else ''}")
+                    cps_match = re.match(
+                        r"^\s*(?:setcps|cps)\s+(.+?)\s*$",
+                        line,
+                        flags=re.IGNORECASE,
+                    )
+                    if cps_match:
+                        cps_value = _parse_cps_value(cps_match.group(1))
+                        if cps_value:
+                            CURRENT_CPS = cps_value
                     tidal_process.stdin.write(line + "\n")
                     tidal_process.stdin.flush()
                     time.sleep(0.2)  # Increased delay to ensure TidalCycles processes each pattern
                 
                 log_message(f"   ✓ Sent {len(code_lines)} pattern(s) to TidalCycles!")
                 time.sleep(0.5)  # Wait for all patterns to be processed before continuing
-                
+                consecutive_composer_failures = 0
+
                 task_queue.append(tidal_code)
                 song_history.append(tidal_code)
                 
@@ -886,6 +1288,10 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                 for line in tidal_code.split('\n'):
                     line = line.strip()
                     if not line:
+                        continue
+                    if line.startswith("--"):
+                        continue
+                    if re.match(r"^\s*(?:setcps|cps)\b", line, flags=re.IGNORECASE):
                         continue
                     
                     # Check if it's a channel assignment (d1, d2, etc.)
@@ -906,8 +1312,6 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                             # Update or add channel pattern
                             current_patterns[channel] = line
                             log_message(f"   → Updated {channel} in current patterns")
-                    else:
-                        log_message(f"   ⚠ Line didn't match channel pattern: {line[:50]}...")
                 
                 log_message(f"   Total active channels: {len(current_patterns)} - {sorted(current_patterns.keys())}")
                 
@@ -919,9 +1323,23 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                 
             except Exception as e:
                 log_message(f"   ✗ Error executing code: {e}")
+                consecutive_composer_failures += 1
         else:
             log_message(f"\n[Error] No valid TidalCycles code extracted or TidalCycles not running")
-        
+            consecutive_composer_failures += 1
+
+        if consecutive_composer_failures >= COMPOSER_FAILURE_RECOVERY_THRESHOLD:
+            log_message(
+                f"\n⚠️  Composer agent failed {consecutive_composer_failures} times in a row; "
+                "recreating agents to clear any bad state..."
+            )
+            try:
+                create_agents(_last_composer_model_id, _last_director_model_id)
+            except Exception as e:
+                log_message(f"   ✗ Failed to recreate agents: {e}")
+            consecutive_composer_failures = 0
+
+
         log_message(f"\n{'='*60}")
         log_message(f"Task {i+1} completed")
         log_message(f"{'='*60}\n")
@@ -930,9 +1348,9 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
     
     log_message("\n✓ All tasks completed!")
 
-def start_system(task_text, test_mode, director_interval, composer_model_id=None, director_model_id=None):
+def start_system(task_text, test_mode, director_interval, composer_model_id=None, director_model_id=None, cognitive_overload_warnings=False):
     """Start the TidalCycles system and agent"""
-    global is_running, agent_thread, stop_event, accumulated_logs
+    global is_running, agent_thread, stop_event, accumulated_logs, ENABLE_COGNITIVE_WARNINGS
     
     if is_running:
         return "System is already running!"
@@ -942,6 +1360,8 @@ def start_system(task_text, test_mode, director_interval, composer_model_id=None
         composer_model_id = default_composer_model
     if director_model_id is None:
         director_model_id = default_director_model
+
+    ENABLE_COGNITIVE_WARNINGS = bool(cognitive_overload_warnings)
     
     while not log_queue.empty():
         log_queue.get()
@@ -991,7 +1411,7 @@ def start_system(task_text, test_mode, director_interval, composer_model_id=None
 
 def stop_system():
     """Stop the TidalCycles system and agent"""
-    global is_running, stop_event, tidal_process
+    global is_running, stop_event, tidal_process, current_agent_label
     
     if not is_running:
         return "System is not running!"
@@ -1016,6 +1436,7 @@ def stop_system():
     log_message(cleanup_result)
     
     is_running = False
+    current_agent_label = "Idle"
     log_message("✓ System stopped!")
     
     return "System stopped!"
@@ -1023,3 +1444,65 @@ def stop_system():
 def get_is_running():
     """Check if the system is currently running"""
     return is_running
+
+def initialize_sound_backend():
+    """Initialize SuperDirt and TidalCycles without starting music generation"""
+    global superdirt_process, tidal_process
+    
+    log_message("="*60)
+    log_message("Initializing Sound Backend")
+    log_message("="*60)
+    
+    log_message("\nStarting SuperDirt...")
+    start_result = start_superdirt()
+    log_message(start_result)
+    
+    log_message("\nStarting TidalCycles session...")
+    tidal_result = start_tidal_session()
+    log_message(tidal_result)
+    
+    log_message("\n" + "="*60)
+    log_message("Sound Backend Ready")
+    log_message("="*60)
+    
+    return "Sound backend initialized successfully"
+
+def get_sound_backend_status():
+    """Check if sound backend (SuperDirt + TidalCycles) is running"""
+    global superdirt_process, tidal_process
+    
+    superdirt_ok = superdirt_process is not None and superdirt_process.poll() is None
+    tidal_ok = tidal_process is not None and tidal_process.poll() is None
+    
+    if superdirt_ok and tidal_ok:
+        return "Running"
+    elif superdirt_ok or tidal_ok:
+        return "Partial"
+    else:
+        return "Not Running"
+
+def play_audio_test():
+    """Play a simple test pattern to verify audio output"""
+    global tidal_process
+    
+    if tidal_process is None or tidal_process.poll() is not None:
+        return "Error: TidalCycles session not running. Initialize sound backend first."
+    
+    try:
+        # Play a simple test pattern: kick drum on beats 1 and 3
+        test_pattern = 'd1 $ sound "bd*4" # gain 0.8'
+        
+        log_message(f"Playing audio test pattern: {test_pattern}")
+        tidal_process.stdin.write(test_pattern + "\n")
+        tidal_process.stdin.flush()
+        time.sleep(2)
+        
+        # Stop the test pattern
+        tidal_process.stdin.write("d1 silence\n")
+        tidal_process.stdin.flush()
+        
+        log_message("Audio test completed")
+        return "Audio test played successfully! You should have heard 4 kick drum beats."
+        
+    except Exception as e:
+        return f"Error playing audio test: {str(e)}"

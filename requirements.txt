@@ -4,3 +4,5 @@ smolagents[transformers]
 bitsandbytes 
 accelerate
 python-dotenv
+pandas
+requests
