@@ -90,6 +90,7 @@ agent_thread = None
 _last_composer_model_id = None
 _last_director_model_id = None
 log_queue = Queue()
+ghci_output_queue = Queue()  # raw GHCi stdout lines, for post-send error detection
 stop_event = threading.Event()
 task_queue = []
 accumulated_logs = []
@@ -150,12 +151,20 @@ SONG_STATE = {
     "key": "C minor",
     "section": "intro",
     "started_at": None,  # epoch seconds
+    "section_start_bar": 1,  # bar number at which the current section began
 }
 
 # SuperDirt instrument aliases (avoid missing instrument errors)
 INSTRUMENT_ALIASES = {
     # SuperDirt doesn't ship a plain "piano" instrument; use its synth instead.
     "piano": "superpiano",
+    # Common natural-language drum names the LLM reaches for that aren't
+    # real SuperDirt sample banks - map to the actual Dirt-Samples bank.
+    "kick": "bd",
+    "snare": "sn",
+    "hihat": "hh",
+    "hat": "hh",
+    "clap": "cp",
 }
 
 # Test mode configuration
@@ -233,13 +242,13 @@ def _parse_initial_song_state(task_text: str) -> dict:
     section = SONG_STATE.get("section", "intro")
 
     for line in (task_text or "").splitlines():
-        m_key = re.match(r"^\\s*key\\s*:\\s*(.+?)\\s*$", line, flags=re.IGNORECASE)
+        m_key = re.match(r"^\s*key\s*:\s*(.+?)\s*$", line, flags=re.IGNORECASE)
         if m_key:
             key = m_key.group(1).strip()
-        m_section = re.match(r"^\\s*section\\s*:\\s*(.+?)\\s*$", line, flags=re.IGNORECASE)
+        m_section = re.match(r"^\s*section\s*:\s*(.+?)\s*$", line, flags=re.IGNORECASE)
         if m_section:
             section = m_section.group(1).strip()
-        m_cps = re.match(r"^\\s*(?:cps|setcps)\\s*[:\\s]+(.+?)\\s*$", line, flags=re.IGNORECASE)
+        m_cps = re.match(r"^\s*(?:cps|setcps)\s*[:\s]+(.+?)\s*$", line, flags=re.IGNORECASE)
         if m_cps:
             cps_value = _parse_cps_value(m_cps.group(1))
             if cps_value:
@@ -248,16 +257,38 @@ def _parse_initial_song_state(task_text: str) -> dict:
 
     return {"key": key, "section": section}
 
+_SUGGESTION_META_MARKERS = (
+    "final_answer", "the agent", "i need to", "got stuck", "as an ai",
+    "python code", "i apologize", "i'm sorry", "let me", "i should",
+    "thought process", "required format", "make sure to", "code blob",
+)
+
+def _looks_like_valid_suggestion(text: str) -> bool:
+    """Reject meta-commentary/self-referential text that isn't an actual musical
+    instruction (e.g. a rambling agent reflecting on its own failure instead
+    of producing a suggestion)."""
+    if not text or len(text) > 300:
+        return False
+    lower = text.lower()
+    return not any(marker in lower for marker in _SUGGESTION_META_MARKERS)
+
+def _current_bar() -> int:
+    started_at = SONG_STATE.get("started_at")
+    if started_at is None:
+        return 0
+    cycles = max(0.0, (time.time() - float(started_at)) * float(CURRENT_CPS))
+    return int(cycles) + 1
+
 def _maybe_update_song_state_from_task(task: str) -> None:
     """Update KEY/SECTION from task text when explicitly specified."""
     if not task:
         return
 
-    m_key = re.search(r"\\bkey\\s*:\\s*([^\\n]+)", task, flags=re.IGNORECASE)
+    m_key = re.search(r"\bkey\s*:\s*([^\n]+)", task, flags=re.IGNORECASE)
     if m_key:
         SONG_STATE["key"] = m_key.group(1).strip()
 
-    m_cps = re.search(r"\\b(?:cps|setcps)\\s*[:\\s]+([^\\n]+)", task, flags=re.IGNORECASE)
+    m_cps = re.search(r"\b(?:cps|setcps)\s*[:\s]+([^\n]+)", task, flags=re.IGNORECASE)
     if m_cps:
         cps_value = _parse_cps_value(m_cps.group(1))
         if cps_value:
@@ -265,12 +296,15 @@ def _maybe_update_song_state_from_task(task: str) -> None:
             CURRENT_CPS = cps_value
 
     # Accept both "SECTION: build" and a "BUILD:" prefix.
-    m_section = re.search(r"\\bsection\\s*:\\s*([^\\n]+)", task, flags=re.IGNORECASE)
+    m_section = re.search(r"\bsection\s*:\s*([^\n]+)", task, flags=re.IGNORECASE)
     if m_section:
-        SONG_STATE["section"] = m_section.group(1).strip()
+        new_section = m_section.group(1).strip()
+        if new_section != SONG_STATE.get("section"):
+            SONG_STATE["section"] = new_section
+            SONG_STATE["section_start_bar"] = _current_bar()
         return
 
-    prefix = re.match(r"^\\s*([A-Za-z][A-Za-z _-]{2,})\\s*:\\s*", task)
+    prefix = re.match(r"^\s*([A-Za-z][A-Za-z _-]{2,})\s*:\s*", task)
     if not prefix:
         return
 
@@ -288,22 +322,22 @@ def _maybe_update_song_state_from_task(task: str) -> None:
         "pre_chorus",
     }
     if normalized in allowed:
-        SONG_STATE["section"] = normalized.replace("prechorus", "pre_chorus")
+        normalized = normalized.replace("prechorus", "pre_chorus")
+        if normalized != SONG_STATE.get("section"):
+            SONG_STATE["section"] = normalized
+            SONG_STATE["section_start_bar"] = _current_bar()
 
 def _get_song_state_lines() -> str:
-    started_at = SONG_STATE.get("started_at")
-    if started_at is None:
-        bar = 0
-    else:
-        cycles = max(0.0, (time.time() - float(started_at)) * float(CURRENT_CPS))
-        bar = int(cycles) + 1
+    bar = _current_bar()
+    bars_in_section = max(0, bar - SONG_STATE.get("section_start_bar", bar))
 
     return (
-        "=== SONG STATE ===\\n"
-        f"KEY: {SONG_STATE.get('key', 'C minor')}\\n"
-        f"SECTION: {SONG_STATE.get('section', 'intro')}\\n"
-        f"BAR: {bar}\\n"
-        f"CPS: {CURRENT_CPS}\\n"
+        "=== SONG STATE ===\n"
+        f"KEY: {SONG_STATE.get('key', 'C minor')}\n"
+        f"SECTION: {SONG_STATE.get('section', 'intro')}\n"
+        f"BAR: {bar}\n"
+        f"BARS IN SECTION: {bars_in_section}\n"
+        f"CPS: {CURRENT_CPS}\n"
     )
 
 # ============================================================================
@@ -405,6 +439,7 @@ def start_tidal_session() -> str:
         def log_ghci():
             for line in tidal_process.stdout:
                 log_message(f"[GHCi/Tidal] {line.rstrip()}")
+                ghci_output_queue.put(line.rstrip())
         
         threading.Thread(target=log_ghci, daemon=True).start()
         
@@ -597,6 +632,47 @@ def stop_recording() -> str:
             pass
         recording_process = None
         return f"Error stopping recording: {str(e)}"
+
+# ============================================================================
+# GHCI OUTPUT / ERROR DETECTION (CLOSED-LOOP CORRECTION)
+# ============================================================================
+
+_GHCI_ERROR_RE = re.compile(
+    r"<interactive>:\d+:\d+: error:|^\*\*\* Exception:",
+    flags=re.MULTILINE,
+)
+
+def _drain_ghci_output() -> str:
+    """Drain any buffered GHCi stdout lines (non-blocking) and return them joined."""
+    lines = []
+    while not ghci_output_queue.empty():
+        lines.append(ghci_output_queue.get())
+    return "\n".join(lines)
+
+def _check_for_ghci_error(output_text: str) -> str | None:
+    """Return a trimmed error excerpt if GHCi output looks like a compile/runtime error."""
+    if _GHCI_ERROR_RE.search(output_text):
+        return output_text.strip()[-800:]
+    return None
+
+def _send_tidal_code_to_ghci(code_lines: list[str]) -> str | None:
+    """Send lines to the running ghci session; return GHCi's error text if it rejected any of them."""
+    global CURRENT_CPS
+    _drain_ghci_output()  # clear stale output before sending, so we only see this send's response
+
+    for idx, line in enumerate(code_lines, 1):
+        log_message(f"   → Sending pattern {idx}/{len(code_lines)}: {line[:60]}{'...' if len(line) > 60 else ''}")
+        cps_match = re.match(r"^\s*(?:setcps|cps)\s+(.+?)\s*$", line, flags=re.IGNORECASE)
+        if cps_match:
+            cps_value = _parse_cps_value(cps_match.group(1))
+            if cps_value:
+                CURRENT_CPS = cps_value
+        tidal_process.stdin.write(line + "\n")
+        tidal_process.stdin.flush()
+        time.sleep(0.2)  # Increased delay to ensure TidalCycles processes each pattern
+
+    time.sleep(0.5)  # Wait for GHCi to respond (success prompt or error text) before checking
+    return _check_for_ghci_error(_drain_ghci_output())
 
 # ============================================================================
 # TIDAL CODE NORMALIZATION (DEFENSIVE REWRITES)
@@ -912,7 +988,7 @@ def execute_tidal_code(code: str) -> str:
             log_message(f"[Normalize] Rewrote instruments: {', '.join(replacements)}")
 
         cps_match = re.search(
-            r"^\\s*(?:setcps|cps)\\s+(.+?)\\s*$",
+            r"^\s*(?:setcps|cps)\s+(.+?)\s*$",
             normalized,
             flags=re.IGNORECASE | re.MULTILINE,
         )
@@ -1130,9 +1206,14 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                         current_context = "\n\n".join([current_patterns[ch] for ch in sorted(current_patterns.keys())])
                     else:
                         current_context = "(no patterns playing yet)"
-                    
+
+                    if executed_tasks_log:
+                        recent_history = "\n".join(executed_tasks_log[-4:])
+                    else:
+                        recent_history = "(nothing developed yet)"
+
                     suggestions = creative_director_agent.run(
-                        f"{creative_director_prompt}\n\n{_get_song_state_lines()}\n=== YOUR CREATIVE GOAL ===\n{musical_goal}\n\nThis is the overall musical vision you are working towards.\n\n=== CURRENT PATTERNS ===\n{current_context}\n\nSuggest ONE next development that serves this goal."
+                        f"{creative_director_prompt}\n\n{_get_song_state_lines()}\n=== YOUR CREATIVE GOAL ===\n{musical_goal}\n\nThis is the overall musical vision you are working towards.\n\n=== CURRENT PATTERNS ===\n{current_context}\n\n=== RECENT DEVELOPMENTS ===\n{recent_history}\n\nSuggest ONE next development that serves this goal."
                     )
                     director_time = time.time() - director_start
                     
@@ -1142,15 +1223,21 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                     if suggestions:
                         suggestion_lines = []
                         if isinstance(suggestions, list):
-                            suggestion_lines = [s.strip() for s in suggestions if s.strip()]
+                            suggestion_lines = [
+                                s.strip() for s in suggestions
+                                if s.strip() and _looks_like_valid_suggestion(s.strip())
+                            ]
                         elif isinstance(suggestions, str):
                             for line in suggestions.split('\n'):
                                 line = line.strip()
+                                candidate = None
                                 match = re.match(r'^\d+[\.\.\)]\s*(.+)$', line)
                                 if match:
-                                    suggestion_lines.append(match.group(1).strip())
+                                    candidate = match.group(1).strip()
                                 elif line and not line.startswith('#') and not line.startswith('/'):
-                                    suggestion_lines.append(line)
+                                    candidate = line
+                                if candidate and _looks_like_valid_suggestion(candidate):
+                                    suggestion_lines.append(candidate)
                         
                         if suggestion_lines:
                             log_message(f"\n✨ Adding {len(suggestion_lines)} new creative tasks to the queue")
@@ -1257,70 +1344,87 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                 log_message(f"\n▶ Executing AI-generated pattern...")
                 log_message(f"   Code: {tidal_code}")
                 agent_conversation_log.append({"role": "assistant", "content": tidal_code})
-                
+
                 # Split multi-line code and send each line separately to ensure proper execution
                 code_lines = [line.strip() for line in tidal_code.split('\n') if line.strip()]
-                
-                for idx, line in enumerate(code_lines, 1):
-                    log_message(f"   → Sending pattern {idx}/{len(code_lines)}: {line[:60]}{'...' if len(line) > 60 else ''}")
-                    cps_match = re.match(
-                        r"^\s*(?:setcps|cps)\s+(.+?)\s*$",
-                        line,
-                        flags=re.IGNORECASE,
-                    )
-                    if cps_match:
-                        cps_value = _parse_cps_value(cps_match.group(1))
-                        if cps_value:
-                            CURRENT_CPS = cps_value
-                    tidal_process.stdin.write(line + "\n")
-                    tidal_process.stdin.flush()
-                    time.sleep(0.2)  # Increased delay to ensure TidalCycles processes each pattern
-                
-                log_message(f"   ✓ Sent {len(code_lines)} pattern(s) to TidalCycles!")
-                time.sleep(0.5)  # Wait for all patterns to be processed before continuing
-                consecutive_composer_failures = 0
 
-                task_queue.append(tidal_code)
-                song_history.append(tidal_code)
-                
-                # Parse and update current patterns per channel
-                log_message(f"   Parsing {len(tidal_code.split(chr(10)))} lines of code...")
-                for line in tidal_code.split('\n'):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    if line.startswith("--"):
-                        continue
-                    if re.match(r"^\s*(?:setcps|cps)\b", line, flags=re.IGNORECASE):
-                        continue
-                    
-                    # Check if it's a channel assignment (d1, d2, etc.)
-                    # Match patterns like: d1 $, d1$ ..., d1 silence, d10$ ..., etc.
-                    channel_match = re.match(r'^(d\d+)\s*(.+)', line)
-                    if channel_match:
-                        channel = channel_match.group(1)
-                        rest_of_line = channel_match.group(2)
-                        
-                        # Check if it's silencing the channel
-                        rest_normalized = rest_of_line.strip().lower().replace(" ", "")
-                        if rest_normalized in ['silence', '$silence']:
-                            # Remove channel from current patterns
-                            if channel in current_patterns:
-                                del current_patterns[channel]
-                                log_message(f"   → Removed {channel} from current patterns (silenced)")
+                ghci_error = _send_tidal_code_to_ghci(code_lines)
+
+                if ghci_error:
+                    log_message(f"   ✗ GHCi rejected the pattern:\n{ghci_error}")
+                    log_message(f"   ↻ Asking composer to fix and resend (one retry)...")
+                    retry_prompt = (
+                        f"{full_prompt}\n\n"
+                        f"Your previous code failed to run in TidalCycles with this error:\n{ghci_error}\n\n"
+                        "Fix the specific issue and provide corrected code."
+                    )
+                    retry_snippet = composer_agent.run(retry_prompt)
+                    retry_code = extract_tidal_code(retry_snippet)
+                    if retry_code:
+                        retry_code, retry_replacements = normalize_tidal_code(retry_code)
+                        if retry_replacements:
+                            log_message(f"[Normalize] Rewrote instruments before resend: {', '.join(retry_replacements)}")
+                        retry_lines = [line.strip() for line in retry_code.split('\n') if line.strip()]
+                        retry_error = _send_tidal_code_to_ghci(retry_lines)
+                        if retry_error:
+                            log_message(f"   ✗ Retry also rejected by GHCi:\n{retry_error}")
+                            tidal_code = None
                         else:
-                            # Update or add channel pattern
-                            current_patterns[channel] = line
-                            log_message(f"   → Updated {channel} in current patterns")
-                
-                log_message(f"   Total active channels: {len(current_patterns)} - {sorted(current_patterns.keys())}")
-                
-                executed_tasks_log.append(f"Task {i+1}: {task}")
-                
-                # Move to next task
-                log_message(f"   Moving to next task (pattern will continue layering)...")
-                time.sleep(director_interval)
-                
+                            log_message(f"   ✓ Retry accepted by GHCi")
+                            tidal_code = retry_code
+                            code_lines = retry_lines
+                    else:
+                        log_message(f"   ✗ Could not extract corrected code from retry")
+                        tidal_code = None
+
+                if tidal_code:
+                    log_message(f"   ✓ Sent {len(code_lines)} pattern(s) to TidalCycles!")
+                    consecutive_composer_failures = 0
+
+                    task_queue.append(tidal_code)
+                    song_history.append(tidal_code)
+
+                    # Parse and update current patterns per channel
+                    log_message(f"   Parsing {len(tidal_code.split(chr(10)))} lines of code...")
+                    for line in tidal_code.split('\n'):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        if line.startswith("--"):
+                            continue
+                        if re.match(r"^\s*(?:setcps|cps)\b", line, flags=re.IGNORECASE):
+                            continue
+
+                        # Check if it's a channel assignment (d1, d2, etc.)
+                        # Match patterns like: d1 $, d1$ ..., d1 silence, d10$ ..., etc.
+                        channel_match = re.match(r'^(d\d+)\s*(.+)', line)
+                        if channel_match:
+                            channel = channel_match.group(1)
+                            rest_of_line = channel_match.group(2)
+
+                            # Check if it's silencing the channel
+                            rest_normalized = rest_of_line.strip().lower().replace(" ", "")
+                            if rest_normalized in ['silence', '$silence']:
+                                # Remove channel from current patterns
+                                if channel in current_patterns:
+                                    del current_patterns[channel]
+                                    log_message(f"   → Removed {channel} from current patterns (silenced)")
+                            else:
+                                # Update or add channel pattern
+                                current_patterns[channel] = line
+                                log_message(f"   → Updated {channel} in current patterns")
+
+                    log_message(f"   Total active channels: {len(current_patterns)} - {sorted(current_patterns.keys())}")
+
+                    executed_tasks_log.append(f"Task {i+1}: {task}")
+
+                    # Move to next task
+                    log_message(f"   Moving to next task (pattern will continue layering)...")
+                    time.sleep(director_interval)
+                else:
+                    log_message(f"   ✗ Giving up on this task after GHCi rejected both attempts")
+                    consecutive_composer_failures += 1
+
             except Exception as e:
                 log_message(f"   ✗ Error executing code: {e}")
                 consecutive_composer_failures += 1
