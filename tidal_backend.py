@@ -999,10 +999,18 @@ ARRANGEMENT_ROLE_INSTRUMENTS = {
         "bd", "sn", "sd", "hh", "hh27", "cp", "cb", "rs",
         "clubkick", "hardkick", "popkick", "reverbkick", "kicklinn",
         "808bd", "808sd", "808hc", "808ht", "808lc", "808lt", "808mc", "808mt", "808oh",
+        # custom sample library (see CUSTOM_SAMPLES_DIR / samples/)
+        "kick", "snare", "clap", "break", "cpu", "cpu2", "bskick", "bssnare", "bshihat",
     },
-    "bass": {"bass", "bass0", "bass1", "bass2", "bass3", "bassdm", "bassfoo", "jvbass"},
-    "melody": {"superpiano", "superfm", "supersaw", "supermandolin", "superchip", "superhammond", "superzow"},
-    "atmosphere": {"pad", "space", "arpy", "supergong"},
+    "bass": {
+        "bass", "bass0", "bass1", "bass2", "bass3", "bassdm", "bassfoo", "jvbass",
+        "dbass", "bsbass",
+    },
+    "melody": {
+        "superpiano", "superfm", "supersaw", "supermandolin", "superchip", "superhammond", "superzow",
+        "rash", "dsynth", "bsguitar",
+    },
+    "atmosphere": {"pad", "space", "arpy", "supergong", "foley", "bsnoise", "claus"},
 }
 
 def _arrangement_completeness_report(patterns: dict) -> str:
