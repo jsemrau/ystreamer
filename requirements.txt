@@ -6,3 +6,4 @@ accelerate
 python-dotenv
 pandas
 requests
+music21

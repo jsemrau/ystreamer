@@ -18,6 +18,7 @@ env_path = os.path.join(os.path.dirname(__file__), '.env')
 load_dotenv(dotenv_path=env_path, override=True)
 
 from smolagents import CodeAgent, LiteLLMModel, tool
+import music21
 
 # Environment configuration
 os.environ['HF_HOME'] = "/home/moebius/Models/hfmodels/.cache/"
@@ -842,6 +843,187 @@ def extract_tidal_code(code_snippet) -> str | None:
     return "\n".join(tidal_lines)
 
 # ============================================================================
+# HARMONY TOOLS (music21-backed, deterministic - not LLM recall)
+# ============================================================================
+
+_ROMAN_NUMERALS_MAJOR = ["I", "ii", "iii", "IV", "V", "vi", "vii°"]
+_ROMAN_NUMERALS_MINOR = ["i", "ii°", "III", "iv", "v", "VI", "VII"]
+
+# Curated progression library, each tagged with mood/genre keywords for
+# lookup. Roots are 0-indexed scale degrees for use with
+# n (scale "<key>" "<root sequence>"). Bigger and more genre-aware than
+# what any single prompt table can reliably hold in an LLM's context.
+CHORD_PROGRESSIONS = [
+    {"name": "Natural minor vamp", "numerals": "i-VI-III-VII", "roots": "0 5 2 6", "mood": "moody ambient dreamy atmospheric", "genre": "ambient downtempo lo-fi"},
+    {"name": "Minor plagal", "numerals": "i-iv-v", "roots": "0 3 4", "mood": "simple tense moody", "genre": "cinematic dark"},
+    {"name": "Pop/major", "numerals": "I-V-vi-IV", "roots": "0 4 5 3", "mood": "bright uplifting hopeful", "genre": "pop house"},
+    {"name": "Jazzy resolve", "numerals": "ii-V-I", "roots": "1 4 0", "mood": "sophisticated resolving smooth", "genre": "jazz lo-fi"},
+    {"name": "Andalusian/dramatic", "numerals": "i-VII-VI-VII", "roots": "0 6 5 6", "mood": "dramatic cinematic dark", "genre": "cinematic trance"},
+    {"name": "Trance anthem", "numerals": "vi-IV-I-V", "roots": "5 3 0 4", "mood": "euphoric driving energetic uplifting", "genre": "trance edm"},
+    {"name": "Deep house loop", "numerals": "i-VII-VI-v", "roots": "0 6 5 4", "mood": "hypnotic groovy deep", "genre": "house deep-house techno"},
+    {"name": "Circle of fifths descent", "numerals": "vi-ii-V-I", "roots": "5 1 4 0", "mood": "smooth flowing resolving", "genre": "jazz pop"},
+    {"name": "Suspended tension", "numerals": "i-iv-VII-III", "roots": "0 3 6 2", "mood": "tense suspended unresolved", "genre": "cinematic build breakdown"},
+    {"name": "Simple ambient drone", "numerals": "i-i-iv-i", "roots": "0 0 3 0", "mood": "meditative sparse minimal steady focused", "genre": "ambient drone focused-programming"},
+]
+
+GENRE_STYLE_PROFILES = {
+    "trance": "kick (four-on-the-floor) + rolling bassline are mandatory foundation; bright supersaw lead/pad; filter sweeps over the arc; energetic, driving.",
+    "house": "kick + hi-hat groove + bass + chord stabs; moderate steady tempo; danceable.",
+    "techno": "driving kick + minimal bass; hypnotic repetitive percussion; darker atmosphere, less melody.",
+    "ambient": "sparse or no drums; slow pads/drones; gentle melody; spacious reverb; very low energy throughout.",
+    "lo-fi": "laid-back drums; warm bass; jazzy/mellow chords (try the Jazzy resolve or Deep house loop progressions); relaxed tempo.",
+    "downtempo": "soft drums; mellow bass; atmospheric pads; unhurried.",
+    "cinematic": "sparse rhythm or none; dramatic chord progressions (Andalusian/dramatic, Suspended tension); wide dynamic range.",
+    "focused programming": "steady, unobtrusive rhythm; repetitive but not chaotic; avoid jarring changes; sustain moderate energy rather than big peaks/drops.",
+}
+
+def _parse_key_string(key_str: str):
+    """Parse a 'C minor' / 'g major' style key string into (tonic, mode)."""
+    parts = (key_str or "").strip().split()
+    if len(parts) < 2:
+        return None
+    tonic = parts[0]
+    mode = parts[1].lower()
+    if mode not in ("major", "minor"):
+        return None
+    return tonic, mode
+
+@tool
+def get_chord_progression(mood: str, genre: str = "") -> str:
+    """Look up a real, named chord progression matching the requested mood
+    and/or genre, returning its roman numerals and 0-indexed scale-degree
+    root sequence ready to use with n (scale "key" "<root sequence>").
+    Covers more ground than any table you could reliably recall from
+    memory - prefer this over guessing a progression yourself.
+
+    Args:
+        mood: Mood/energy keywords, e.g. "moody ambient" or "euphoric driving".
+        genre: Optional genre keywords, e.g. "trance" or "lo-fi".
+    """
+    query_words = set(f"{mood} {genre}".lower().split())
+    best, best_score = None, -1
+    for prog in CHORD_PROGRESSIONS:
+        haystack = f"{prog['mood']} {prog['genre']}".lower()
+        score = sum(1 for w in query_words if w and w in haystack)
+        if score > best_score:
+            best, best_score = prog, score
+    if best is None or best_score == 0:
+        best = CHORD_PROGRESSIONS[0]
+    return f"{best['name']}: {best['numerals']} (roots {best['roots']}) - typically {best['mood']}"
+
+@tool
+def get_genre_style_profile(goal_text: str) -> str:
+    """Look up genre/style conventions (expected instrumentation, energy)
+    matching keywords found in the given creative-goal text.
+
+    Args:
+        goal_text: The creative goal text to match against known genres.
+    """
+    lower = goal_text.lower()
+    matches = [f"{genre}: {desc}" for genre, desc in GENRE_STYLE_PROFILES.items() if genre in lower]
+    if not matches:
+        return "No specific genre convention matched - use general PROGRESSIVE LAYERING guidance."
+    return " | ".join(matches)
+
+@tool
+def validate_harmony(key_str: str, root_sequence: str) -> str:
+    """Validate a proposed root sequence against a real key using music
+    theory (not guesswork), returning the roman numeral and actual pitch
+    for each root so you can confirm it's coherent before using it.
+
+    Args:
+        key_str: The key, e.g. "C minor" or "G major".
+        root_sequence: Space-separated 0-indexed scale degrees, e.g. "0 5 2 6".
+    """
+    parsed = _parse_key_string(key_str)
+    if parsed is None:
+        return f"Error: could not parse key '{key_str}'. Use e.g. 'C minor' or 'G major'."
+    tonic, mode = parsed
+    try:
+        k = music21.key.Key(tonic, mode)
+    except Exception as e:
+        return f"Error: '{key_str}' is not a valid key ({e}). Use a real note name like C, D, E-, F#, etc."
+
+    pitches = [p.name for p in k.pitches[:7]]
+    numerals = _ROMAN_NUMERALS_MAJOR if mode == "major" else _ROMAN_NUMERALS_MINOR
+
+    try:
+        degrees = [int(d) for d in root_sequence.split()]
+    except ValueError:
+        return f"Error: root_sequence must be space-separated integers, got '{root_sequence}'."
+
+    labeled = [f"{d}={numerals[d % 7]}({pitches[d % 7]})" for d in degrees]
+    return f"Valid. In {tonic} {mode}: " + " - ".join(labeled)
+
+@tool
+def shift_progression(root_sequence: str, degree_shift: int) -> str:
+    """Shift a root sequence by a number of scale degrees within the same
+    key (diatonic transposition, wrapping within the 7-note scale). Use
+    this for a "move the progression to a different root" variation
+    instead of doing the arithmetic yourself.
+
+    Args:
+        root_sequence: Space-separated 0-indexed scale degrees, e.g. "0 5 2 6".
+        degree_shift: How many scale degrees to shift by (can be negative).
+    """
+    try:
+        degrees = [int(d) for d in root_sequence.split()]
+    except ValueError:
+        return f"Error: root_sequence must be space-separated integers, got '{root_sequence}'."
+    return " ".join(str((d + degree_shift) % 7) for d in degrees)
+
+# ============================================================================
+# ARRANGEMENT COMPLETENESS (DETERMINISTIC, NOT LLM JUDGMENT)
+# ============================================================================
+
+# Instrument tokens that count toward each foundational arrangement role.
+# Deliberately checked against real SuperDirt sample-bank names (see
+# INSTRUMENT_ALIASES above for the natural-language mistakes that get
+# rewritten to these before code is sent to Tidal).
+ARRANGEMENT_ROLE_INSTRUMENTS = {
+    "drums": {
+        "bd", "sn", "sd", "hh", "hh27", "cp", "cb", "rs",
+        "clubkick", "hardkick", "popkick", "reverbkick", "kicklinn",
+        "808bd", "808sd", "808hc", "808ht", "808lc", "808lt", "808mc", "808mt", "808oh",
+    },
+    "bass": {"bass", "bass0", "bass1", "bass2", "bass3", "bassdm", "bassfoo", "jvbass"},
+    "melody": {"superpiano", "superfm", "supersaw", "supermandolin", "superchip", "superhammond", "superzow"},
+    "atmosphere": {"pad", "space", "arpy", "supergong"},
+}
+
+def _arrangement_completeness_report(patterns: dict) -> str:
+    """Deterministically check which foundational roles (drums, bass, melody,
+    atmosphere) are present in the given {channel: code} patterns, by
+    scanning for known SuperDirt instrument tokens. Not LLM judgment -
+    this is why it exists: an agent re-reading raw code and reasoning
+    about what's "missing" is exactly the failure mode observed live (a
+    kick drum got added, then the Director moved straight to melody/pads
+    without ever once adding bass)."""
+    if not patterns:
+        return "FOUNDATION CHECK: nothing playing yet - drums MISSING, bass MISSING, melody MISSING, atmosphere MISSING"
+
+    all_code = " ".join(patterns.values()).lower()
+    present = set()
+    for role, instruments in ARRANGEMENT_ROLE_INSTRUMENTS.items():
+        for instrument in instruments:
+            if re.search(rf"(?<!\w){re.escape(instrument)}(?::\d+)?(?!\w)", all_code):
+                present.add(role)
+                break
+
+    parts = []
+    for role in ("drums", "bass", "melody", "atmosphere"):
+        parts.append(f"{role} {'present' if role in present else 'MISSING'}")
+    return "FOUNDATION CHECK: " + ", ".join(parts)
+
+@tool
+def check_arrangement_completeness() -> str:
+    """Check which foundational arrangement roles (drums, bass, melody,
+    atmosphere) are present or missing in the patterns currently playing.
+    Call this before suggesting what to add next - it's a deterministic
+    check of the actual channel contents, not a guess."""
+    return _arrangement_completeness_report(current_patterns)
+
+# ============================================================================
 # VALIDATION TOOL
 # ============================================================================
 
@@ -1155,7 +1337,7 @@ def create_agents(composer_model_id, director_model_id):
     log_message(f"Creating Composer Agent with model: {composer_model_id}")
     composer_model = _build_model(composer_model_id)
     composer_agent = CodeAgent(
-        tools=[validate_tidal_syntax],
+        tools=[validate_tidal_syntax, validate_harmony],
         model=composer_model,
         additional_authorized_imports=["re"],
         add_base_tools=True,
@@ -1165,7 +1347,7 @@ def create_agents(composer_model_id, director_model_id):
     log_message(f"Creating Creative Director Agent with model: {director_model_id}")
     director_model = _build_model(director_model_id)
     creative_director_agent = CodeAgent(
-        tools=[],
+        tools=[check_arrangement_completeness, get_chord_progression, get_genre_style_profile, shift_progression],
         model=director_model,
         add_base_tools=False,
         max_steps=1,
@@ -1240,8 +1422,10 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                     else:
                         recent_history = "(nothing developed yet)"
 
+                    arrangement_check = _arrangement_completeness_report(current_patterns)
+
                     suggestions = creative_director_agent.run(
-                        f"{creative_director_prompt}\n\n{_get_song_state_lines()}\n=== YOUR CREATIVE GOAL ===\n{musical_goal}\n\nThis is the overall musical vision you are working towards.\n\n=== CURRENT PATTERNS ===\n{current_context}\n\n=== RECENT DEVELOPMENTS ===\n{recent_history}\n\nSuggest ONE next development that serves this goal."
+                        f"{creative_director_prompt}\n\n{_get_song_state_lines()}\n=== YOUR CREATIVE GOAL ===\n{musical_goal}\n\nThis is the overall musical vision you are working towards.\n\n=== CURRENT PATTERNS ===\n{current_context}\n\n=== {arrangement_check} ===\nIf anything is MISSING, prioritize adding it before more melody/atmosphere layers.\n\n=== RECENT DEVELOPMENTS ===\n{recent_history}\n\nSuggest ONE next development that serves this goal."
                     )
                     director_time = time.time() - director_start
                     
