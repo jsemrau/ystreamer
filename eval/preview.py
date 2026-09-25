@@ -145,7 +145,7 @@ def preview_piece(style: str | None, seed: int, max_cycles_per_section: int = 8)
     from music.engine import MusicEngine
 
     rng = random.Random(seed)
-    director = Director(None, rng, style=style)
+    director = Director(None, rng, style=style, log=lambda m: None)
     piece = director.next_piece(None)
     engine = MusicEngine(lambda lines: None, director, log=lambda m: None)
     sections = []
