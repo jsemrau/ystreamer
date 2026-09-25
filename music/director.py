@@ -18,6 +18,7 @@ from collections import deque
 import config
 
 from . import feedback, llm, runtime
+from .narrator import clean_narration
 from . import presets as P
 from .melody import STEPS_PER_CYCLE
 from .plan import (Arrangement, Piece, Section, arrange, describe_options, plan_piece,
@@ -132,6 +133,7 @@ class Director:
                         piece.key = fallback.key
                 if notes:
                     self.log(f"[Director] corrected LLM piece plan: {'; '.join(notes)}")
+                piece.narration = clean_narration(data.get("narration"))
                 self._think("Next piece", f"'{piece.title}', {piece.style}, {piece.key}, {piece.bpm:.0f} BPM, "
                                           f"{piece.progression}, {piece.mood}", data)
         self.recent_progressions.append(piece.progression)
@@ -170,6 +172,7 @@ class Director:
         if notes:
             self.log(f"[Director] corrected LLM arrangement: {'; '.join(notes)}")
         arrangement.variation_seed = fallback.variation_seed
+        arrangement.narration = clean_narration(data.get("narration"))
         layers = ", ".join(f"{r}={p}" for r, p in arrangement.layers.items() if p) or "silence"
         character = f", melody {arrangement.melody_character}" if arrangement.melody_character else ""
         self._think(f"Next section ({section.name} {index + 1}/{len(piece.sections)}, energy {section.energy})",

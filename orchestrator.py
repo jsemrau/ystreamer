@@ -63,6 +63,10 @@ def parse_args():
     engine.add_argument("--director-model", default=os.getenv("YS_DIRECTOR_MODEL", ""),
                         help="Full model id, overrides --llm/--model (e.g. claude/claude-opus-5, "
                              "local/qwen-agentworld-35b, jevtypesafe/<model>, or any LiteLLM id).")
+    engine.add_argument("--narrate", choices=["off", "pieces", "sections"],
+                        default=os.getenv("YS_NARRATION") or "sections",
+                        help="Speak the Director's lines: at every section, only when a piece starts, or off "
+                             "(default: YS_NARRATION, else sections). Needs YS_TTS_VOICE.")
     engine.add_argument("--show-llm", action="store_true",
                         help="Also print the LLM's full raw replies (its decisions and reasons are always shown).")
     engine.add_argument("--style", choices=STYLE_CHOICES, default=os.getenv("YS_STYLE") or None,
@@ -181,7 +185,11 @@ def run_dry(args) -> None:
             print(f"[{stamp}] {line}")
         return None
 
-    engine = MusicEngine(send, build_director(args, rng), use_custom_synths=not args.no_custom_synths,
+    from music.narrator import Narrator
+
+    narrator = Narrator(mode=args.narrate, speak=False)
+    engine = MusicEngine(send, build_director(args, rng), narrator=narrator,
+                         use_custom_synths=not args.no_custom_synths,
                          free_layer=args.free_layer, now=sim.now, sleep=sim.sleep,
                          max_pieces=args.pieces or 1, director_grace=config.LLM_TIMEOUT_SECONDS + 10)
     engine.run()
@@ -275,7 +283,12 @@ def run_engine(args) -> None:
             tidal.start()
         return tidal.send(lines)
 
-    engine = MusicEngine(send, director, use_custom_synths=not args.no_custom_synths,
+    from music.narrator import Narrator, tidal_ducker
+
+    narrator = Narrator(duck=tidal_ducker(send), mode=args.narrate)
+    if narrator.available:
+        print(f"[orchestrator] Narration: {narrator.mode}, {narrator.style} voice ({os.path.basename(narrator.voice)})")
+    engine = MusicEngine(send, director, use_custom_synths=not args.no_custom_synths, narrator=narrator,
                          free_layer=args.free_layer, type_checker=type_checker, max_pieces=args.pieces)
 
     def shutdown(signum, _frame):

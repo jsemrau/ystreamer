@@ -32,6 +32,10 @@ that was used recently.
   energy about 0.8, never several peaks in a row.
 - `reason`: one or two sentences, in plain words, on why this piece follows
   the previous one well (key, tempo, mood). It is shown to the audience.
+- `narration`: ONE sentence (under 25 words) that a warm, intimate late-night
+  radio host would say softly to listeners as this piece begins. Talk about
+  the feeling, the moment, the listener. No numbers, no technical words, no
+  instrument or preset names.
 - Reply with ONE JSON object and nothing else.
 
 ## Reply format
@@ -40,5 +44,6 @@ that was used recently.
 {{"title": "Two or three evocative words", "style": "lofi", "key": "D minor", "bpm": 78,
   "progression": "i-VI-III-VII", "mood": "late-night, cozy",
   "sections": [{{"name": "intro", "bars": 16, "energy": 0.2}}, {{"name": "verse", "bars": 32, "energy": 0.45}}],
-  "reason": "Moving to the relative minor keeps the warmth of the last piece but makes it more intimate."}}
+  "reason": "Moving to the relative minor keeps the warmth of the last piece but makes it more intimate.",
+  "narration": "Stay a little longer. Let the night slow down with you."}}
 ```

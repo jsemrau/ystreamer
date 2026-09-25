@@ -80,8 +80,10 @@ class MusicEngine:
                  log: Callable[[str], None] = print, use_custom_synths: bool = True,
                  free_layer: bool = False, type_checker=None, lead_cycles: float = 1.0,
                  now: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep,
-                 max_pieces: int | None = None, director_grace: float = 0.0):
+                 max_pieces: int | None = None, director_grace: float = 0.0, narrator=None):
         self.send = send
+        # Speaks the Director's listener-facing lines (music/narrator.py); optional.
+        self.narrator = narrator
         self.director = director
         self.log = log
         self.use_custom_synths = use_custom_synths
@@ -191,6 +193,12 @@ class MusicEngine:
         self.log(f"\n♪ {now_playing}")
         layers = ", ".join(f"{r}={arrangement.layers.get(r) or 'llm'}" for r in rendered.statements)
         self.log(f"   layers: {layers}")
+        if self.narrator is not None:
+            if index == 0:
+                intro = f"Now playing: {piece.title}."
+                self.narrator.say(f"{intro} {piece.narration}".strip(), kind="piece")
+            elif arrangement.narration:
+                self.narrator.say(arrangement.narration, kind="section")
 
     def _prepare(self, piece: Piece, index: int, current: Arrangement | None):
         """Director work for one section."""

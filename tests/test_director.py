@@ -114,3 +114,17 @@ def test_planner_decisions_are_labelled(isolated_runtime):
     piece = director.next_piece(None)
     director.arrange_section(piece, 0, None)
     assert any("built-in planner" in line for line in logs)
+
+
+def test_director_keeps_listener_narration_only(monkeypatch):
+    replies = iter([
+        json.dumps({"title": "Night Ferry", "style": "lofi", "key": "D minor", "bpm": 80,
+                    "progression": "i-VI-III-VII", "narration": "Stay a little longer with me."}),
+        json.dumps({"layers": {"pad": "warm_pad"},
+                    "narration": "The verse at 0.5 energy adds epiano_lead"}),
+    ])
+    monkeypatch.setattr(llm, "complete", lambda *a, **k: next(replies))
+    director = D.Director("fake/model", random.Random(1), log=lambda m: None)
+    piece = director.next_piece(None)
+    assert piece.narration == "Stay a little longer with me."
+    assert director.arrange_section(piece, 1, None).narration == ""
