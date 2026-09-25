@@ -1,0 +1,326 @@
+"""
+Piece plans and section arrangements: the structured vocabulary the Director
+(LLM or deterministic fallback) speaks.
+
+A stream is an endless sequence of *pieces*. A piece has a key, tempo, style,
+progression and a list of sections; each section has a length in bars
+(a multiple of the progression period) and an energy level. An *arrangement*
+says which preset plays each role in a section.
+
+Everything coming from an LLM goes through `validate_piece` /
+`validate_arrangement`, which clamp or replace anything invalid, so a bad LLM
+answer can never produce broken or out-of-key music.
+"""
+
+from __future__ import annotations
+
+import random
+from dataclasses import asdict, dataclass, field
+
+from . import presets as P
+from .theory import MODES, PROGRESSIONS_BY_NAME, Key, progressions_for
+
+STYLES = {
+    "lofi": {
+        "bpm": (70, 88), "modes": ["minor", "dorian", "major"], "cycles_per_chord": 1,
+        "presets": {"pad": "warm_pad", "keys": "rhodes", "bass": "sub", "melody": "felt_lead",
+                    "arp": "pluck_arp", "drums": "lofi_kit", "texture": "vinyl"},
+    },
+    "ambient": {
+        "bpm": (60, 76), "modes": ["lydian", "major", "minor"], "cycles_per_chord": 2,
+        "presets": {"pad": "air_pad", "keys": "felt", "bass": "sub", "melody": "glass",
+                    "arp": "glass_arp", "drums": "soft_pulse", "texture": "air"},
+    },
+    "downtempo": {
+        "bpm": (80, 96), "modes": ["minor", "dorian", "mixolydian"], "cycles_per_chord": 1,
+        "presets": {"pad": "warm_pad", "keys": "felt", "bass": "pluck_bass", "melody": "epiano_lead",
+                    "arp": "pluck_arp", "drums": "downtempo_kit", "texture": "vinyl"},
+    },
+    "piano": {
+        "bpm": (64, 80), "modes": ["major", "minor", "lydian"], "cycles_per_chord": 2,
+        "presets": {"pad": "piano_pad", "keys": "piano", "bass": "sub", "melody": "felt_lead",
+                    "arp": "glass_arp", "drums": "soft_pulse", "texture": "air"},
+    },
+}
+
+SECTION_TYPES = ["intro", "verse", "build", "chorus", "breakdown", "bridge", "outro"]
+
+# Default arc: (section, energy, bars multiplier in progression periods)
+DEFAULT_ARC = [
+    ("intro", 0.2, 2),
+    ("verse", 0.45, 4),
+    ("build", 0.6, 2),
+    ("chorus", 0.8, 4),
+    ("breakdown", 0.3, 2),
+    ("verse", 0.55, 4),
+    ("chorus", 0.8, 2),
+    ("outro", 0.15, 2),
+]
+
+MOODS = ["calm", "nostalgic", "dreamy", "warm", "hopeful", "melancholic", "floating", "cozy", "late-night"]
+TITLE_WORDS_A = ["Quiet", "Amber", "Paper", "Slow", "Velvet", "Distant", "Soft", "Golden", "Rainy", "Late",
+                 "Hidden", "Silver", "Lantern", "Morning", "Blue", "Drifting", "Warm", "Faded"]
+TITLE_WORDS_B = ["Harbor", "Window", "Streets", "Tides", "Letters", "Gardens", "Echoes", "Rooms", "Skies",
+                 "Rivers", "Hours", "Lights", "Clouds", "Dreams", "Fields", "Waves", "Trains", "Pages"]
+
+
+@dataclass
+class Section:
+    name: str
+    bars: int
+    energy: float
+
+
+@dataclass
+class Piece:
+    title: str
+    style: str
+    key: str            # e.g. "C minor"
+    bpm: float
+    progression: str    # name in theory.PROGRESSIONS_BY_NAME
+    cycles_per_chord: int
+    mood: str
+    sections: list[Section]
+    seed: int = 0
+
+    @property
+    def cps(self) -> float:
+        return self.bpm / 60.0 / 4.0
+
+    @property
+    def period(self) -> int:
+        return 4 * self.cycles_per_chord
+
+    @property
+    def total_bars(self) -> int:
+        return sum(s.bars for s in self.sections)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Piece":
+        data = dict(data)
+        data["sections"] = [Section(**s) for s in data["sections"]]
+        return cls(**data)
+
+
+@dataclass
+class Arrangement:
+    layers: dict[str, str | None] = field(default_factory=dict)  # role -> preset name
+    melody_character: str | None = None
+    variation_seed: int = 0
+
+    def active_roles(self) -> list[str]:
+        return [r for r, p in self.layers.items() if p]
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Arrangement":
+        return cls(**data)
+
+
+# ---------------------------------------------------------------------------
+# Deterministic planners (always available; used when the LLM is off/failing)
+# ---------------------------------------------------------------------------
+
+def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | None = None,
+               avoid_progressions: set[str] | None = None, target_minutes: float = 12.0) -> Piece:
+    style = style if style in STYLES else (previous.style if previous and rng.random() < 0.6 else rng.choice(list(STYLES)))
+    cfg = STYLES[style]
+
+    if previous is not None:
+        prev_key = Key.parse(previous.key)
+        options = [k for k in prev_key.neighbours() if k.mode in cfg["modes"]]
+        if not options:
+            # Style changed modes: pick the style-compatible key sharing the
+            # most notes with the previous one (at most one note different).
+            candidates = [Key(r, m) for r in range(12) for m in cfg["modes"] if Key(r, m) != prev_key]
+            best = max(len(prev_key.pitch_classes & k.pitch_classes) for k in candidates)
+            options = [k for k in candidates if len(prev_key.pitch_classes & k.pitch_classes) == best]
+        key = rng.choice(options)
+    else:
+        key = Key(rng.randrange(12), rng.choice(cfg["modes"]))
+
+    lo, hi = cfg["bpm"]
+    bpm = float(rng.randint(lo, hi))
+    if previous is not None:
+        # Keep tempo changes between pieces gentle.
+        bpm = float(max(lo, min(hi, previous.bpm + rng.randint(-8, 8))))
+
+    avoid = set(avoid_progressions or ())
+    if previous is not None:
+        avoid.add(previous.progression)
+    candidates = [p for p in progressions_for(key.mode) if p.name not in avoid] or progressions_for(key.mode)
+    progression = rng.choice(candidates)
+
+    piece = Piece(
+        title=f"{rng.choice(TITLE_WORDS_A)} {rng.choice(TITLE_WORDS_B)}",
+        style=style,
+        key=key.name,
+        bpm=bpm,
+        progression=progression.name,
+        cycles_per_chord=cfg["cycles_per_chord"],
+        mood=rng.choice(MOODS),
+        sections=[],
+        seed=rng.randrange(1_000_000),
+    )
+    piece.sections = _default_sections(piece, target_minutes)
+    return piece
+
+
+def _default_sections(piece: Piece, target_minutes: float) -> list[Section]:
+    period = piece.period
+    base_bars = sum(m for _, _, m in DEFAULT_ARC) * period
+    seconds_per_bar = 1.0 / piece.cps
+    scale = max(1, round(target_minutes * 60 / (base_bars * seconds_per_bar)))
+    return [Section(name, bars=m * period * scale, energy=e) for name, e, m in DEFAULT_ARC]
+
+
+def arrange(piece: Piece, section: Section, rng: random.Random, max_layers: int = 6) -> Arrangement:
+    """Energy decides how many layers play; the style decides which presets."""
+    cfg = STYLES[piece.style]
+    energy = section.energy
+    count = 1 + int(round(energy * (len(P.ENERGY_ORDER) - 1)))
+    if section.name == "breakdown":
+        count = min(count, 2)
+    if section.name == "outro":
+        count = min(count, 3)
+    count = max(1, min(count, max_layers))
+    roles = P.ENERGY_ORDER[:count]
+    # In a breakdown keep the pad and let the melody float over it.
+    if section.name == "breakdown" and "melody" not in roles:
+        roles = ["pad", "melody"]
+    layers = {role: (cfg["presets"][role] if role in roles else None) for role in P.ENERGY_ORDER}
+    return Arrangement(layers=layers, melody_character=None, variation_seed=rng.randrange(1_000_000))
+
+
+# ---------------------------------------------------------------------------
+# Validation of LLM output
+# ---------------------------------------------------------------------------
+
+def _clamp(value, lo, hi, default):
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, v))
+
+
+def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) -> tuple[Piece, list[str]]:
+    """Merge an LLM-proposed piece plan onto a valid fallback plan.
+
+    Returns the merged piece and a list of notes about what was rejected.
+    """
+    notes: list[str] = []
+    piece = Piece.from_dict(fallback.to_dict())
+
+    title = str(data.get("title", "")).strip()
+    if 0 < len(title) <= 60 and all(ch.isprintable() for ch in title):
+        piece.title = title
+    elif title:
+        notes.append("title rejected")
+
+    style = str(data.get("style", "")).strip().lower()
+    if style in STYLES:
+        piece.style = style
+        piece.cycles_per_chord = STYLES[style]["cycles_per_chord"]
+    elif style:
+        notes.append(f"unknown style {style!r}")
+
+    key_text = str(data.get("key", "")).strip()
+    if key_text:
+        try:
+            key = Key.parse(key_text)
+            piece.key = key.name
+        except ValueError:
+            notes.append(f"invalid key {key_text!r}")
+    key = Key.parse(piece.key)
+
+    if "bpm" in data:
+        lo, hi = STYLES[piece.style]["bpm"]
+        piece.bpm = float(round(_clamp(data["bpm"], lo, hi, piece.bpm)))
+
+    prog = str(data.get("progression", "")).strip()
+    if prog in PROGRESSIONS_BY_NAME and key.mode in PROGRESSIONS_BY_NAME[prog].modes:
+        piece.progression = prog
+    else:
+        if prog:
+            notes.append(f"progression {prog!r} not valid for {key.mode}")
+        if key.mode not in PROGRESSIONS_BY_NAME[piece.progression].modes:
+            piece.progression = progressions_for(key.mode)[0].name
+
+    mood = str(data.get("mood", "")).strip()
+    if 0 < len(mood) <= 40:
+        piece.mood = mood
+
+    raw_sections = data.get("sections")
+    if isinstance(raw_sections, list) and 3 <= len(raw_sections) <= 12:
+        sections = []
+        period = piece.period
+        for raw in raw_sections:
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("name", "")).strip().lower()
+            if name not in SECTION_TYPES:
+                name = "verse"
+            periods = int(_clamp(raw.get("bars", period * 2), period, period * 16, period * 2) // period)
+            energy = _clamp(raw.get("energy", 0.5), 0.05, 1.0, 0.5)
+            sections.append(Section(name=name, bars=max(1, periods) * period, energy=round(energy, 2)))
+        if len(sections) >= 3:
+            piece.sections = sections
+        else:
+            notes.append("sections rejected")
+    else:
+        # Style/tempo may have changed: rebuild the default arc to fit.
+        piece.sections = _default_sections(piece, target_minutes)
+    return piece, notes
+
+
+def validate_arrangement(data: dict, piece: Piece, fallback: Arrangement, max_layers: int = 6) -> tuple[Arrangement, list[str]]:
+    notes: list[str] = []
+    arrangement = Arrangement.from_dict(fallback.to_dict())
+    raw_layers = data.get("layers")
+    if isinstance(raw_layers, dict):
+        layers: dict[str, str | None] = {}
+        for role in P.ENERGY_ORDER:
+            value = raw_layers.get(role, arrangement.layers.get(role))
+            if value in (None, "", False, "none", "off"):
+                layers[role] = None
+            elif isinstance(value, str) and value in P.PRESETS.get(role, {}):
+                layers[role] = value
+            else:
+                notes.append(f"unknown preset {value!r} for {role}")
+                layers[role] = arrangement.layers.get(role) or None
+        active = [r for r in P.ENERGY_ORDER if layers.get(r)]
+        if not active:
+            notes.append("arrangement had no layers; keeping pad")
+            layers["pad"] = STYLES[piece.style]["presets"]["pad"]
+        # Enforce the layer cap, dropping the most "decorative" roles first.
+        while len([r for r in layers if layers[r]]) > max_layers:
+            for role in reversed(P.ENERGY_ORDER):
+                if layers.get(role):
+                    layers[role] = None
+                    notes.append(f"dropped {role} (layer cap {max_layers})")
+                    break
+        arrangement.layers = layers
+
+    character = data.get("melody_character")
+    if character in ("sparse", "flowing", "lively"):
+        arrangement.melody_character = character
+    elif character:
+        notes.append(f"unknown melody_character {character!r}")
+    return arrangement, notes
+
+
+def describe_options() -> dict:
+    """Vocabulary the LLM Director is allowed to use (embedded in its prompt)."""
+    return {
+        "styles": {name: {"bpm": cfg["bpm"], "modes": cfg["modes"]} for name, cfg in STYLES.items()},
+        "modes": list(MODES),
+        "progressions": {p.name: {"modes": list(p.modes), "mood": p.mood} for p in PROGRESSIONS_BY_NAME.values()},
+        "section_types": SECTION_TYPES,
+        "presets": {role: {n: pr.description for n, pr in P.PRESETS[role].items()} for role in P.ENERGY_ORDER},
+    }

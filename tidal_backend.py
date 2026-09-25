@@ -1,106 +1,48 @@
 """
-TidalCycles Backend Module
-Handles all TidalCycles session management, audio recording, and music generation logic.
+TidalCycles Backend Module (legacy free-form agent loop).
+
+The default mode is now the harmony engine (music/engine.py, run via
+orchestrator.py). This module keeps the original composer/creative-director
+agent loop available with `orchestrator.py --legacy`, with the Phase 0 fixes
+from docs/IMPROVEMENT_PLAN.md applied:
+
+- the broken `scale "c minor"` idiom is rewritten to `scale "minor" ... + 0`
+- melodic lines must use `scale` (stay in key); harsh demo synths are swapped
+- changes crossfade (xfadeIn) instead of cutting, at a slower default cadence
+- at most config.MAX_ACTIVE_LAYERS channels play at once
+- every LLM call has a timeout, histories are bounded, paths come from config
+- process management lives in audio_stack.py (shared with the engine)
 """
 
 import os
 import time
 import threading
 import re
-import subprocess
-import tempfile
-import signal
+import concurrent.futures
+from collections import deque
 from queue import Queue
-from dotenv import load_dotenv
 
-# Load environment variables from .env file
-env_path = os.path.join(os.path.dirname(__file__), '.env')
-load_dotenv(dotenv_path=env_path, override=True)
+import audio_stack
+import config
+from music import normalize as _norm
 
-from smolagents import CodeAgent, LiteLLMModel, tool
-
-# Environment configuration
-os.environ['HF_HOME'] = "/home/moebius/Models/hfmodels/.cache/"
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = "expandable_segments:True"
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
-
-# Local llama.cpp server (Qwen-AgentWorld-35B-A3B) configuration
-LLAMA_SERVER_BIN = os.getenv("LLAMA_SERVER_BIN", "/home/moebius/Models/llama.cpp/build/bin/llama-server")
-LLAMA_GGUF_MODEL = os.getenv("LLAMA_GGUF_MODEL", "/home/moebius/Models/gguf/Qwen-AgentWorld-35B-A3B-UD-IQ4_XS.gguf")
-LOCAL_LLM_API_BASE = os.getenv("LOCAL_LLM_API_BASE", "http://127.0.0.1:8080/v1")
-LLAMA_SERVER_LOG = os.getenv("LLAMA_SERVER_LOG", "/home/moebius/Models/llama.cpp/server.log")
-
-
-def ensure_local_llm_server():
-    """Start the local llama-server (Qwen-AgentWorld) if it isn't already running.
-
-    Runs once at import time so the server is up by the time the app is
-    ready, without blocking the cloud/Ollama model options if it fails.
-    """
-    import requests
-
-    try:
-        requests.get(f"{LOCAL_LLM_API_BASE}/models", timeout=2)
-        print(f"[llama-server] already running at {LOCAL_LLM_API_BASE}")
-        return
-    except requests.exceptions.RequestException:
-        pass
-
-    if not os.path.exists(LLAMA_SERVER_BIN) or not os.path.exists(LLAMA_GGUF_MODEL):
-        print(f"[llama-server] binary or model not found ({LLAMA_SERVER_BIN}, {LLAMA_GGUF_MODEL}); "
-              "skipping local model auto-start")
-        return
-
-    print(f"[llama-server] not running, launching {LLAMA_SERVER_BIN}...")
-    log_file = open(LLAMA_SERVER_LOG, "a")
-    subprocess.Popen(
-        [
-            LLAMA_SERVER_BIN,
-            "-m", LLAMA_GGUF_MODEL,
-            "-ngl", "999",
-            "--port", "8080",
-            "--ctx-size", "32768",
-            "--parallel", "2",
-        ],
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        try:
-            requests.get(f"{LOCAL_LLM_API_BASE}/models", timeout=2)
-            print("[llama-server] ready")
-            return
-        except requests.exceptions.RequestException:
-            time.sleep(2)
-    print(f"[llama-server] did not become ready within 60s; see {LLAMA_SERVER_LOG}")
-
-
-ensure_local_llm_server()
 
 # Global state
-tidal_process = None
-superdirt_process = None
-recording_process = None
+tidal = audio_stack.TidalSession()
 is_running = False
 agent_thread = None
 _last_composer_model_id = None
 _last_director_model_id = None
 log_queue = Queue()
-ghci_output_queue = Queue()  # raw GHCi stdout lines, for post-send error detection
 stop_event = threading.Event()
-task_queue = []
-accumulated_logs = []
+task_queue = deque(maxlen=config.HISTORY_LIMIT)
+accumulated_logs = deque(maxlen=config.HISTORY_LIMIT * 20)
 current_song_context = "(No patterns playing yet)"
 current_patterns = {}  # Maps channel (d1, d2, etc.) to current pattern
-song_history = []  # Full history of all sent patterns
-executed_tasks_log = []
-audio_output_info = "(Audio output not detected yet)"
+song_history = deque(maxlen=config.HISTORY_LIMIT)  # recent sent patterns (bounded)
+executed_tasks_log = deque(maxlen=config.HISTORY_LIMIT)
 current_agent_label = "Idle"
-agent_conversation_log = []
+agent_conversation_log = deque(maxlen=config.HISTORY_LIMIT)
 
 # Song state (keeps the Creative Director consistent across iterations)
 CURRENT_CPS = 0.8
@@ -226,11 +168,6 @@ def get_agent_conversation():
     """Get agent conversation log for UI display."""
     global agent_conversation_log
     return agent_conversation_log
-
-def get_audio_output_info():
-    """Get detected audio output/source info for UI display."""
-    global audio_output_info
-    return audio_output_info or "(Audio output not detected yet)"
 
 def get_current_agent():
     """Get which agent is currently working for UI display."""
@@ -373,334 +310,45 @@ def _get_song_state_lines() -> str:
 # ============================================================================
 
 def start_superdirt() -> str:
-    """Starts SuperCollider with SuperDirt for audio output."""
-    global superdirt_process
-    
-    try:
-        if superdirt_process is not None and superdirt_process.poll() is None:
-            return "SuperDirt is already running"
-        if superdirt_process is not None and superdirt_process.poll() is not None:
-            superdirt_process = None
-        
-        sc_code = """
-                    s.boot;
-                    s.waitForBoot {
-                        "Server booted successfully".postln;
-                        ~dirt = SuperDirt(2, s);
-                        ~dirt.loadSoundFiles;
-                        s.sync;
-                        ~dirt.start(57120, 0 ! 12);
-                        "SuperDirt started on port 57120".postln;
-                    };
-                    thisProcess.openUDPPort(57120);
-                    Routine { inf.do { 1.wait } }.play;
-                    """
-        
-        sc_code="""s.reboot;
-
-                    s.waitForBoot {
-
-                        "Server booted successfully".postln;
-
-                        ~dirt = SuperDirt(2, s);
-
-                        ~dirt.loadSoundFiles;
-
-                        s.sync;
-
-                        ~dirt.start(57120, 0 ! 12);
-
-                        "SuperDirt started on port 57120".postln;
-                    };
-
-                    // keep interpreter alive
-                    Routine { inf.do { 1.wait } }.play;
-                """
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.scd', delete=False) as f:
-            f.write(sc_code)
-            temp_file = f.name
-        
-        superdirt_process = subprocess.Popen(
-            ['pw-jack', 'sclang', temp_file],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
-        )
-        
-        def log_sc():
-            for line in superdirt_process.stdout:
-                log_message(f"[SuperCollider] {line.rstrip()}")
-        
-        threading.Thread(target=log_sc, daemon=True).start()
-        
-        log_message("Waiting for SuperCollider server to boot and load samples...")
-        time.sleep(15)
-        
-        return "SuperDirt started successfully on port 57120"
-        
-    except Exception as e:
-        return f"Error starting SuperDirt: {str(e)}"
+    """Starts SuperCollider with SuperDirt, custom SynthDefs and master limiter."""
+    return audio_stack.start_superdirt()
 
 def start_tidal_session() -> str:
     """Starts a persistent TidalCycles session with ghci."""
-    global tidal_process, CURRENT_CPS
-    
-    try:
-        if tidal_process is not None and tidal_process.poll() is None:
-            return "TidalCycles session is already running"
-        if tidal_process is not None and tidal_process.poll() is not None:
-            tidal_process = None
-        
-        boot_file = "/home/moebius/Projects/youtube-stream-music-generation/tidal/BootTidal.hs"
-        
-        tidal_process = subprocess.Popen(
-            ['ghci', '-ghci-script', boot_file],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
-        )
-        
-        def log_ghci():
-            for line in tidal_process.stdout:
-                log_message(f"[GHCi/Tidal] {line.rstrip()}")
-                ghci_output_queue.put(line.rstrip())
-        
-        threading.Thread(target=log_ghci, daemon=True).start()
-        
-        time.sleep(3)
-        
-        CURRENT_CPS = 0.8
-        tidal_process.stdin.write(f"setcps {CURRENT_CPS}\n")
-        tidal_process.stdin.flush()
-        time.sleep(0.5)
-        
-        return "TidalCycles session started successfully with cps=0.8"
-        
-    except Exception as e:
-        return f"Error starting TidalCycles session: {str(e)}"
+    global CURRENT_CPS
+    CURRENT_CPS = 0.8
+    return tidal.start(cps=CURRENT_CPS)
 
 def stop_tidal_session() -> str:
     """Stops the running TidalCycles and SuperDirt sessions."""
-    global tidal_process, superdirt_process
-    
-    messages = []
-    
-    if tidal_process is not None:
-        try:
-            tidal_process.stdin.write(":quit\n")
-            tidal_process.stdin.flush()
-            tidal_process.wait(timeout=5)
-            tidal_process = None
-            messages.append("TidalCycles session stopped")
-        except Exception as e:
-            messages.append(f"Error stopping TidalCycles: {str(e)}")
-    else:
-        messages.append("No TidalCycles session running")
-    
-    if superdirt_process is not None:
-        try:
-            superdirt_process.terminate()
-            superdirt_process.wait(timeout=5)
-            superdirt_process = None
-            messages.append("SuperDirt stopped")
-        except Exception as e:
-            messages.append(f"Error stopping SuperDirt: {str(e)}")
-    else:
-        messages.append("No SuperDirt session running")
-
-    # sclang spawns scsynth (the actual audio engine) as its own child process,
-    # which survives sclang's termination as an orphan holding the audio
-    # device. Best-effort clean it up too.
-    try:
-        subprocess.run(["pkill", "-f", "scsynth"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
-
-    return " | ".join(messages)
-
-# ============================================================================
-# RECORDING
-# ============================================================================
+    return " | ".join([tidal.stop(), audio_stack.stop_superdirt()])
 
 def start_recording() -> tuple[str, str]:
-    """Starts recording audio output to MP3 file with timestamp."""
-    global recording_process
-    
-    try:
-        if recording_process is not None:
-            return "Recording already in progress", ""
-        
-        recordings_dir = "/home/moebius/Projects/youtube-stream-music-generation/recordings"
-        os.makedirs(recordings_dir, exist_ok=True)
-        
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"tidal_session_{timestamp}.mp3"
-        filepath = os.path.join(recordings_dir, filename)
-        
-        def pick_pulse_source() -> tuple[str, str, str]:
-            """Pick a PulseAudio/PipeWire source that captures system output (monitor)."""
-            try:
-                default_sink = subprocess.run(
-                    ["pactl", "get-default-sink"],
-                    capture_output=True,
-                    text=True,
-                    timeout=2,
-                ).stdout.strip()
-            except Exception:
-                default_sink = ""
-
-            try:
-                sources_text = subprocess.run(
-                    ["pactl", "list", "sources", "short"],
-                    capture_output=True,
-                    text=True,
-                    timeout=2,
-                ).stdout
-            except Exception:
-                sources_text = ""
-
-            sources = []
-            for line in sources_text.splitlines():
-                parts = line.split()
-                if len(parts) >= 2:
-                    sources.append(parts[1])
-
-            if default_sink:
-                monitor = f"{default_sink}.monitor"
-                if monitor in sources:
-                    return monitor, f"default sink monitor ({default_sink})", default_sink
-
-            monitors = [s for s in sources if s.endswith(".monitor")]
-            if monitors:
-                # Prefer analog monitor over hdmi to match typical desktop playback
-                monitors_sorted = sorted(
-                    monitors,
-                    key=lambda s: (0 if "analog" in s else 1, 0 if "stereo" in s else 1, s),
-                )
-                return monitors_sorted[0], "first available monitor source", default_sink
-
-            return "default", "fallback to Pulse default (may be mic)", default_sink
-
-        pulse_source, pulse_reason, default_sink = pick_pulse_source()
-        global audio_output_info
-        if default_sink:
-            audio_output_info = f"Default sink: {default_sink} | Source: {pulse_source} ({pulse_reason})"
-        else:
-            audio_output_info = f"Source: {pulse_source} ({pulse_reason})"
-
-        # Try to detect the correct audio source
-        # Check if PulseAudio/PipeWire sources are available
-        try:
-            subprocess.run(
-                ['pactl', 'list', 'sources', 'short'],
-                capture_output=True,
-                text=True,
-                timeout=2,
-            )
-            log_message(f"[Recording] Using source: {pulse_source} ({pulse_reason})")
-        except Exception:
-            log_message("[Recording] Warning: Could not query PulseAudio sources")
-        
-        recording_process = subprocess.Popen([
-            'ffmpeg',
-            '-hide_banner',
-            '-loglevel', 'warning',
-            '-nostats',
-            '-f', 'pulse',
-            '-i', pulse_source,
-            '-vn',
-            '-acodec', 'libmp3lame',
-            '-b:a', '192k',
-            '-y',
-            filepath
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, bufsize=1)
-
-        def drain_ffmpeg_stderr(proc: subprocess.Popen):
-            try:
-                assert proc.stderr is not None
-                for line in proc.stderr:
-                    if line:
-                        log_message(f"[Recording/ffmpeg] {line.rstrip()}")
-            except Exception:
-                pass
-
-        threading.Thread(target=drain_ffmpeg_stderr, args=(recording_process,), daemon=True).start()
-        
-        log_message(f"[Recording] Started recording to: {filename}")
-        log_message("[Recording] If file is silent, ensure SuperCollider outputs to PipeWire/Pulse (monitor) and not JACK-only")
-        
-        return f"Recording started: {filename}", filepath
-        
-    except Exception as e:
-        return f"Error starting recording: {str(e)}", ""
+    return audio_stack.start_recording()
 
 def stop_recording() -> str:
-    """Stops the audio recording."""
-    global recording_process
-    
-    if recording_process is None:
-        return "No recording in progress"
-    
-    try:
-        # Graceful stop so the MP3 header/trailer is finalized properly
-        recording_process.send_signal(signal.SIGINT)
-        recording_process.wait(timeout=10)
-        recording_process = None
-        return "Recording stopped and saved"
-    except Exception as e:
-        try:
-            recording_process.terminate()
-            recording_process.wait(timeout=5)
-        except Exception:
-            pass
-        recording_process = None
-        return f"Error stopping recording: {str(e)}"
+    return audio_stack.stop_recording()
 
-# ============================================================================
-# GHCI OUTPUT / ERROR DETECTION (CLOSED-LOOP CORRECTION)
-# ============================================================================
+def _ensure_tidal() -> bool:
+    if not tidal.running():
+        log_message("[Tidal] Session not running; restarting...")
+        log_message(start_tidal_session())
+    return tidal.running()
 
-_GHCI_ERROR_RE = re.compile(
-    r"<interactive>:\d+:\d+: error:|^\*\*\* Exception:",
-    flags=re.MULTILINE,
-)
-
-def _drain_ghci_output() -> str:
-    """Drain any buffered GHCi stdout lines (non-blocking) and return them joined."""
-    lines = []
-    while not ghci_output_queue.empty():
-        lines.append(ghci_output_queue.get())
-    return "\n".join(lines)
-
-def _check_for_ghci_error(output_text: str) -> str | None:
-    """Return a trimmed error excerpt if GHCi output looks like a compile/runtime error."""
-    if _GHCI_ERROR_RE.search(output_text):
-        return output_text.strip()[-800:]
-    return None
+def _track_cps(line: str) -> None:
+    global CURRENT_CPS
+    cps_match = re.match(r"^\s*(?:setcps|cps)\s+(.+?)\s*$", line, flags=re.IGNORECASE)
+    if cps_match:
+        cps_value = _parse_cps_value(cps_match.group(1))
+        if cps_value:
+            CURRENT_CPS = cps_value
 
 def _send_tidal_code_to_ghci(code_lines: list[str]) -> str | None:
     """Send lines to the running ghci session; return GHCi's error text if it rejected any of them."""
-    global CURRENT_CPS
-    _drain_ghci_output()  # clear stale output before sending, so we only see this send's response
-
     for idx, line in enumerate(code_lines, 1):
         log_message(f"   → Sending pattern {idx}/{len(code_lines)}: {line[:60]}{'...' if len(line) > 60 else ''}")
-        cps_match = re.match(r"^\s*(?:setcps|cps)\s+(.+?)\s*$", line, flags=re.IGNORECASE)
-        if cps_match:
-            cps_value = _parse_cps_value(cps_match.group(1))
-            if cps_value:
-                CURRENT_CPS = cps_value
-        tidal_process.stdin.write(line + "\n")
-        tidal_process.stdin.flush()
-        time.sleep(0.2)  # Increased delay to ensure TidalCycles processes each pattern
-
-    time.sleep(0.5)  # Wait for GHCi to respond (success prompt or error text) before checking
-    return _check_for_ghci_error(_drain_ghci_output())
+        _track_cps(line)
+    return tidal.send(code_lines)
 
 # ============================================================================
 # TIDAL CODE NORMALIZATION (DEFENSIVE REWRITES)
@@ -715,6 +363,13 @@ def normalize_tidal_code(code: str) -> tuple[str, list[str]]:
     fx_aliases = {
         "phaser": "phasr",
     }
+
+    # Fix `scale "c minor"` (invalid in Tidal: collapses to octave jumps) and
+    # swap harsh demo synths for the soft ystreamer voices.
+    code, scale_notes = _norm.rewrite_scale_roots(code)
+    replacements.extend(scale_notes)
+    code, synth_notes = _norm.replace_harsh_instruments(code)
+    replacements.extend(synth_notes)
 
     def replace_instrument_tokens(sound_string: str) -> str:
         updated = sound_string
@@ -769,6 +424,34 @@ def normalize_tidal_code(code: str) -> tuple[str, list[str]]:
         if item not in deduped:
             deduped.append(item)
     return updated_code, deduped
+
+def to_crossfade(line: str, cycles: int = 8) -> str:
+    """Turn `dN $ expr` into a crossfade so changes never cut mid-phrase.
+
+    The d1..d12 helpers in BootTidal add `# orbit (N-1)`; transitions don't,
+    so the orbit is added explicitly to keep each channel on its own bus.
+    """
+    m = re.match(r"^d(\d+)\s*\$\s*(.+)$", line.strip())
+    if not m:
+        m_sil = re.match(r"^d(\d+)\s+silence\s*$", line.strip())
+        if m_sil:
+            return f"xfadeIn {m_sil.group(1)} {cycles} $ silence"
+        return line
+    ch, expr = int(m.group(1)), m.group(2).strip()
+    if expr == "silence":
+        return f"xfadeIn {ch} {cycles} $ silence"
+    orbit = f" # orbit {ch - 1}" if ch <= 12 else ""
+    return f"xfadeIn {ch} {cycles} $ ({expr}){orbit}"
+
+
+def _new_channels(code: str) -> set[str]:
+    chans = set()
+    for line in code.split("\n"):
+        m = re.match(r"^(d\d+)\s*\$\s*(.+)$", line.strip())
+        if m and m.group(2).strip() != "silence":
+            chans.add(m.group(1))
+    return chans
+
 
 def extract_tidal_code(code_snippet) -> str | None:
     """Extract runnable Tidal lines from an agent response (handles markdown fences/bullets)."""
@@ -845,7 +528,6 @@ def extract_tidal_code(code_snippet) -> str | None:
 # VALIDATION TOOL
 # ============================================================================
 
-@tool
 def validate_tidal_syntax(code: str) -> str:
     """Validates TidalCycles syntax without executing it.
     
@@ -856,6 +538,15 @@ def validate_tidal_syntax(code: str) -> str:
     
     if not code.strip():
         return "Error: Empty code. Please generate valid TidalCycles code and try again."
+
+    if re.search(r'\bscale\s+"\s*[A-Ga-g](?:#|s|b|f)?\s+\w', code):
+        return ('Error: scale takes a scale NAME only, e.g. scale "minor". Put the root in as a '
+                'semitone offset: n (scale "minor" "0 2 4 7" + 7) is G minor. '
+                'scale "g minor" is invalid and collapses every note to octave jumps.')
+
+    key_error = _norm.key_usage_error(code)
+    if key_error:
+        return f"Error: {key_error}"
     
     valid_patterns = [
         r'd\d+\s*\$', r'setcps', r'cps', r'hush', r'silence',
@@ -995,42 +686,25 @@ def validate_tidal_syntax(code: str) -> str:
     
     return code
 
-@tool
 def execute_tidal_code(code: str) -> str:
     """Executes TidalCycles code in the running session.
-    
+
     Args:
         code: The TidalCycles code to execute.
     """
-    global tidal_process, CURRENT_CPS
-    
     try:
-        if tidal_process is None or tidal_process.poll() is not None:
-            start_msg = start_tidal_session()
-            log_message(start_msg)
-            if tidal_process is None or tidal_process.poll() is not None:
-                return "Error: No TidalCycles session running. Call start_tidal_session() first."
-
+        if not _ensure_tidal():
+            return "Error: No TidalCycles session running."
         normalized, replacements = normalize_tidal_code(code)
         if replacements:
-            log_message(f"[Normalize] Rewrote instruments: {', '.join(replacements)}")
-
-        cps_match = re.search(
-            r"^\s*(?:setcps|cps)\s+(.+?)\s*$",
-            normalized,
-            flags=re.IGNORECASE | re.MULTILINE,
-        )
-        if cps_match:
-            cps_value = _parse_cps_value(cps_match.group(1))
-            if cps_value:
-                CURRENT_CPS = cps_value
-        
-        tidal_process.stdin.write(normalized + "\n")
-        tidal_process.stdin.flush()
-        time.sleep(0.5)
-        
+            log_message(f"[Normalize] Rewrote: {', '.join(replacements)}")
+        lines = [to_crossfade(l) for l in normalized.split("\n") if l.strip()]
+        for line in lines:
+            _track_cps(line)
+        error = tidal.send(lines)
+        if error:
+            return f"Error from TidalCycles:\n{error}"
         return f"TidalCycles code sent to session:\n{normalized}"
-            
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -1062,33 +736,19 @@ def _update_current_patterns_from_code(tidal_code: str) -> None:
 
 def play_sample_pattern(code: str) -> str:
     """Play a sample pattern immediately and update current pattern context."""
-    global tidal_process, CURRENT_CPS
     try:
-        if tidal_process is None or tidal_process.poll() is not None:
-            start_msg = start_tidal_session()
-            log_message(start_msg)
-            if tidal_process is None or tidal_process.poll() is not None:
-                return "Error: No TidalCycles session running. Call start_tidal_session() first."
-
+        if not _ensure_tidal():
+            return "Error: No TidalCycles session running."
         normalized, replacements = normalize_tidal_code(code)
         if replacements:
-            log_message(f"[Normalize] Rewrote instruments: {', '.join(replacements)}")
-
-        cps_match = re.search(
-            r"^\s*(?:setcps|cps)\s+(.+?)\s*$",
-            normalized,
-            flags=re.IGNORECASE | re.MULTILINE,
-        )
-        if cps_match:
-            cps_value = _parse_cps_value(cps_match.group(1))
-            if cps_value:
-                CURRENT_CPS = cps_value
-
-        tidal_process.stdin.write(normalized + "\n")
-        tidal_process.stdin.flush()
-        time.sleep(0.2)
+            log_message(f"[Normalize] Rewrote: {', '.join(replacements)}")
+        lines = [l for l in normalized.split("\n") if l.strip()]
+        for line in lines:
+            _track_cps(line)
+        error = tidal.send(lines, settle=0.2)
+        if error:
+            return f"Error from TidalCycles:\n{error}"
         _update_current_patterns_from_code(normalized)
-
         return f"Sample pattern sent to session:\n{normalized}"
     except Exception as e:
         return f"Error: {str(e)}"
@@ -1120,6 +780,8 @@ creative_director_prompt = load_prompt("creative_director_prompt.md")
 
 def _build_model(model_id):
     """Build a LiteLLMModel, routing "local/..." ids to the local llama-server."""
+    from smolagents import LiteLLMModel
+
     if model_id.startswith("local/"):
         real_id = "openai/" + model_id.split("/", 1)[1]
         # This model's chat template has an extended-thinking mode that, left
@@ -1129,7 +791,7 @@ def _build_model(model_id):
         # composer run to ~10s. max_tokens stays as a safety ceiling.
         return LiteLLMModel(
             model_id=real_id,
-            api_base=LOCAL_LLM_API_BASE,
+            api_base=config.LOCAL_LLM_API_BASE,
             api_key="sk-no-key-required",
             max_tokens=2048,
             extra_body={"chat_template_kwargs": {"enable_thinking": False}},
@@ -1139,7 +801,8 @@ def _build_model(model_id):
 def create_agents(composer_model_id, director_model_id):
     """Create agents with specified models"""
     global composer_agent, creative_director_agent
-    
+    from smolagents import CodeAgent, tool
+
     # Log API key availability
     has_openai = bool(os.getenv('OPENAI_API_KEY'))
     has_anthropic = bool(os.getenv('ANTHROPIC_API_KEY'))
@@ -1155,7 +818,7 @@ def create_agents(composer_model_id, director_model_id):
     log_message(f"Creating Composer Agent with model: {composer_model_id}")
     composer_model = _build_model(composer_model_id)
     composer_agent = CodeAgent(
-        tools=[validate_tidal_syntax],
+        tools=[tool(validate_tidal_syntax)],
         model=composer_model,
         additional_authorized_imports=["re"],
         add_base_tools=True,
@@ -1178,19 +841,36 @@ def create_agents(composer_model_id, director_model_id):
 
     log_message("✓ Agents created successfully")
 
+
+_agent_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="agent")
+
+
+def _run_agent(agent, prompt: str, timeout: float | None = None):
+    """agent.run() with a hard timeout, so a hung LLM can't stall the loop.
+
+    The music keeps playing either way (Tidal holds the last patterns)."""
+    timeout = timeout or config.LLM_TIMEOUT_SECONDS * 3
+    future = _agent_executor.submit(agent.run, prompt)
+    try:
+        return future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        log_message(f"[Agent] timed out after {timeout:.0f}s; skipping this step")
+        return None
+
 # ============================================================================
 # MUSIC GENERATION ENGINE
 # ============================================================================
 
 def run_music_generation(task_text, test_mode, director_interval, use_creative_director=True):
     """Main function to run the music generation agent"""
-    global is_running, tidal_process, stop_event, task_queue, current_patterns, song_history, executed_tasks_log, SONG_STATE, CURRENT_CPS, current_agent_label, agent_conversation_log
-    
+    global is_running, stop_event, task_queue, current_patterns, song_history, executed_tasks_log, SONG_STATE, CURRENT_CPS, current_agent_label, agent_conversation_log
+
     stop_event.clear()
     current_patterns = {}  # Track currently playing patterns per channel
-    song_history = []  # Full history
-    executed_tasks_log = []
-    agent_conversation_log = []
+    song_history = deque(maxlen=config.HISTORY_LIMIT)
+    executed_tasks_log = deque(maxlen=config.HISTORY_LIMIT)
+    agent_conversation_log = deque(maxlen=config.HISTORY_LIMIT)
+    task_number = 0
     consecutive_composer_failures = 0
     COMPOSER_FAILURE_RECOVERY_THRESHOLD = 3
     SONG_STATE.update(_parse_initial_song_state(task_text))
@@ -1209,8 +889,8 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
         if re.match(r"^(key|section)\s*:", t, flags=re.IGNORECASE):
             continue
         tasks.append(t)
-    task_queue = []
-    
+    task_queue = deque(maxlen=config.HISTORY_LIMIT)
+
     if not tasks:
         log_message("No tasks provided. Please enter at least one task.")
         return
@@ -1236,12 +916,12 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                         current_context = "(no patterns playing yet)"
 
                     if executed_tasks_log:
-                        recent_history = "\n".join(executed_tasks_log[-4:])
+                        recent_history = "\n".join(list(executed_tasks_log)[-4:])
                     else:
                         recent_history = "(nothing developed yet)"
 
-                    suggestions = creative_director_agent.run(
-                        f"{creative_director_prompt}\n\n{_get_song_state_lines()}\n=== YOUR CREATIVE GOAL ===\n{musical_goal}\n\nThis is the overall musical vision you are working towards.\n\n=== CURRENT PATTERNS ===\n{current_context}\n\n=== RECENT DEVELOPMENTS ===\n{recent_history}\n\nSuggest ONE next development that serves this goal."
+                    suggestions = _run_agent(creative_director_agent,
+                        f"{creative_director_prompt}\n\n{_get_song_state_lines()}\n=== YOUR CREATIVE GOAL ===\n{musical_goal}\n\nThis is the overall musical vision you are working towards.\n\n=== CURRENT PATTERNS ===\n{current_context}\n\n=== RECENT DEVELOPMENTS ===\n{recent_history}\n\nSuggest ONE next development that serves this goal. At most {config.MAX_ACTIVE_LAYERS} channels may play at once ({len(current_patterns)} playing now)."
                     )
                     director_time = time.time() - director_start
                     
@@ -1262,17 +942,17 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                         else:
                             log_message("[Creative Director] No new tasks extracted from suggestions")
                             log_message(f"\n   Waiting {director_interval}s before next iteration...")
-                            time.sleep(director_interval)
+                            stop_event.wait(director_interval)
                             continue
                     else:
                         log_message("[Creative Director] No suggestions received")
                         log_message(f"\n   Waiting {director_interval}s before next iteration...")
-                        time.sleep(director_interval)
+                        stop_event.wait(director_interval)
                         continue
                     
                 except Exception as e:
                     log_message(f"[Creative Director] Error: {e}")
-                    time.sleep(director_interval)
+                    stop_event.wait(director_interval)
                     continue
             else:
                 log_message(f"\n   🎵 All tasks completed. Music playing... (press Stop to end)")
@@ -1281,7 +961,12 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                     time.sleep(0.5)
                 break
         
+        # Keep the task list bounded on an endless run.
+        if task_index > 50:
+            tasks = tasks[task_index:]
+            task_index = 0
         i = task_index
+        task_number += 1
         task = tasks[i]
         _maybe_update_song_state_from_task(task)
         if stop_event.is_set():
@@ -1289,7 +974,7 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
             break
             
         log_message(f"\n{'='*60}")
-        log_message(f"Task {i+1}/{len(tasks)}: {task}")
+        log_message(f"Task {task_number}: {task}")
         log_message(f"{'='*60}")
         
         if test_mode:
@@ -1329,7 +1014,7 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                                 If the task says to "add", use a new unused channel.
                                 If the task says to "modify" or "change", update the existing pattern on that channel.
                                 """
-            code_snippet = composer_agent.run(full_prompt)
+            code_snippet = _run_agent(composer_agent, full_prompt)
             composer_time = time.time() - start_time
         
         log_message(f"[Agent: Composer] Time: {composer_time:.2f}s")
@@ -1346,9 +1031,7 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
         
         if tidal_code:
             try:
-                if tidal_process is None or tidal_process.poll() is not None:
-                    log_message("[Tidal] Session not running; restarting...")
-                    log_message(start_tidal_session())
+                _ensure_tidal()
 
                 tidal_code, replacements = normalize_tidal_code(tidal_code)
                 if replacements:
@@ -1361,7 +1044,17 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                 # Split multi-line code and send each line separately to ensure proper execution
                 code_lines = [line.strip() for line in tidal_code.split('\n') if line.strip()]
 
-                ghci_error = _send_tidal_code_to_ghci(code_lines)
+                # Layer cap: never let layers pile up past MAX_ACTIVE_LAYERS.
+                added = _new_channels(tidal_code) - set(current_patterns)
+                if len(current_patterns) + len(added) > config.MAX_ACTIVE_LAYERS:
+                    log_message(f"   ✗ Would exceed {config.MAX_ACTIVE_LAYERS} layers; asking for a subtraction instead")
+                    tasks.insert(i + 1, f"remove the least essential of the {len(current_patterns)} playing layers "
+                                        f"(silence one channel) to make room")
+                    task_index += 1
+                    continue
+
+                # Crossfade instead of cutting mid-phrase.
+                ghci_error = _send_tidal_code_to_ghci([to_crossfade(l) for l in code_lines])
 
                 if ghci_error:
                     log_message(f"   ✗ GHCi rejected the pattern:\n{ghci_error}")
@@ -1371,14 +1064,14 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
                         f"Your previous code failed to run in TidalCycles with this error:\n{ghci_error}\n\n"
                         "Fix the specific issue and provide corrected code."
                     )
-                    retry_snippet = composer_agent.run(retry_prompt)
+                    retry_snippet = _run_agent(composer_agent, retry_prompt)
                     retry_code = extract_tidal_code(retry_snippet)
                     if retry_code:
                         retry_code, retry_replacements = normalize_tidal_code(retry_code)
                         if retry_replacements:
                             log_message(f"[Normalize] Rewrote instruments before resend: {', '.join(retry_replacements)}")
                         retry_lines = [line.strip() for line in retry_code.split('\n') if line.strip()]
-                        retry_error = _send_tidal_code_to_ghci(retry_lines)
+                        retry_error = _send_tidal_code_to_ghci([to_crossfade(l) for l in retry_lines])
                         if retry_error:
                             log_message(f"   ✗ Retry also rejected by GHCi:\n{retry_error}")
                             tidal_code = None
@@ -1433,7 +1126,7 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
 
                     # Move to next task
                     log_message(f"   Moving to next task (pattern will continue layering)...")
-                    time.sleep(director_interval)
+                    stop_event.wait(director_interval)
                 else:
                     log_message(f"   ✗ Giving up on this task after GHCi rejected both attempts")
                     consecutive_composer_failures += 1
@@ -1465,97 +1158,78 @@ def run_music_generation(task_text, test_mode, director_interval, use_creative_d
     
     log_message("\n✓ All tasks completed!")
 
-def start_system(task_text, test_mode, director_interval, composer_model_id=None, director_model_id=None, cognitive_overload_warnings=False):
+def start_system(task_text, test_mode, director_interval, composer_model_id=None, director_model_id=None,
+                 cognitive_overload_warnings=False, record=True):
     """Start the TidalCycles system and agent"""
     global is_running, agent_thread, stop_event, accumulated_logs, ENABLE_COGNITIVE_WARNINGS
-    
+
     if is_running:
         return "System is already running!"
-    
-    # Use default models if not specified
-    if composer_model_id is None:
-        composer_model_id = default_composer_model
-    if director_model_id is None:
-        director_model_id = default_director_model
 
+    composer_model_id = composer_model_id or default_composer_model
+    director_model_id = director_model_id or default_director_model
     ENABLE_COGNITIVE_WARNINGS = bool(cognitive_overload_warnings)
-    
+
     while not log_queue.empty():
         log_queue.get()
-    accumulated_logs = []
-    
-    log_message("="*60)
-    log_message("Initializing TidalCycles Environment")
-    log_message("="*60)
-    
-    # Create agents with selected models
+    accumulated_logs.clear()
+    audio_stack.set_logger(log_message)
+
+    log_message("=" * 60)
+    log_message("Initializing TidalCycles Environment (legacy agent loop)")
+    log_message("=" * 60)
+
+    if composer_model_id.startswith("local/") or director_model_id.startswith("local/"):
+        audio_stack.ensure_local_llm_server()
+
     log_message("\nCreating AI agents...")
     create_agents(composer_model_id, director_model_id)
-    
+
     log_message("\nStarting SuperDirt...")
-    start_result = start_superdirt()
-    log_message(start_result)
-    
+    log_message(start_superdirt())
+
     log_message("\nStarting TidalCycles session...")
-    tidal_result = start_tidal_session()
-    log_message(tidal_result)
-    
-    log_message("\nStarting audio recording...")
-    recording_msg, filepath = start_recording()
-    log_message(recording_msg)
-    if filepath:
-        log_message(f"Recording to: {filepath}")
-    
-    log_message("\n" + "="*60)
+    log_message(start_tidal_session())
+
+    if record:
+        log_message("\nStarting audio recording...")
+        recording_msg, filepath = start_recording()
+        log_message(recording_msg)
+
+    log_message("\n" + "=" * 60)
     log_message("Environment Ready")
     log_message(f"🎼 Composer Model: {composer_model_id}")
     log_message(f"🎨 Director Model: {director_model_id}")
-    log_message("🎨 Creative Director: ENABLED")
-    log_message("🔴 Recording: ACTIVE")
-    log_message("="*60)
-    
+    log_message(f"⏱  Director interval: {director_interval}s, max layers: {config.MAX_ACTIVE_LAYERS}")
+    log_message("=" * 60)
+
     is_running = True
     stop_event.clear()
-    
+
     agent_thread = threading.Thread(
         target=run_music_generation,
         args=(task_text, test_mode, director_interval, True),
-        daemon=True
+        daemon=True,
     )
     agent_thread.start()
-    
+
     return "System started! Check logs below."
 
 def stop_system():
     """Stop the TidalCycles system and agent"""
-    global is_running, stop_event, tidal_process, current_agent_label
-    
+    global is_running, stop_event, current_agent_label
+
     if not is_running:
         return "System is not running!"
-    
+
     stop_event.set()
     log_message("\nStopping system...")
-    
-    log_message("Stopping recording...")
-    recording_result = stop_recording()
-    log_message(recording_result)
-    
-    if tidal_process is not None:
-        try:
-            log_message("Stopping all patterns (hush)...")
-            tidal_process.stdin.write("hush\n")
-            tidal_process.stdin.flush()
-            time.sleep(0.5)
-        except Exception as e:
-            log_message(f"Error stopping patterns: {e}")
-    
-    cleanup_result = stop_tidal_session()
-    log_message(cleanup_result)
-    
+    log_message(stop_recording())
+    log_message(stop_tidal_session())
+
     is_running = False
     current_agent_label = "Idle"
     log_message("✓ System stopped!")
-    
     return "System stopped!"
 
 def get_is_running():
@@ -1564,62 +1238,31 @@ def get_is_running():
 
 def initialize_sound_backend():
     """Initialize SuperDirt and TidalCycles without starting music generation"""
-    global superdirt_process, tidal_process
-    
-    log_message("="*60)
-    log_message("Initializing Sound Backend")
-    log_message("="*60)
-    
-    log_message("\nStarting SuperDirt...")
-    start_result = start_superdirt()
-    log_message(start_result)
-    
-    log_message("\nStarting TidalCycles session...")
-    tidal_result = start_tidal_session()
-    log_message(tidal_result)
-    
-    log_message("\n" + "="*60)
-    log_message("Sound Backend Ready")
-    log_message("="*60)
-    
+    log_message(start_superdirt())
+    log_message(start_tidal_session())
     return "Sound backend initialized successfully"
 
 def get_sound_backend_status():
     """Check if sound backend (SuperDirt + TidalCycles) is running"""
-    global superdirt_process, tidal_process
-    
-    superdirt_ok = superdirt_process is not None and superdirt_process.poll() is None
-    tidal_ok = tidal_process is not None and tidal_process.poll() is None
-    
+    superdirt_ok = audio_stack.superdirt_running()
+    tidal_ok = tidal.running()
     if superdirt_ok and tidal_ok:
         return "Running"
-    elif superdirt_ok or tidal_ok:
+    if superdirt_ok or tidal_ok:
         return "Partial"
-    else:
-        return "Not Running"
+    return "Not Running"
+
+def get_audio_output_info():
+    """Get detected audio output/source info for UI display."""
+    return audio_stack.audio_output_info
 
 def play_audio_test():
     """Play a simple test pattern to verify audio output"""
-    global tidal_process
-    
-    if tidal_process is None or tidal_process.poll() is not None:
+    if not tidal.running():
         return "Error: TidalCycles session not running. Initialize sound backend first."
-    
-    try:
-        # Play a simple test pattern: kick drum on beats 1 and 3
-        test_pattern = 'd1 $ sound "bd*4" # gain 0.8'
-        
-        log_message(f"Playing audio test pattern: {test_pattern}")
-        tidal_process.stdin.write(test_pattern + "\n")
-        tidal_process.stdin.flush()
-        time.sleep(2)
-        
-        # Stop the test pattern
-        tidal_process.stdin.write("d1 silence\n")
-        tidal_process.stdin.flush()
-        
-        log_message("Audio test completed")
-        return "Audio test played successfully! You should have heard 4 kick drum beats."
-        
-    except Exception as e:
-        return f"Error playing audio test: {str(e)}"
+    test_pattern = 'd1 $ sound "bd*4" # gain 0.8'
+    log_message(f"Playing audio test pattern: {test_pattern}")
+    tidal.send([test_pattern])
+    time.sleep(2)
+    tidal.send(["d1 silence"])
+    return "Audio test played successfully! You should have heard 4 kick drum beats."
