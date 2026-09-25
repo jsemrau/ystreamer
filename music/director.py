@@ -159,6 +159,7 @@ class Director:
             presets=json.dumps({r: P.names(r) for r in P.ENERGY_ORDER}),
             max_layers=self.max_layers,
             avoid=", ".join(sorted(avoid["presets"])) or "nothing",
+            theme=self.theme,
         )
         data = self._ask("section", "You are a concise music arranger. Reply with JSON only.", prompt)
         if not data:

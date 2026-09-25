@@ -57,10 +57,14 @@ There are two options, and you can combine them.
 ./venv/bin/python orchestrator.py --style lofi
 ```
 
-The choices are `lofi`, `ambient`, `downtempo` and `piano`. Each sets a
-tempo range, the modes it uses (e.g. minor or dorian for lofi) and the
-default instruments. With `--style`, every piece stays in that style,
-including the LLM's choices. Without it, the style rotates between pieces.
+The choices are `lofi`, `ambient`, `downtempo`, `piano` and `deephouse`.
+Each sets a tempo range, the modes it uses (e.g. minor or dorian for lofi),
+the default instruments and which layers come in first. `deephouse` is
+118-124 BPM with a four-on-the-floor kick, off-beat hats, short chord stabs
+and a syncopated sub bass, and it opens with the groove rather than a pad.
+With `--style`, every piece stays in that style, including the LLM's
+choices. Without it, the style rotates between the chill styles (deep house
+only plays when asked for).
 
 **`--theme`** gives the Director a free-text brief:
 
@@ -68,10 +72,22 @@ including the LLM's choices. Without it, the style rotates between pieces.
 ./venv/bin/python orchestrator.py --theme "rainy late-night jazz lounge, mellow and warm"
 ```
 
-The LLM reads it when it plans each piece, so it shapes the mood, keys,
-tempo and titles it picks. It's only a suggestion: the LLM still chooses
-among the four styles above, and the built-in planner (`--llm none`, or
-whenever the LLM is unavailable) ignores it.
+The LLM reads it for every decision (each piece and each section), so it
+shapes the mood, keys, tempo, titles and instruments it picks.
+
+If the theme names a style and you didn't pass `--style`, that style is
+used for the whole run, even with the built-in planner:
+
+| Theme words | Style |
+|---|---|
+| deep house, house, garage, club, dance | `deephouse` |
+| lofi, lo-fi, hip hop, study, beats | `lofi` |
+| ambient, sleep, drone, meditation, space | `ambient` |
+| downtempo, trip hop, chillout | `downtempo` |
+| piano | `piano` |
+
+So `--theme "frankfurt deep house"` plays deep house, and the LLM uses the
+rest ("frankfurt") for mood and titles. `--style` always wins over the theme.
 
 Combined, for example a fixed style with a mood brief:
 
