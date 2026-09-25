@@ -350,16 +350,53 @@ def stop_recording() -> str:
 # LOCAL LLM SERVER
 # ============================================================================
 
-def ensure_local_llm_server() -> None:
-    """Start the local llama-server if configured and not already running."""
+def local_llm_status() -> str:
+    """"ready", "loading" (server up, model still loading) or "down"."""
     import requests
 
+    base = config.LOCAL_LLM_API_BASE.rstrip("/")
+    root = base[:-3] if base.endswith("/v1") else base
     try:
-        requests.get(f"{config.LOCAL_LLM_API_BASE}/models", timeout=2)
-        log(f"[llama-server] already running at {config.LOCAL_LLM_API_BASE}")
-        return
+        # llama-server: /health is 503 while the model loads, 200 when ready.
+        resp = requests.get(f"{root}/health", timeout=2)
+        if resp.status_code == 200:
+            return "ready"
+        if resp.status_code == 503:
+            return "loading"
+        # Other OpenAI-compatible servers may not have /health.
+        resp = requests.get(f"{base}/models", timeout=2)
+        return "ready" if resp.status_code == 200 else "loading"
     except requests.exceptions.RequestException:
-        pass
+        return "down"
+
+
+def wait_for_local_llm(timeout: float) -> bool:
+    deadline = time.time() + timeout
+    announced = False
+    while time.time() < deadline:
+        status = local_llm_status()
+        if status == "ready":
+            log("[llama-server] ready")
+            return True
+        if status == "loading" and not announced:
+            log("[llama-server] loading the model, waiting...")
+            announced = True
+        time.sleep(2)
+    log(f"[llama-server] not ready after {timeout:.0f}s; the Director uses its built-in planner "
+        f"until it is (see {config.LLAMA_SERVER_LOG})")
+    return False
+
+
+def ensure_local_llm_server(wait: bool = True) -> None:
+    """Start the local llama-server if needed; with wait=True also wait until
+    its model is loaded (use wait=False to boot the audio meanwhile, then call
+    wait_for_local_llm)."""
+    status = local_llm_status()
+    if status != "down":
+        log(f"[llama-server] already running at {config.LOCAL_LLM_API_BASE}")
+        if wait:
+            wait_for_local_llm(config.LLM_LOAD_TIMEOUT)
+        return
 
     if not config.LLAMA_GGUF_MODEL or not os.path.exists(config.LLAMA_GGUF_MODEL):
         log(f"[llama-server] not starting: LLAMA_GGUF_MODEL in .env is "
@@ -380,13 +417,5 @@ def ensure_local_llm_server() -> None:
     except FileNotFoundError as e:
         log(f"[llama-server] could not launch: {e}")
         return
-
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        try:
-            requests.get(f"{config.LOCAL_LLM_API_BASE}/models", timeout=2)
-            log("[llama-server] ready")
-            return
-        except requests.exceptions.RequestException:
-            time.sleep(2)
-    log(f"[llama-server] did not become ready within 60s; see {config.LLAMA_SERVER_LOG}")
+    if wait:
+        wait_for_local_llm(config.LLM_LOAD_TIMEOUT)
