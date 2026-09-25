@@ -47,6 +47,50 @@ python orchestrator.py --llm jevtypesafe --model my-model
 
 Claude requests enable the API's server-side refusal fallback (`fallbacks="default"`), so a declined request is retried on a fallback model instead of failing. Whatever the provider, a failed, slow or invalid answer just means the Director uses its deterministic plan for that decision.
 
+## Choosing the style and mood
+
+There are two options, and you can combine them.
+
+**`--style`** fixes the musical style for the whole run:
+
+```bash
+./venv/bin/python orchestrator.py --style lofi
+```
+
+The choices are `lofi`, `ambient`, `downtempo` and `piano`. Each sets a
+tempo range, the modes it uses (e.g. minor or dorian for lofi) and the
+default instruments. With `--style`, every piece stays in that style,
+including the LLM's choices. Without it, the style rotates between pieces.
+
+**`--theme`** gives the Director a free-text brief:
+
+```bash
+./venv/bin/python orchestrator.py --theme "rainy late-night jazz lounge, mellow and warm"
+```
+
+The LLM reads it when it plans each piece, so it shapes the mood, keys,
+tempo and titles it picks. It's only a suggestion: the LLM still chooses
+among the four styles above, and the built-in planner (`--llm none`, or
+whenever the LLM is unavailable) ignores it.
+
+Combined, for example a fixed style with a mood brief:
+
+```bash
+./venv/bin/python orchestrator.py --style ambient --theme "slow sunrise over the ocean, hopeful"
+```
+
+To make them the default (also for the always-on services), set them in
+`.env` instead. No quotes are needed:
+
+```bash
+YS_STYLE=lofi
+YS_THEME=cozy rainy evening, soft and warm
+```
+
+Flags on the command line override the `.env` values. Use these two
+settings rather than putting `--theme` into `YS_ENGINE_ARGS`: systemd splits
+that at spaces and ignores quotes, which would break a multi-word theme.
+
 ## Watching the Director think
 
 Every decision prints in the terminal with the model's reason:
@@ -92,9 +136,9 @@ python -m eval.analyze clip.wav --key "C minor"  # objective metrics for any rec
 python -m eval.export_dataset > dataset.jsonl    # fine-tuning data from sections that were well received
 ```
 
-Useful flags: `--style lofi|ambient|downtempo|piano` locks the style,
-`--piece-minutes 15` sets the piece length, `--theme "..."` gives the
-Director a brief, and `--no-custom-synths` uses stock SuperDirt sounds.
+Other useful flags: `--piece-minutes 15` sets the piece length, and
+`--no-custom-synths` uses stock SuperDirt sounds (for style and mood, see
+[Choosing the style and mood](#choosing-the-style-and-mood)).
 Tunables such as the layer cap, timeouts and paths live in `.env` (see
 `config.py`).
 
