@@ -9,8 +9,8 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if [[ -x "$REPO/venv/bin/python" ]]; then DEFAULT_PY="$REPO/venv/bin/python"; else DEFAULT_PY="$(command -v python3)"; fi
-PYTHON="${PYTHON:-$DEFAULT_PY}"
+PYTHON="$REPO/venv/bin/python"
+[[ -x "$PYTHON" ]] || { echo "No venv at $REPO/venv; run ./install.sh first"; exit 1; }
 DEST="$HOME/.config/systemd/user"
 mkdir -p "$DEST"
 

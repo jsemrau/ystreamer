@@ -19,6 +19,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import venv_guard  # noqa: E402
+
+venv_guard.ensure_venv()
+
 import config  # noqa: E402
 from music import feedback  # noqa: E402
 

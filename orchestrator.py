@@ -26,7 +26,11 @@ import threading
 import time
 from datetime import datetime
 
-import config
+import venv_guard
+
+venv_guard.ensure_venv()
+
+import config  # noqa: E402
 
 
 class _Tee:

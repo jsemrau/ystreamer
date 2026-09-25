@@ -30,6 +30,10 @@ from dataclasses import dataclass
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import venv_guard  # noqa: E402
+
+venv_guard.ensure_venv()
+
 from music import runtime  # noqa: E402
 
 SILENCE_START_RE = re.compile(r"silence_start:\s*([\d.]+)")

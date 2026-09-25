@@ -23,10 +23,13 @@ behind the design.
 ./venv/bin/python orchestrator.py --dry-run --style lofi   # see the code it would play (no audio)
 ./venv/bin/python -m eval.preview --style lofi --out preview.wav   # rough audio sketch, no SuperCollider
 
-stream/setup_audio.sh --monitor               # create the stream sink and listen to it
-./venv/bin/python orchestrator.py             # play forever, directed by the local model (default)
-./venv/bin/python orchestrator.py --llm claude --free-layer
+./start.sh                                    # create the stream sink, listen to it, play forever (local model)
+./start.sh --llm claude --free-layer          # any orchestrator.py option is passed through
 ```
+
+Everything runs on `./venv`. The Python entry points (`orchestrator.py`,
+`eval/*`, `stream/watchdog.py`) re-launch themselves with `./venv/bin/python`
+when started with another interpreter, and the tests refuse to run outside it.
 
 ## Choosing the LLM
 

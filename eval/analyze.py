@@ -24,9 +24,13 @@ import subprocess
 import sys
 import os
 
-import numpy as np
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import venv_guard  # noqa: E402
+
+venv_guard.ensure_venv()
+
+import numpy as np  # noqa: E402
 
 from music.theory import DISPLAY_NAMES, Key  # noqa: E402
 
