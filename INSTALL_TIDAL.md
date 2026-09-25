@@ -112,7 +112,7 @@ Watch for:
 
 ```bash
 # Start ghci with the BootTidal script
-ghci -ghci-script /home/moebius/Projects/youtube-stream-music-generation/tidal/BootTidal.hs
+ghci -ghci-script tidal/BootTidal.hs   # from the repo root
 
 # In ghci prompt, type:
 d1 $ sound "bd sn"
@@ -184,7 +184,7 @@ cd ~/Dirt-Samples
 ls  # Should show folders like 808, bass, bd, etc.
 
 # In SuperCollider, set custom sample path:
-~dirt.loadSoundFiles("/home/moebius/Dirt-Samples/*");
+~dirt.loadSoundFiles(Platform.userHomeDir +/+ "Dirt-Samples/*");
 ```
 
 ## Verify Complete Installation

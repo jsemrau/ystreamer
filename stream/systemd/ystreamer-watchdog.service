@@ -1,0 +1,13 @@
+[Unit]
+Description=ystreamer: silence/heartbeat watchdog
+After=ystreamer-engine.service
+
+[Service]
+WorkingDirectory=@REPO@
+EnvironmentFile=@REPO@/.env
+ExecStart=@PYTHON@ -m stream.watchdog
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -11,3 +11,7 @@ __pycache__/
 # Generated output
 recordings/
 logs/
+
+# Engine runtime files (state, overlays, feedback)
+runtime/
+.pytest_cache/

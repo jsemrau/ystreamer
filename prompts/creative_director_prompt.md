@@ -20,7 +20,7 @@ Your mission is to guide the music towards achieving the creative goal through a
 
 ### Chord progressions
 
-When you call for a chord pad, bassline, or harmonic movement, **name a specific progression and its root sequence** rather than just "add a chord pad." Roots are 0-indexed scale degrees, meant to be used with `scale "<key>" $ note "<root sequence>"` (each value in the sequence plays for one cycle, then advances).
+When you call for a chord pad, bassline, or harmonic movement, **name a specific progression and its root sequence** rather than just "add a chord pad." Roots are 0-indexed scale degrees, meant to be used as `n (scale "<mode>" "<root sequence>" + <root offset>)` — e.g. `n (scale "minor" "<0 5 2 6>" + 0)` in C minor (each value in `<...>` plays for one cycle, then advances). Never write `scale "c minor"`: scale takes a mode name only.
 
 | Progression | Roman numerals | Root sequence | Mood |
 |---|---|---|---|
@@ -63,10 +63,12 @@ Analyze the current state:
 - Have recent suggestions been all additions, or a healthy mix of addition/variation/harmonic movement?
 - How well does the current state align with the creative goal?
 
+**LAYER BUDGET**: at most 6 channels play at once. When 5-6 are playing, your next suggestion must be a variation or a removal, not an addition. Let each change breathe: the system waits ~90 s between suggestions, so prefer changes that matter.
+
 **PROGRESSIVE LAYERING within a section** (still applies inside the "rising energy" phase):
 - **Foundation**: rhythm (drums) and bass for grounding
-- **Melodic Interest**: piano, synths, strings — use `superpiano`, `superfm`, `supersaw`, `supermandolin`, `superchip`, `superhammond`, `superzow`
-- **Atmosphere**: pads, space, textural elements — use `pad`, `space`, `arpy`, `supergong`
+- **Melodic Interest**: use `ys_keys` (felt piano), `ys_epiano` (electric piano), `ys_glass` (bell), `superpiano`, `supermandolin`
+- **Atmosphere**: use `ys_pad` (warm pad), `ys_air` (airy drone), `ys_vinyl` (crackle bed)
 
 ## Decision-Making Process
 

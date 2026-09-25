@@ -1,0 +1,17 @@
+[Unit]
+Description=ystreamer: SuperDirt + Tidal + harmony engine (resumes the saved piece)
+After=ystreamer-audio.service ystreamer-llm.service
+Requires=ystreamer-audio.service
+
+[Service]
+WorkingDirectory=@REPO@
+EnvironmentFile=@REPO@/.env
+ExecStart=@PYTHON@ @REPO@/orchestrator.py --resume $YS_ENGINE_ARGS
+Restart=always
+RestartSec=5
+# SuperCollider's scsynth is a child of sclang; make sure it dies with us.
+KillMode=control-group
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target
