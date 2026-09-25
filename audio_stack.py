@@ -114,7 +114,24 @@ def stop_superdirt() -> str:
 # TIDAL (GHCi)
 # ============================================================================
 
-_GHCI_ERROR_RE = re.compile(r"<interactive>:\d+:\d+: error|^\*\*\* Exception:", flags=re.MULTILINE)
+_GHCI_ERROR_RE = re.compile(r"<interactive>:\d+:\d+: error|<no location info>: error|^\*\*\* Exception:",
+                            flags=re.MULTILINE)
+
+
+def diagnose_tidal_boot(output: str) -> str | None:
+    """Explain a failed BootTidal.hs load in plain words, or None if it looks fine."""
+    if "Ambiguous module name" in output and "Sound.Tidal" in output:
+        return ("Tidal is installed twice, so GHCi can't choose which copy to import "
+                "('Ambiguous module name Sound.Tidal.Context'). Fix it with:\n"
+                "    python3 tidal/fix_ghc_env.py\n"
+                "then start again.")
+    if "Could not find module" in output and "Sound.Tidal" in output:
+        return ("GHCi can't find the Tidal library. Install it with:\n"
+                "    cabal update && cabal install --lib tidal")
+    if re.search(r"Not in scope: .?(startTidal|superdirtTarget|oLatency)", output):
+        return ("BootTidal.hs doesn't match the installed Tidal version (startTidal/superdirtTarget "
+                "not found). Check `ghc-pkg list tidal` and INSTALL_TIDAL.md.")
+    return None
 
 
 class TidalSession:
@@ -131,6 +148,9 @@ class TidalSession:
         self._recent = deque(maxlen=200)
         self._lock = threading.Lock()
         self._ready = threading.Event()
+        self._boot_lines: list[str] = []
+        # Set by start() when BootTidal.hs failed to load; a human-readable fix.
+        self.boot_error: str | None = None
 
     def running(self) -> bool:
         return self.process is not None and self.process.poll() is None
@@ -139,6 +159,8 @@ class TidalSession:
         if self.running():
             return "TidalCycles session is already running"
         self._ready.clear()
+        self._boot_lines = []
+        self.boot_error = None
         try:
             self.process = subprocess.Popen(
                 ["ghci", "-ghci-script", self.boot_file],
@@ -160,6 +182,8 @@ class TidalSession:
                 if "YSTREAMER_TIDAL_READY" in line:
                     self._ready.set()
                     continue
+                if not self._ready.is_set():
+                    self._boot_lines.append(line)
                 log(f"[GHCi/Tidal] {line}")
                 self._output.put(line)
                 self._recent.append(line)
@@ -168,6 +192,14 @@ class TidalSession:
         self._write_raw('putStrLn "YSTREAMER_TIDAL_READY"')
         if not self._ready.wait(timeout=config.TIDAL_BOOT_TIMEOUT):
             log(f"[Tidal] did not report ready within {config.TIDAL_BOOT_TIMEOUT:.0f}s")
+
+        # Did BootTidal.hs actually load? `hush` only exists if it did.
+        boot_output = "\n".join(self._boot_lines)
+        check_error = self.send([":t hush"], settle=1.0)
+        if check_error or _GHCI_ERROR_RE.search(boot_output):
+            self.boot_error = diagnose_tidal_boot(boot_output + "\n" + (check_error or "")) or (
+                "BootTidal.hs did not load; see the [GHCi/Tidal] errors above.")
+            return f"TidalCycles session FAILED to start: {self.boot_error}"
         if cps:
             self.send([f"setcps {cps:.6f}"])
         return "TidalCycles session started"
@@ -330,7 +362,10 @@ def ensure_local_llm_server() -> None:
         pass
 
     if not config.LLAMA_GGUF_MODEL or not os.path.exists(config.LLAMA_GGUF_MODEL):
-        log("[llama-server] LLAMA_GGUF_MODEL not set or missing; skipping local model auto-start")
+        log(f"[llama-server] not starting: LLAMA_GGUF_MODEL in .env is "
+            f"{'not set' if not config.LLAMA_GGUF_MODEL else 'missing: ' + config.LLAMA_GGUF_MODEL}. "
+            "The Director will use its built-in planner until a server answers at "
+            f"{config.LOCAL_LLM_API_BASE}.")
         return
 
     log(f"[llama-server] launching {config.LLAMA_SERVER_BIN}...")

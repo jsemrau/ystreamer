@@ -114,6 +114,9 @@ def _openai_compatible(model: str, api_base: str, api_key: str, system: str, use
     }
     try:
         resp = requests.post(url, headers=headers, json=body, timeout=timeout)
+    except requests.ConnectionError as e:
+        raise LLMError(f"cannot reach {url} (no server running there? for the local model set "
+                       f"LLAMA_SERVER_BIN and LLAMA_GGUF_MODEL in .env)") from e
     except requests.RequestException as e:
         raise LLMError(f"cannot reach {url}: {e}") from e
     if resp.status_code >= 400:

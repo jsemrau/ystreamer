@@ -238,6 +238,12 @@ def run_engine(args) -> None:
     print(audio_stack.start_superdirt())
     tidal = audio_stack.TidalSession()
     print(tidal.start())
+    if tidal.boot_error:
+        print("\n[orchestrator] Tidal could not start, so there is nothing to play.")
+        print(f"[orchestrator] {tidal.boot_error}")
+        tidal.stop()
+        print(audio_stack.stop_superdirt())
+        sys.exit(1)
     if args.record:
         print(audio_stack.start_recording()[0])
 

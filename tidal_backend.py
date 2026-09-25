@@ -1204,6 +1204,10 @@ def start_system(task_text, test_mode, director_interval, composer_model_id=None
 
     log_message("\nStarting TidalCycles session...")
     log_message(start_tidal_session())
+    if tidal.boot_error:
+        log_message(f"✗ Tidal could not start: {tidal.boot_error}")
+        stop_tidal_session()
+        return f"Tidal could not start: {tidal.boot_error}"
 
     if record:
         log_message("\nStarting audio recording...")

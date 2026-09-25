@@ -95,6 +95,16 @@ Tunables such as the layer cap, timeouts and paths live in `.env` (see
 | `eval/` | analysis, quality monitor, feedback, preview renderer, dataset export |
 | `tidal_backend.py`, `prompts/composer_prompt.md` | the old free-form agent loop (`orchestrator.py --legacy "..."`) |
 
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `Ambiguous module name 'Sound.Tidal.Context': it was found in multiple packages: tidal-X tidal-X` | Tidal was installed twice. Run `python3 tidal/fix_ghc_env.py` (keeps the newest copy, backs up the file). |
+| `Could not find module 'Sound.Tidal.Context'` | `cabal update && cabal install --lib tidal` |
+| `[Director] LLM unavailable (cannot reach http://127.0.0.1:8080/...)` | The local model isn't running. Set `LLAMA_SERVER_BIN` and `LLAMA_GGUF_MODEL` in `.env` (the engine then starts it), start llama-server yourself, or use `--llm none`. The music keeps playing on the built-in planner meanwhile. |
+| `apt-get update` fails on a third-party PPA | Harmless for this project; `install.sh` continues. To silence it: `sudo add-apt-repository --remove ppa:<name>`. |
+| No sound, but no errors | `pw-link -l \| grep -A2 SuperCollider`; if it isn't connected to `ystream_sink`, run `stream/route_audio.sh`. |
+
 ## Tests
 
 ```bash
