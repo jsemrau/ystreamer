@@ -54,6 +54,8 @@ LLAMA_GGUF_MODEL = _env("LLAMA_GGUF_MODEL", "")
 LOCAL_LLM_API_BASE = _env("LOCAL_LLM_API_BASE", "http://127.0.0.1:8080/v1")
 LLAMA_SERVER_LOG = _env("LLAMA_SERVER_LOG", os.path.join(REPO_DIR, "logs", "llama-server.log"))
 LLM_TIMEOUT_SECONDS = _env_float("YS_LLM_TIMEOUT", 60.0)
+# How long to wait at startup for the local model to finish loading.
+LLM_LOAD_TIMEOUT = _env_float("YS_LLM_LOAD_TIMEOUT", 300.0)
 
 # --- Output / runtime files --------------------------------------------------
 RECORDINGS_DIR = _env("YS_RECORDINGS_DIR", os.path.join(REPO_DIR, "recordings"))

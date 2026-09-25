@@ -232,8 +232,10 @@ def run_engine(args) -> None:
     from music import llm
 
     model_id = director_model_id(args)
-    if model_id and llm.resolve(model_id)[0] == "local":
-        audio_stack.ensure_local_llm_server()
+    uses_local_llm = bool(model_id) and llm.resolve(model_id)[0] == "local"
+    if uses_local_llm:
+        # Launch now so the model loads while SuperCollider and Tidal boot.
+        audio_stack.ensure_local_llm_server(wait=False)
 
     print(audio_stack.start_superdirt())
     tidal = audio_stack.TidalSession()
@@ -244,6 +246,9 @@ def run_engine(args) -> None:
         tidal.stop()
         print(audio_stack.stop_superdirt())
         sys.exit(1)
+    if uses_local_llm:
+        # The first piece is planned by the LLM, so give the model time to load.
+        audio_stack.wait_for_local_llm(config.LLM_LOAD_TIMEOUT)
     if args.record:
         print(audio_stack.start_recording()[0])
 

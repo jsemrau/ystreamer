@@ -73,3 +73,34 @@ def test_real_ghci_without_tidal_is_reported(monkeypatch):
             assert "Tidal" in session.boot_error
     finally:
         session.stop()
+
+
+def test_local_llm_status_and_wait(monkeypatch):
+    import types
+
+    import requests
+
+    import config
+
+    responses = iter([503, 503, 200])
+
+    def fake_get(url, timeout):
+        return types.SimpleNamespace(status_code=next(responses))
+
+    logs = []
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(audio_stack, "log", logs.append)
+    monkeypatch.setattr(audio_stack.time, "sleep", lambda s: None)
+    monkeypatch.setattr(config, "LOCAL_LLM_API_BASE", "http://127.0.0.1:8080/v1")
+    assert audio_stack.wait_for_local_llm(timeout=30)
+    assert logs == ["[llama-server] loading the model, waiting...", "[llama-server] ready"]
+
+
+def test_local_llm_status_down(monkeypatch):
+    import requests
+
+    def refuse(url, timeout):
+        raise requests.ConnectionError("refused")
+
+    monkeypatch.setattr(requests, "get", refuse)
+    assert audio_stack.local_llm_status() == "down"
