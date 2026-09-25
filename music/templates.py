@@ -94,12 +94,21 @@ _KEYS_RHYTHMS = [
 ]
 
 
+# Deep house: short off-beat and tresillo (3-3-2) chord stabs.
+_STAB_RHYTHMS = [
+    ["..x.....", "......x."],
+    ["..x...x.", "x..x..x."],
+    ["x..x..x.", ".x.x..x.", "..x...x."],
+]
+
+
 def render_keys(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custom: bool) -> str | None:
     synth = _synth(preset, use_custom)
     if not synth:
         return None
     rng = random.Random(ctx.seed * 7 + 1)
-    cells = _KEYS_RHYTHMS[_intensity(energy)]
+    rhythms = _STAB_RHYTHMS if preset.name == "deep_stab" else _KEYS_RHYTHMS
+    cells = rhythms[_intensity(energy)]
     cycles = []
     for i in range(ctx.period):
         voicing = ctx.keys_voicings[i // ctx.cycles_per_chord]
@@ -133,7 +142,14 @@ def render_bass(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custom
         fifth = root + 7 if root + 7 <= high + 5 else root - 5
         last_of_chord = (i % ctx.cycles_per_chord) == ctx.cycles_per_chord - 1
         next_root = bass_note(ctx.chords[(idx + 1) % n_chords], low, high)
-        if intensity == 0:
+        if preset.name == "deep_bass":
+            # Syncopated, off-beat deep-house bass (root, octave at high energy).
+            octave = str(root + 12)
+            r = str(root)
+            cell = ([ "~", r, "_", "~", "~", r, "_", "~"] if intensity == 0 else
+                    [r, "_", "~", r, "~", r, "_", "~"] if intensity == 1 else
+                    [r, "_", "~", r, "~", r, octave, "~"])
+        elif intensity == 0:
             cell = [str(root)] + ["_"] * 7
         elif intensity == 1:
             cell = [str(root), "_", "_", "~", "~", "~", str(root), "_"]
@@ -193,7 +209,7 @@ def render_drums(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custo
         parts.append(expr)
     stack = "stack [" + ", ".join(parts) + "]"
     fx = " ".join(f"# {k} {_fmt(v)}" for k, v in preset.fx.items())
-    swing = "swingBy (1/8) 4 $ " if preset.name == "lofi_kit" else ""
+    swing = {"lofi_kit": "swingBy (1/8) 4 $ ", "house_kit": "swingBy (1/24) 4 $ "}.get(preset.name, "")
     return f"{swing}{stack} {fx}".strip()
 
 

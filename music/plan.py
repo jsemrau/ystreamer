@@ -15,6 +15,7 @@ answer can never produce broken or out-of-key music.
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import asdict, dataclass, field
 
 from . import presets as P
@@ -41,7 +42,34 @@ STYLES = {
         "presets": {"pad": "piano_pad", "keys": "piano", "bass": "sub", "melody": "felt_lead",
                     "arp": "glass_arp", "drums": "soft_pulse", "texture": "air"},
     },
+    "deephouse": {
+        "bpm": (118, 124), "modes": ["minor", "dorian"], "cycles_per_chord": 2,
+        "presets": {"pad": "warm_pad", "keys": "deep_stab", "bass": "deep_bass", "melody": "epiano_lead",
+                    "arp": "pluck_arp", "drums": "house_kit", "texture": "vinyl"},
+        # The groove comes first: kick and bass open the track.
+        "energy_order": ["drums", "bass", "keys", "pad", "texture", "melody", "arp"],
+        # Only when asked for (--style, a theme, or the LLM): not in the chill rotation.
+        "rotate": False,
+    },
 }
+
+# Theme words that select a style (checked in this order).
+THEME_STYLE_KEYWORDS = [
+    ("deephouse", ("deep house", "house", "garage", "club", "dance")),
+    ("lofi", ("lofi", "lo-fi", "hip hop", "hiphop", "study", "beats")),
+    ("ambient", ("ambient", "sleep", "drone", "meditation", "space")),
+    ("downtempo", ("downtempo", "trip hop", "trip-hop", "chillout", "chill-out")),
+    ("piano", ("piano",)),
+]
+
+
+def style_from_theme(theme: str | None) -> str | None:
+    """Pick a style from words in a free-text theme, e.g. "frankfurt deep house"."""
+    text = f" {(theme or '').lower()} "
+    for style, words in THEME_STYLE_KEYWORDS:
+        if any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", text) for w in words):
+            return style
+    return None
 
 SECTION_TYPES = ["intro", "verse", "build", "chorus", "breakdown", "bridge", "outro"]
 
@@ -130,7 +158,8 @@ class Arrangement:
 
 def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | None = None,
                avoid_progressions: set[str] | None = None, target_minutes: float = 12.0) -> Piece:
-    style = style if style in STYLES else (previous.style if previous and rng.random() < 0.6 else rng.choice(list(STYLES)))
+    rotation = [name for name, cfg in STYLES.items() if cfg.get("rotate", True)]
+    style = style if style in STYLES else (previous.style if previous and rng.random() < 0.6 else rng.choice(rotation))
     cfg = STYLES[style]
 
     if previous is not None:
@@ -185,13 +214,14 @@ def arrange(piece: Piece, section: Section, rng: random.Random, max_layers: int 
     """Energy decides how many layers play; the style decides which presets."""
     cfg = STYLES[piece.style]
     energy = section.energy
-    count = 1 + int(round(energy * (len(P.ENERGY_ORDER) - 1)))
+    order = cfg.get("energy_order", P.ENERGY_ORDER)
+    count = 1 + int(round(energy * (len(order) - 1)))
     if section.name == "breakdown":
         count = min(count, 2)
     if section.name == "outro":
         count = min(count, 3)
     count = max(1, min(count, max_layers))
-    roles = P.ENERGY_ORDER[:count]
+    roles = order[:count]
     # In a breakdown keep the pad and let the melody float over it.
     if section.name == "breakdown" and "melody" not in roles:
         roles = ["pad", "melody"]

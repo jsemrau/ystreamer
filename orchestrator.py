@@ -45,7 +45,7 @@ class _Tee:
             stream.flush()
 
 
-STYLE_CHOICES = ["lofi", "ambient", "downtempo", "piano"]
+STYLE_CHOICES = ["lofi", "ambient", "downtempo", "piano", "deephouse"]
 
 
 def parse_args():
@@ -154,6 +154,13 @@ def build_director(args, rng):
     from music import llm
     from music.director import Director
 
+    from music.plan import style_from_theme
+
+    if not args.style:
+        themed = style_from_theme(args.theme)
+        if themed:
+            args.style = themed
+            print(f"[orchestrator] Theme {args.theme!r} → style {themed} (use --style to choose another)")
     model_id = director_model_id(args)
     if model_id:
         provider, model = llm.resolve(model_id)

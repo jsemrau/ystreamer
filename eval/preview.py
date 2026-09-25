@@ -162,7 +162,7 @@ def preview_piece(style: str | None, seed: int, max_cycles_per_section: int = 8)
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--style", choices=["lofi", "ambient", "downtempo", "piano"])
+    parser.add_argument("--style", choices=["lofi", "ambient", "downtempo", "piano", "deephouse"])
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", default="preview.wav")
     args = parser.parse_args()

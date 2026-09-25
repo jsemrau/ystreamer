@@ -164,3 +164,20 @@ def test_style_and_theme_from_env(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["orchestrator.py"])
     with pytest.raises(SystemExit):
         orchestrator.parse_args()
+
+
+def test_theme_picks_style_unless_style_given(monkeypatch, capsys):
+    import random
+    import sys
+
+    import orchestrator
+
+    monkeypatch.delenv("YS_STYLE", raising=False)
+    monkeypatch.setattr(sys, "argv", ["orchestrator.py", "--llm", "none", "--theme", "frankfurt deep house"])
+    args = orchestrator.parse_args()
+    director = orchestrator.build_director(args, random.Random(0))
+    assert director.style == "deephouse"
+    monkeypatch.setattr(sys, "argv", ["orchestrator.py", "--llm", "none", "--style", "lofi",
+                                      "--theme", "frankfurt deep house"])
+    args = orchestrator.parse_args()
+    assert orchestrator.build_director(args, random.Random(0)).style == "lofi"

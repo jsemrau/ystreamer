@@ -128,3 +128,13 @@ def test_generated_code_is_single_line_and_balanced():
                 assert expr.count('"') % 2 == 0
                 # `_` may never start a step sequence or follow a rest
                 assert "[_" not in expr and "~ _" not in expr
+
+
+def test_deephouse_kit_is_four_on_the_floor_and_stabs_are_short():
+    ctx = next(contexts())
+    drums = render_layer("drums", ctx, P.PRESETS["drums"]["house_kit"], 0.2)
+    assert 's "bd*4"' in drums
+    stabs = render_layer("keys", ctx, P.PRESETS["keys"]["deep_stab"], 0.5)
+    assert "# legato 0.35" in stabs
+    bass = render_layer("bass", ctx, P.PRESETS["bass"]["deep_bass"], 0.2)
+    assert sequence(bass)[0].startswith("[~ ")  # off-beat entry at low energy

@@ -92,3 +92,25 @@ def test_validate_arrangement_never_empty():
     fallback = arrange(piece, piece.sections[0], rng)
     arr, _ = validate_arrangement({"layers": {r: None for r in P.ENERGY_ORDER}}, piece, fallback)
     assert arr.active_roles() == ["pad"]
+
+
+def test_theme_selects_style():
+    from music.plan import style_from_theme
+
+    assert style_from_theme("frankfurt deep house") == "deephouse"
+    assert style_from_theme("lofi beats to study to") == "lofi"
+    assert style_from_theme("ambient music for sleep") == "ambient"
+    assert style_from_theme("warehouse party") is None  # "house" only as a word
+    assert style_from_theme("rainy evening") is None
+
+
+def test_deephouse_starts_with_the_groove_and_is_not_in_the_chill_rotation():
+    rng = random.Random(7)
+    piece = plan_piece(rng, style="deephouse")
+    lo, hi = STYLES["deephouse"]["bpm"]
+    assert lo <= piece.bpm <= hi
+    intro = arrange(piece, piece.sections[0], rng)
+    assert intro.active_roles()[:2] == ["drums", "bass"] or set(intro.active_roles()) >= {"drums"}
+    assert intro.layers["drums"] == "house_kit"
+    rotating = {plan_piece(random.Random(i)).style for i in range(60)}
+    assert "deephouse" not in rotating
