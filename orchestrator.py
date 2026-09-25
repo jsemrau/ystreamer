@@ -7,7 +7,10 @@ deterministic) plans pieces and sections, the engine renders in-key Tidal
 code and schedules it on phrase boundaries.
 
     python orchestrator.py                                   # deterministic director
-    python orchestrator.py --director-model local/qwen-agentworld-35b --free-layer
+    python orchestrator.py --llm claude --free-layer                 # Claude (Anthropic API)
+    python orchestrator.py --llm local                               # local llama.cpp model
+    python orchestrator.py --llm jevtypesafe                         # jevtypesafeai.com (see .env)
+    python orchestrator.py --llm claude --model claude-sonnet-5      # pick a specific model
     python orchestrator.py --resume                          # continue after a crash
     python orchestrator.py --dry-run --pieces 1              # print code, no audio
     python orchestrator.py --selftest                        # type-check all templates with GHCi
@@ -49,9 +52,14 @@ def parse_args():
     parser.add_argument("--legacy", action="store_true", help="Run the old free-form composer agent loop.")
 
     engine = parser.add_argument_group("engine mode")
+    engine.add_argument("--llm", choices=["none", "claude", "local", "jevtypesafe"],
+                        default=os.getenv("YS_LLM", "none"),
+                        help="Which LLM directs the music (default from YS_LLM; 'none' = deterministic director).")
+    engine.add_argument("--model", default=os.getenv("YS_LLM_MODEL", ""),
+                        help="Model name for the chosen --llm (default: that provider's default model).")
     engine.add_argument("--director-model", default=os.getenv("YS_DIRECTOR_MODEL", ""),
-                        help="LiteLLM model id for the Director (e.g. local/qwen-agentworld-35b, gpt-5-mini). "
-                             "Empty = deterministic director only.")
+                        help="Full model id, overrides --llm/--model (e.g. claude/claude-opus-5, "
+                             "local/qwen-agentworld-35b, jevtypesafe/<model>, or any LiteLLM id).")
     engine.add_argument("--style", choices=["lofi", "ambient", "downtempo", "piano"],
                         help="Lock the stream to one style (default: rotate).")
     engine.add_argument("--theme", default="chill music to relax, study and sleep to")
@@ -120,10 +128,25 @@ def run_legacy(args) -> None:
 # Engine mode
 # ---------------------------------------------------------------------------
 
+def director_model_id(args) -> str | None:
+    if args.director_model:
+        return args.director_model
+    if args.llm and args.llm != "none":
+        return f"{args.llm}/{args.model}" if args.model else args.llm
+    return None
+
+
 def build_director(args, rng):
+    from music import llm
     from music.director import Director
 
-    return Director(args.director_model or None, rng, theme=args.theme,
+    model_id = director_model_id(args)
+    if model_id:
+        provider, model = llm.resolve(model_id)
+        print(f"[orchestrator] Director LLM: {provider} / {model}")
+    else:
+        print("[orchestrator] Director LLM: none (deterministic director)")
+    return Director(model_id, rng, theme=args.theme,
                     target_minutes=args.piece_minutes, style=args.style)
 
 
@@ -206,7 +229,10 @@ def run_engine(args) -> None:
     audio_stack.set_logger(print)
     rng = random.Random(args.seed)
     director = build_director(args, rng)
-    if args.director_model.startswith("local/"):
+    from music import llm
+
+    model_id = director_model_id(args)
+    if model_id and llm.resolve(model_id)[0] == "local":
         audio_stack.ensure_local_llm_server()
 
     print(audio_stack.start_superdirt())

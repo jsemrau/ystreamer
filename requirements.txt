@@ -1,5 +1,6 @@
-# Engine + Director (LLM calls go through LiteLLM)
-litellm
+# Engine + Director
+anthropic     # Claude provider (official SDK)
+litellm       # local llama.cpp / jevtypesafe (OpenAI-compatible) / other providers
 python-dotenv
 requests
 numpy

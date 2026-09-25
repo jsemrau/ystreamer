@@ -781,7 +781,21 @@ creative_director_prompt = load_prompt("creative_director_prompt.md")
 def _build_model(model_id):
     """Build a LiteLLMModel, routing "local/..." ids to the local llama-server."""
     from smolagents import LiteLLMModel
+    from music import llm as _llm
 
+    provider, model = _llm.resolve(model_id)
+    if provider == "claude":
+        # smolagents drives models through LiteLLM; its Anthropic route.
+        return LiteLLMModel(model_id=f"anthropic/{model}", max_tokens=16000)
+    if provider == "jevtypesafe":
+        return LiteLLMModel(
+            model_id=f"openai/{model}",
+            api_base=os.getenv("YS_JEV_API_BASE", ""),
+            api_key=os.getenv("YS_JEV_API_KEY", "") or "sk-no-key-required",
+            max_tokens=2048,
+        )
+    if provider == "local":
+        model_id = f"local/{model}"
     if model_id.startswith("local/"):
         real_id = "openai/" + model_id.split("/", 1)[1]
         # This model's chat template has an extended-thinking mode that, left
