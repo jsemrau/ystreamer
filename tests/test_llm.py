@@ -57,28 +57,61 @@ def test_claude_refusal_raises(monkeypatch):
         llm.complete("claude", "sys", "user")
 
 
-def test_jevtypesafe_requires_config(monkeypatch):
-    monkeypatch.delenv("YS_JEV_API_BASE", raising=False)
-    with pytest.raises(llm.LLMError, match="YS_JEV_API_BASE"):
-        llm.complete("jevtypesafe/m", "sys", "user")
+ROUTE = {"route": {"type": "choice", "instructions": "Where?", "criteria": {"a": "A", "b": "B"}}}
 
 
-def test_jevtypesafe_json_style(monkeypatch):
+def fake_jev(monkeypatch, status_code=200, answers=None, seen=None):
     import requests
 
-    seen = {}
-
     def fake_post(url, headers, timeout, json):
-        seen.update(url=url, headers=headers, body=json)
-        return types.SimpleNamespace(status_code=200, json=lambda: {"text": '{"ok": 1}'}, text="")
+        if seen is not None:
+            seen.update(url=url, headers=headers, body=json)
+        return types.SimpleNamespace(status_code=status_code, text='{"error": "Insufficient credits"}',
+                                     json=lambda: {"model": "jev-1.13.0", "answers": answers or {}})
 
-    monkeypatch.setenv("YS_JEV_API_BASE", "https://example.test/api")
-    monkeypatch.setenv("YS_JEV_API_KEY", "k")
-    monkeypatch.setenv("YS_JEV_API_STYLE", "json")
+    monkeypatch.setenv("JEV_KEY", "k")
+    monkeypatch.delenv("YS_JEV_API_BASE", raising=False)
     monkeypatch.setattr(requests, "post", fake_post)
-    assert llm.complete("jevtypesafe/m", "sys", "user") == '{"ok": 1}'
+
+
+def test_jev_requires_key(monkeypatch):
+    monkeypatch.delenv("JEV_KEY", raising=False)
+    with pytest.raises(llm.LLMError, match="JEV_KEY"):
+        llm.decide("jevtypesafe", "state", ROUTE)
+
+
+def test_jev_decide_sends_typed_questions(monkeypatch):
+    seen = {}
+    questions = {**ROUTE, "escalate": {"type": "noul", "instructions": "Escalate?"}}
+    fake_jev(monkeypatch, answers={"route": {"type": "choice", "choice": "b", "confidence": 0.9},
+                                   "escalate": {"type": "noul", "noul": 0.2}}, seen=seen)
+    answers = llm.decide("jevtypesafe/jev-latest", {"ctx": 1}, questions)
+    assert answers["route"]["choice"] == "b" and answers["escalate"]["noul"] == 0.2
+    assert seen["url"] == llm.JEV_API_BASE
     assert seen["headers"]["Authorization"] == "Bearer k"
-    assert seen["body"]["model"] == "m" and seen["body"]["prompt"] == "user"
+    assert seen["body"] == {"model": "jev-latest", "state": {"ctx": 1}, "questions": questions}
+
+
+@pytest.mark.parametrize("answer", [
+    {"type": "choice", "choice": "c"},   # not one of the criteria
+    {"type": "noul", "noul": 0.5},       # wrong type
+    None,                                # missing
+])
+def test_jev_rejects_invalid_answers(monkeypatch, answer):
+    fake_jev(monkeypatch, answers={"route": answer} if answer else {})
+    with pytest.raises(llm.LLMError, match="route"):
+        llm.decide("jevtypesafe", "state", ROUTE)
+
+
+def test_jev_http_error(monkeypatch):
+    fake_jev(monkeypatch, status_code=402)
+    with pytest.raises(llm.LLMError, match="402.*Insufficient credits"):
+        llm.decide("jevtypesafe", "state", ROUTE)
+
+
+def test_jev_is_not_a_text_llm():
+    with pytest.raises(llm.LLMError, match="typed questions"):
+        llm.complete("jevtypesafe", "sys", "user")
 
 
 def test_orchestrator_model_selection():

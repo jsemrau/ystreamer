@@ -19,11 +19,14 @@ import config
 from . import feedback, llm
 from . import presets as P
 from .melody import STEPS_PER_CYCLE
-from .plan import (Arrangement, Piece, Section, arrange, describe_options, plan_piece,
+from .plan import (STYLES, Arrangement, Piece, Section, arrange, describe_options, plan_piece,
                    validate_arrangement, validate_piece)
-from .theory import Key
+from .theory import PROGRESSIONS_BY_NAME, Key
 
 PROMPTS_DIR = os.path.join(config.REPO_DIR, "prompts")
+# Jev picks between options instead of writing plans: how many valid piece
+# plans the deterministic planner proposes for it to choose from.
+JEV_PIECE_CANDIDATES = 6
 
 
 def _load_prompt(name: str) -> str:
@@ -37,6 +40,7 @@ class Director:
                  target_minutes: float = 12.0, max_layers: int = config.MAX_ACTIVE_LAYERS,
                  style: str | None = None):
         self.model_id = model_id
+        self.uses_jev = bool(model_id) and llm.resolve(model_id)[0] == "jevtypesafe"
         self.rng = rng
         self.log = log
         self.theme = theme
@@ -60,9 +64,14 @@ class Director:
         return True
 
     def _ask(self, system: str, user: str) -> dict | None:
+        return self._guarded(lambda: llm.extract_json(llm.complete(self.model_id, system, user)))
+
+    def _decide(self, state, questions: dict) -> dict | None:
+        return self._guarded(lambda: llm.decide(self.model_id, state, questions))
+
+    def _guarded(self, call) -> dict | None:
         try:
-            reply = llm.complete(self.model_id, system, user)
-            data = llm.extract_json(reply)
+            data = call()
             self.consecutive_failures = 0
             return data
         except llm.LLMError as e:
@@ -83,16 +92,19 @@ class Director:
                               target_minutes=self.target_minutes)
         piece = fallback
         if self._llm_available():
-            prompt = _load_prompt("director_piece.md").format(
-                target_minutes=int(self.target_minutes),
-                options=json.dumps(describe_options(), indent=1),
-                previous=json.dumps({k: v for k, v in previous.to_dict().items() if k != "sections"})
-                if previous else "none (this is the first piece)",
-                recent_progressions=", ".join(self.recent_progressions) or "none",
-                avoid=", ".join(sorted(avoid["progressions"] | avoid["presets"])) or "nothing",
-                theme=self.theme,
-            )
-            data = self._ask("You are a concise music director. Reply with JSON only.", prompt)
+            if self.uses_jev:
+                data = self._jev_piece(previous, fallback, avoid)
+            else:
+                prompt = _load_prompt("director_piece.md").format(
+                    target_minutes=int(self.target_minutes),
+                    options=json.dumps(describe_options(), indent=1),
+                    previous=json.dumps({k: v for k, v in previous.to_dict().items() if k != "sections"})
+                    if previous else "none (this is the first piece)",
+                    recent_progressions=", ".join(self.recent_progressions) or "none",
+                    avoid=", ".join(sorted(avoid["progressions"] | avoid["presets"])) or "nothing",
+                    theme=self.theme,
+                )
+                data = self._ask("You are a concise music director. Reply with JSON only.", prompt)
             if data:
                 piece, notes = validate_piece(data, fallback, self.target_minutes)
                 if self.style and piece.style != self.style:
@@ -120,16 +132,19 @@ class Director:
                 fallback.layers[role] = alternatives[0] if alternatives else name
         if not self._llm_available():
             return fallback
-        prompt = _load_prompt("director_section.md").format(
-            piece=json.dumps({k: v for k, v in piece.to_dict().items() if k != "sections"}),
-            section=section.name, energy=section.energy, bars=section.bars,
-            index=index + 1, count=len(piece.sections),
-            current=json.dumps(current.layers if current else {}),
-            presets=json.dumps({r: P.names(r) for r in P.ENERGY_ORDER}),
-            max_layers=self.max_layers,
-            avoid=", ".join(sorted(avoid["presets"])) or "nothing",
-        )
-        data = self._ask("You are a concise music arranger. Reply with JSON only.", prompt)
+        if self.uses_jev:
+            data = self._jev_arrangement(piece, index, current, avoid)
+        else:
+            prompt = _load_prompt("director_section.md").format(
+                piece=json.dumps({k: v for k, v in piece.to_dict().items() if k != "sections"}),
+                section=section.name, energy=section.energy, bars=section.bars,
+                index=index + 1, count=len(piece.sections),
+                current=json.dumps(current.layers if current else {}),
+                presets=json.dumps({r: P.names(r) for r in P.ENERGY_ORDER}),
+                max_layers=self.max_layers,
+                avoid=", ".join(sorted(avoid["presets"])) or "nothing",
+            )
+            data = self._ask("You are a concise music arranger. Reply with JSON only.", prompt)
         if not data:
             return fallback
         arrangement, notes = validate_arrangement(data, piece, fallback, self.max_layers)
@@ -144,7 +159,7 @@ class Director:
 
     def compose_free_layer(self, piece: Piece, section: Section) -> list[str] | None:
         """Ask the LLM for a counter-melody as pentatonic degrees; map to notes."""
-        if not self._llm_available():
+        if self.uses_jev or not self._llm_available():  # Jev picks options; it can't write melodies
             return None
         cycles = piece.period
         prompt = _load_prompt("free_layer.md").format(
@@ -160,6 +175,82 @@ class Director:
         except ValueError as e:
             self.log(f"[Director] free layer rejected: {e}")
             return None
+
+    # -- Jev (typed decisions) ----------------------------------------------------
+
+    def _jev_piece(self, previous: Piece | None, fallback: Piece, avoid: dict) -> dict | None:
+        """Jev can't write a plan, so it picks one of several valid candidate plans."""
+        candidates = {"piece_1": fallback}
+        seen = {(fallback.style, fallback.key, fallback.progression)}
+        for _ in range(4 * JEV_PIECE_CANDIDATES):
+            if len(candidates) == JEV_PIECE_CANDIDATES:
+                break
+            candidate = plan_piece(self.rng, previous, style=self.style,
+                                   avoid_progressions=set(self.recent_progressions) | avoid["progressions"],
+                                   target_minutes=self.target_minutes)
+            if (candidate.style, candidate.key, candidate.progression) not in seen:
+                seen.add((candidate.style, candidate.key, candidate.progression))
+                candidates[f"piece_{len(candidates) + 1}"] = candidate
+        options = {name: _describe_piece(c) for name, c in candidates.items()}
+        state = {
+            "stream_theme": self.theme,
+            "previous_piece": _describe_piece(previous) if previous else "none (this is the first piece)",
+            "recently_used_progressions": list(self.recent_progressions) or "none",
+            "listeners_dislike": sorted(avoid["progressions"] | avoid["presets"]) or "nothing",
+        }
+        answers = self._decide(state, {"piece": {
+            "type": "choice", "criteria": options,
+            "instructions": "Which piece should play next on this endless chill-music live stream? It should "
+                            "feel related to, but different from, the previous piece and fit the stream theme.",
+        }})
+        if not answers:
+            return None
+        pick = answers["piece"]
+        self.log(f"[Director] Jev picked {options[pick['choice']]} (confidence {pick.get('confidence', 0):.2f})")
+        return candidates[pick["choice"]].to_dict()
+
+    def _jev_arrangement(self, piece: Piece, index: int, current: Arrangement | None, avoid: dict) -> dict | None:
+        """One batched Jev call: a preset (or silence) for every role, plus the melody character."""
+        section = piece.sections[index]
+        questions = {}
+        for role in P.ENERGY_ORDER:
+            criteria = {name: preset.description for name, preset in P.PRESETS[role].items()
+                        if name not in avoid["presets"]}
+            criteria["silent"] = f"no {role} in this section"
+            questions[role] = {"type": "choice", "criteria": criteria,
+                               "instructions": f"Which {role} preset should play in the next section? "
+                                               f"'silent' leaves the {role} out."}
+        questions["melody_character"] = {
+            "type": "choice", "instructions": "How should the melody move in the next section?",
+            "criteria": {"sparse": "few notes, lots of space", "flowing": "smooth, connected phrases",
+                         "lively": "busier and more rhythmic"},
+        }
+        state = {
+            "piece": _describe_piece(piece),
+            "next_section": f"{section.name}, energy {section.energy} on a 0-1 scale, {section.bars} bars, "
+                            f"section {index + 1} of {len(piece.sections)}",
+            "currently_playing": {r: p for r, p in (current.layers if current else {}).items() if p} or "nothing",
+            f"presets_that_suit_{piece.style}": STYLES[piece.style]["presets"],
+            "guidelines": [
+                f"Energy 0.1-0.3: 1-3 layers (pad, texture, maybe bass); 0.4-0.6: 3-5 layers; "
+                f"0.7-0.9: 5-{self.max_layers} layers. Never more than {self.max_layers}.",
+                "A breakdown removes layers suddenly (contrast); an outro thins out.",
+                "Prefer continuity: change at most 2 presets from what is playing, "
+                "unless the section type changes dramatically.",
+            ],
+        }
+        answers = self._decide(state, questions)
+        if not answers:
+            return None
+        return {"layers": {role: None if answers[role]["choice"] == "silent" else answers[role]["choice"]
+                           for role in P.ENERGY_ORDER},
+                "melody_character": answers["melody_character"]["choice"]}
+
+
+def _describe_piece(piece: Piece) -> str:
+    progression = PROGRESSIONS_BY_NAME[piece.progression]
+    return (f"{piece.style}, {piece.key}, {piece.bpm:.0f} BPM, progression {piece.progression} "
+            f"({progression.mood}), {piece.mood} mood")
 
 
 _TOKEN_RE = re.compile(r"^(~|_|-?\d)$")

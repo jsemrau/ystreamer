@@ -39,14 +39,19 @@ when started with another interpreter, and the tests refuse to run outside it.
 |---|---|---|
 | `claude` | Claude via the official Anthropic SDK (default `claude-opus-5`) | `ANTHROPIC_API_KEY` in `.env`, or `ant auth login` |
 | `local` (default) | local llama.cpp server (default `qwen-agentworld-35b`) | `LLAMA_SERVER_BIN`, `LLAMA_GGUF_MODEL`; started automatically |
-| `jevtypesafe` | [jevtypesafeai.com](https://jevtypesafeai.com/how-to-use) | `YS_JEV_API_BASE`, `YS_JEV_API_KEY`, `YS_JEV_API_STYLE` (`openai` or `json`) |
+| `jevtypesafe` | [Jev](https://jevtypesafeai.com/how-to-use) typed-decision API (default `jev-latest`) | `JEV_KEY` in `.env` (prepaid credits) |
 | `none` | deterministic director, no LLM | nothing |
 
 ```bash
 python orchestrator.py --llm claude --model claude-sonnet-5
 python orchestrator.py --llm local
-python orchestrator.py --llm jevtypesafe --model my-model
+python orchestrator.py --llm jevtypesafe --model jev-1.13.0   # pin a Jev version
 ```
+
+Jev doesn't write text; it answers typed questions by picking from the options it's given. So with
+`--llm jevtypesafe` the planner proposes several valid piece plans and Jev picks the next one, and
+each section's arrangement is one batched call: a preset (or silence) per role plus the melody
+character. `--free-layer` has no effect with Jev, because it can't write melodies.
 
 Claude requests enable the API's server-side refusal fallback (`fallbacks="default"`), so a declined request is retried on a fallback model instead of failing. Whatever the provider, a failed, slow or invalid answer just means the Director uses its deterministic plan for that decision.
 

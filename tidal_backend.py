@@ -788,12 +788,8 @@ def _build_model(model_id):
         # smolagents drives models through LiteLLM; its Anthropic route.
         return LiteLLMModel(model_id=f"anthropic/{model}", max_tokens=16000)
     if provider == "jevtypesafe":
-        return LiteLLMModel(
-            model_id=f"openai/{model}",
-            api_base=os.getenv("YS_JEV_API_BASE", ""),
-            api_key=os.getenv("YS_JEV_API_KEY", "") or "sk-no-key-required",
-            max_tokens=2048,
-        )
+        raise ValueError("Jev answers typed questions only; the legacy agent loop needs a text LLM "
+                         "(use --llm jevtypesafe without --legacy)")
     if provider == "local":
         model_id = f"local/{model}"
     if model_id.startswith("local/"):
