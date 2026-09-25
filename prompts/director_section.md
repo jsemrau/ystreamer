@@ -32,6 +32,10 @@ in the next section**.
 - `melody_character` is one of "sparse", "flowing", "lively" (or null).
 - Listener feedback says avoid: {avoid}
 - `reason`: one or two sentences, in plain words, on what you changed and why.
+- `narration`: ONE short sentence (under 20 words) a warm, intimate late-night
+  radio host would say softly as this section begins: how the music now feels.
+  No numbers, no technical words, no preset or instrument codes. Use null if
+  nothing needs saying.
 - Reply with ONE JSON object and nothing else.
 
 ## Reply format
@@ -40,5 +44,6 @@ in the next section**.
 {{"layers": {{"pad": "warm_pad", "texture": "vinyl", "bass": "sub", "keys": "rhodes",
               "drums": "lofi_kit", "melody": null, "arp": null}},
   "melody_character": "flowing",
-  "reason": "The build needs more drive, so the drums come in while the pad keeps the harmony steady."}}
+  "reason": "The build needs more drive, so the drums come in while the pad keeps the harmony steady.",
+  "narration": "Here comes a soft little pulse. Just let it carry you."}}
 ```

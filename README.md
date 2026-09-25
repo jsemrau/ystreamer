@@ -108,6 +108,37 @@ Every decision prints in the terminal with the model's reason:
 - Sections are planned one section ahead, so a "Next section" line appears
   while the current section is still playing.
 
+## Spoken narration
+
+The Director's listener-facing lines are read aloud in a warm, low,
+intimate late-night radio voice, and shown as a subtitle on the stream:
+
+```
+🗣  "Now playing: Velvet Harbor. Stay a little longer. Let the night slow down with you."
+🗣  "Here comes a soft little pulse. Just let it carry you."
+```
+
+- The LLM writes a separate `narration` sentence for listeners. The
+  technical `reason` stays in the terminal. Lines containing numbers,
+  preset names or jargon are never spoken.
+- Speech runs locally with [Piper](https://github.com/OHF-Voice/piper1-gpl).
+  The `warm` style lowers the pitch slightly, adds warmth and a close-mic feel,
+  and slows the delivery. The music dips a little while the voice speaks.
+- `install.sh` downloads the default voice. To do it by hand:
+  ```bash
+  ./venv/bin/python -m piper.download_voices en_GB-jenny_dioco-medium --download-dir voices
+  ```
+  Other voices to try (set `YS_TTS_VOICE=voices/<name>.onnx`):
+  `en_US-amy-medium`, `en_US-lessac-medium`, `en_US-ryan-high` (male),
+  `en_GB-alan-medium` (male). Browse and listen at
+  https://rhasspy.github.io/piper-samples/.
+- `--narrate sections|pieces|off` (or `YS_NARRATION`) sets how often it
+  speaks. `YS_VOICE_STYLE=calm` gives a cleaner, brighter voice. Speed,
+  loudness and the music dip are in `.env` (`YS_TTS_LENGTH_SCALE`,
+  `YS_NARRATION_VOLUME_DB`, `YS_NARRATION_DUCK`).
+- Only LLM-directed pieces have narration (plus "Now playing: <title>");
+  the built-in planner only announces titles.
+
 ## Going live on YouTube
 
 1. In YouTube Studio → **Go live** → **Stream**, copy the stream key into

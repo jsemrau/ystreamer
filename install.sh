@@ -31,6 +31,10 @@ echo 'Quarks.install("SuperDirt"); thisProcess.shutdown;' | sclang -D
 python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 
+# Voice for the spoken narration (warm British female; see README to change it)
+[[ -f voices/en_GB-jenny_dioco-medium.onnx ]] || \
+    ./venv/bin/python -m piper.download_voices en_GB-jenny_dioco-medium --download-dir voices
+
 # 3. Configuration
 [[ -f .env ]] || cp .env.example .env
 echo "Edit .env (stream key, model), then:"

@@ -82,6 +82,7 @@ class Piece:
     mood: str
     sections: list[Section]
     seed: int = 0
+    narration: str = ""  # spoken to listeners when the piece starts
 
     @property
     def cps(self) -> float:
@@ -100,7 +101,7 @@ class Piece:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Piece":
-        data = dict(data)
+        data = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         data["sections"] = [Section(**s) for s in data["sections"]]
         return cls(**data)
 
@@ -110,6 +111,7 @@ class Arrangement:
     layers: dict[str, str | None] = field(default_factory=dict)  # role -> preset name
     melody_character: str | None = None
     variation_seed: int = 0
+    narration: str = ""  # spoken to listeners when the section starts
 
     def active_roles(self) -> list[str]:
         return [r for r, p in self.layers.items() if p]
@@ -119,7 +121,7 @@ class Arrangement:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Arrangement":
-        return cls(**data)
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
 # ---------------------------------------------------------------------------

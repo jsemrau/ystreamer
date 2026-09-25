@@ -2,7 +2,8 @@
 # Stream the music to YouTube (or any RTMP endpoint) with a visual overlay.
 #
 # Video = background (image, looping video, or a plain colour) + live
-# waveform + "now playing" + the live Tidal code, both re-read every frame
+# waveform + "now playing" + the live Tidal code + the spoken narration as a
+# subtitle, all re-read every frame
 # from runtime/*.txt which the engine rewrites atomically.
 # Audio = ystream_sink.monitor -> limiter -> loudness normalised to -14 LUFS.
 #
@@ -20,6 +21,7 @@ RUNTIME="${YS_RUNTIME_DIR:-$REPO/runtime}"
 mkdir -p "$RUNTIME"
 [[ -f "$RUNTIME/now_playing.txt" ]] || echo "starting..." > "$RUNTIME/now_playing.txt"
 [[ -f "$RUNTIME/code.txt" ]] || echo "" > "$RUNTIME/code.txt"
+[[ -f "$RUNTIME/narration.txt" ]] || echo "" > "$RUNTIME/narration.txt"
 
 if [[ -n "${YS_STREAM_URL:-}" ]]; then
     TARGET="$YS_STREAM_URL"
@@ -63,7 +65,10 @@ FILTER="\
 [v1]drawtext=fontfile=${FONT}:textfile=${RUNTIME}/now_playing.txt:reload=1:expansion=none:\
 fontsize=$(( H / 24 )):fontcolor=0xF4EEE4:x=40:y=36:shadowcolor=black@0.6:shadowx=2:shadowy=2[v2];\
 [v2]drawtext=fontfile=${MONO}:textfile=${RUNTIME}/code.txt:reload=1:expansion=none:\
-fontsize=$(( H / 48 )):line_spacing=4:fontcolor=0xCFC6B8@0.75:x=40:y=$(( H / 24 + 60 ))[vout]"
+fontsize=$(( H / 48 )):line_spacing=4:fontcolor=0xCFC6B8@0.75:x=40:y=$(( H / 24 + 60 ))[v3];\
+[v3]drawtext=fontfile=${FONT}:textfile=${RUNTIME}/narration.txt:reload=1:expansion=none:\
+fontsize=$(( H / 30 )):fontcolor=0xF4EEE4@0.9:x=(w-text_w)/2:y=H-${WAVE_H}-$(( H / 10 )):\
+shadowcolor=black@0.7:shadowx=2:shadowy=2[vout]"
 
 run_once() {
     ffmpeg -hide_banner -loglevel warning -nostats \
