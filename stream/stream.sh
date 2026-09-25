@@ -17,6 +17,17 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Load .env when run by hand (systemd already provides it). Values are read
+# literally (no shell evaluation), and variables already set win.
+if [[ -f "$REPO/.env" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+        key="${BASH_REMATCH[1]}"; value="${BASH_REMATCH[2]}"
+        value="${value%\"}"; value="${value#\"}"; value="${value%\'}"; value="${value#\'}"
+        [[ -z "${!key+x}" ]] && export "$key=$value"
+    done < "$REPO/.env"
+fi
 RUNTIME="${YS_RUNTIME_DIR:-$REPO/runtime}"
 mkdir -p "$RUNTIME"
 [[ -f "$RUNTIME/now_playing.txt" ]] || echo "starting..." > "$RUNTIME/now_playing.txt"
