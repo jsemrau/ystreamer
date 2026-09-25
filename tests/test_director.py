@@ -85,3 +85,32 @@ def test_feedback_steers_away_from_disliked_progressions():
     director = D.Director(None, random.Random(0), style="lofi")
     for _ in range(10):
         assert director.next_piece(None).progression != piece.progression
+
+
+def test_director_shows_its_reasons(monkeypatch, isolated_runtime):
+    replies = iter([
+        json.dumps({"title": "Night Ferry", "style": "lofi", "key": "D minor", "bpm": 80,
+                    "progression": "i-VI-III-VII", "mood": "late-night",
+                    "reason": "Relative minor of the last piece, a bit slower."}),
+        json.dumps({"layers": {"pad": "warm_pad", "drums": "lofi_kit"}, "melody_character": "sparse",
+                    "reason": "Drums enter to lift the verse."}),
+    ])
+    monkeypatch.setattr(llm, "complete", lambda *a, **k: next(replies))
+    logs = []
+    director = D.Director("fake/model", random.Random(1), log=logs.append, show_llm=True)
+    piece = director.next_piece(None)
+    director.arrange_section(piece, 1, None)
+    text = "\n".join(logs)
+    assert "raw reply" in text
+    assert "🧠 Next piece: 'Night Ferry'" in text and "Relative minor" in text
+    assert "🧠 Next section" in text and "Drums enter" in text
+    thoughts = (isolated_runtime / "thoughts.log").read_text()
+    assert "Night Ferry" in thoughts and "Drums enter" in thoughts
+
+
+def test_planner_decisions_are_labelled(isolated_runtime):
+    logs = []
+    director = D.Director(None, random.Random(1), log=logs.append)
+    piece = director.next_piece(None)
+    director.arrange_section(piece, 0, None)
+    assert any("built-in planner" in line for line in logs)

@@ -31,6 +31,7 @@ in the next section**.
   unless the section type changes dramatically.
 - `melody_character` is one of "sparse", "flowing", "lively" (or null).
 - Listener feedback says avoid: {avoid}
+- `reason`: one or two sentences, in plain words, on what you changed and why.
 - Reply with ONE JSON object and nothing else.
 
 ## Reply format
@@ -38,5 +39,6 @@ in the next section**.
 ```json
 {{"layers": {{"pad": "warm_pad", "texture": "vinyl", "bass": "sub", "keys": "rhodes",
               "drums": "lofi_kit", "melody": null, "arp": null}},
-  "melody_character": "flowing"}}
+  "melody_character": "flowing",
+  "reason": "The build needs more drive, so the drums come in while the pad keeps the harmony steady."}}
 ```

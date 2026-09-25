@@ -12,11 +12,12 @@ import json
 import os
 import random
 import re
+import time
 from collections import deque
 
 import config
 
-from . import feedback, llm
+from . import feedback, llm, runtime
 from . import presets as P
 from .melody import STEPS_PER_CYCLE
 from .plan import (Arrangement, Piece, Section, arrange, describe_options, plan_piece,
@@ -35,8 +36,10 @@ class Director:
     def __init__(self, model_id: str | None, rng: random.Random, log=print,
                  theme: str = "chill music to relax, study and sleep to",
                  target_minutes: float = 12.0, max_layers: int = config.MAX_ACTIVE_LAYERS,
-                 style: str | None = None):
+                 style: str | None = None, show_llm: bool = False):
         self.model_id = model_id
+        # Also print the model's full raw reply (--show-llm).
+        self.show_llm = show_llm
         self.rng = rng
         self.log = log
         self.theme = theme
@@ -59,11 +62,15 @@ class Director:
             return False
         return True
 
-    def _ask(self, system: str, user: str) -> dict | None:
+    def _ask(self, kind: str, system: str, user: str) -> dict | None:
+        started = time.monotonic()
         try:
             reply = llm.complete(self.model_id, system, user)
+            if self.show_llm:
+                self.log(f"[Director/{kind}] raw reply ({time.monotonic() - started:.1f}s):\n{reply.strip()}")
             data = llm.extract_json(reply)
             self.consecutive_failures = 0
+            data["_seconds"] = time.monotonic() - started
             return data
         except llm.LLMError as e:
             self.consecutive_failures += 1
@@ -73,6 +80,25 @@ class Director:
                 self.consecutive_failures = 0
                 self.log("[Director] too many LLM failures; skipping the next 5 LLM calls")
             return None
+
+    def _think(self, what: str, decision: str, data: dict) -> None:
+        """Show what the model decided and, if it said, why."""
+        reason = data.get("reason")
+        reason = " ".join(str(reason).split())[:400] if reason else ""
+        line = f"🧠 {what}: {decision}"
+        if reason:
+            line += f'\n   "{reason}"'
+        line += f"  ({data.get('_seconds', 0):.1f}s)"
+        self.log(line)
+        runtime.append_thought(line.replace("\n   ", "  | "))
+
+    def _planner_note(self, piece: Piece, index: int, arrangement: Arrangement) -> None:
+        section = piece.sections[index]
+        layers = ", ".join(f"{r}={p}" for r, p in arrangement.layers.items() if p)
+        line = (f"🎛  Next section ({section.name} {index + 1}/{len(piece.sections)}, energy {section.energy}) "
+                f"by the built-in planner: {layers}")
+        self.log(line)
+        runtime.append_thought(line)
 
     # -- decisions -------------------------------------------------------------
 
@@ -92,7 +118,7 @@ class Director:
                 avoid=", ".join(sorted(avoid["progressions"] | avoid["presets"])) or "nothing",
                 theme=self.theme,
             )
-            data = self._ask("You are a concise music director. Reply with JSON only.", prompt)
+            data = self._ask("piece", "You are a concise music director. Reply with JSON only.", prompt)
             if data:
                 piece, notes = validate_piece(data, fallback, self.target_minutes)
                 if self.style and piece.style != self.style:
@@ -106,6 +132,8 @@ class Director:
                         piece.key = fallback.key
                 if notes:
                     self.log(f"[Director] corrected LLM piece plan: {'; '.join(notes)}")
+                self._think("Next piece", f"'{piece.title}', {piece.style}, {piece.key}, {piece.bpm:.0f} BPM, "
+                                          f"{piece.progression}, {piece.mood}", data)
         self.recent_progressions.append(piece.progression)
         return piece
 
@@ -119,6 +147,7 @@ class Director:
                 alternatives = [n for n in P.names(role) if n not in avoid["presets"]]
                 fallback.layers[role] = alternatives[0] if alternatives else name
         if not self._llm_available():
+            self._planner_note(piece, index, fallback)
             return fallback
         prompt = _load_prompt("director_section.md").format(
             piece=json.dumps({k: v for k, v in piece.to_dict().items() if k != "sections"}),
@@ -129,8 +158,9 @@ class Director:
             max_layers=self.max_layers,
             avoid=", ".join(sorted(avoid["presets"])) or "nothing",
         )
-        data = self._ask("You are a concise music arranger. Reply with JSON only.", prompt)
+        data = self._ask("section", "You are a concise music arranger. Reply with JSON only.", prompt)
         if not data:
+            self._planner_note(piece, index, fallback)
             return fallback
         arrangement, notes = validate_arrangement(data, piece, fallback, self.max_layers)
         for role, name in arrangement.layers.items():
@@ -140,6 +170,10 @@ class Director:
         if notes:
             self.log(f"[Director] corrected LLM arrangement: {'; '.join(notes)}")
         arrangement.variation_seed = fallback.variation_seed
+        layers = ", ".join(f"{r}={p}" for r, p in arrangement.layers.items() if p) or "silence"
+        character = f", melody {arrangement.melody_character}" if arrangement.melody_character else ""
+        self._think(f"Next section ({section.name} {index + 1}/{len(piece.sections)}, energy {section.energy})",
+                    layers + character, data)
         return arrangement
 
     def compose_free_layer(self, piece: Piece, section: Section) -> list[str] | None:
@@ -151,12 +185,14 @@ class Director:
             key=piece.key, progression=piece.progression, cycles=cycles, mood=piece.mood,
             section=section.name, energy=section.energy,
         )
-        data = self._ask("You are a concise composer. Reply with JSON only.", prompt)
+        data = self._ask("free", "You are a concise composer. Reply with JSON only.", prompt)
         if not data:
             return None
         try:
-            return degrees_to_cycles(data.get("cycles"), Key.parse(piece.key), cycles,
-                                     low=P.PRESETS["free"]["free_glass"].register[0])
+            result = degrees_to_cycles(data.get("cycles"), Key.parse(piece.key), cycles,
+                                       low=P.PRESETS["free"]["free_glass"].register[0])
+            self._think(f"Counter-melody ({section.name})", " | ".join(data["cycles"]), data)
+            return result
         except ValueError as e:
             self.log(f"[Director] free layer rejected: {e}")
             return None

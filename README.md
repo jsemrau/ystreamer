@@ -47,6 +47,23 @@ python orchestrator.py --llm jevtypesafe --model my-model
 
 Claude requests enable the API's server-side refusal fallback (`fallbacks="default"`), so a declined request is retried on a fallback model instead of failing. Whatever the provider, a failed, slow or invalid answer just means the Director uses its deterministic plan for that decision.
 
+## Watching the Director think
+
+Every decision prints in the terminal with the model's reason:
+
+```
+🧠 Next piece: 'Night Ferry', lofi, D minor, 80 BPM, i-VI-III-VII, late-night
+   "Relative minor of the last piece keeps the warmth but feels more intimate."  (4.2s)
+🧠 Next section (verse 2/8, energy 0.45): pad=warm_pad, texture=vinyl, bass=sub, keys=rhodes, melody sparse
+   "Bass and keys come in to ground the verse; the melody stays sparse."  (2.8s)
+🎛  Next section (build 3/8, energy 0.6) by the built-in planner: ...   <- LLM was unavailable
+```
+
+- `--show-llm` also prints the model's full raw reply.
+- `tail -f runtime/thoughts.log` follows just the decisions, in a second terminal.
+- Sections are planned one section ahead, so a "Next section" line appears
+  while the current section is still playing.
+
 ## Going live on YouTube
 
 1. In YouTube Studio → **Go live** → **Stream**, copy the stream key into

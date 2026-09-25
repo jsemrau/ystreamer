@@ -19,7 +19,8 @@ Section: {section} (energy {energy}).
 Reply with ONE JSON object and nothing else:
 
 ```json
-{{"cycles": ["0 _ _ ~ 2 _ ~ ~", "4 _ _ _ 3 _ ~ ~", ...]}}
+{{"cycles": ["0 _ _ ~ 2 _ ~ ~", "4 _ _ _ 3 _ ~ ~", ...],
+  "reason": "A slow falling answer to the main melody, leaving space on the downbeats."}}
 ```
 
 The list must contain exactly {cycles} strings.

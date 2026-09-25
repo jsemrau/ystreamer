@@ -60,6 +60,8 @@ def parse_args():
     engine.add_argument("--director-model", default=os.getenv("YS_DIRECTOR_MODEL", ""),
                         help="Full model id, overrides --llm/--model (e.g. claude/claude-opus-5, "
                              "local/qwen-agentworld-35b, jevtypesafe/<model>, or any LiteLLM id).")
+    engine.add_argument("--show-llm", action="store_true",
+                        help="Also print the LLM's full raw replies (its decisions and reasons are always shown).")
     engine.add_argument("--style", choices=["lofi", "ambient", "downtempo", "piano"],
                         help="Lock the stream to one style (default: rotate).")
     engine.add_argument("--theme", default="chill music to relax, study and sleep to")
@@ -146,7 +148,7 @@ def build_director(args, rng):
         print(f"[orchestrator] Director LLM: {provider} / {model}")
     else:
         print("[orchestrator] Director LLM: none (deterministic director)")
-    return Director(model_id, rng, theme=args.theme,
+    return Director(model_id, rng, theme=args.theme, show_llm=args.show_llm,
                     target_minutes=args.piece_minutes, style=args.style)
 
 
