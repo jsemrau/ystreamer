@@ -3,6 +3,23 @@
 Goal: AI agents keep composing TidalCycles music that sounds good to people,
 and it runs forever as a YouTube live stream.
 
+> **Status: implemented (phases 0-5).** See the README for usage. Where each
+> phase lives:
+>
+> | Phase | Implementation |
+> |---|---|
+> | 0: quick wins | `music/normalize.py` (scale-root rewrite, key check, synth swaps), fixed prompts, `tidal_backend.py` (`--legacy`): crossfades, layer cap, timeouts, bounded histories; `config.py` + `.env.example` for paths |
+> | 1: harmony engine | `music/theory.py`, `music/templates.py`, `music/melody.py`, `music/presets.py` |
+> | 2: director redesign | `music/plan.py`, `music/director.py`, `music/engine.py`, `prompts/director_*.md`, `prompts/free_layer.md`, `music/validator.py` (GHCi `:t` checks) |
+> | 3: sound quality | `tidal/synthdefs.scd` (8 SynthDefs), `tidal/superdirt_boot.scd` (compressor + limiter) |
+> | 4: streaming and ops | `stream/stream.sh`, `stream/setup_audio.sh`, `stream/watchdog.py`, `stream/systemd/*`, `stream/install_services.sh`, `--resume` |
+> | 5: quality measurement | `eval/analyze.py`, `eval/monitor.py`, `eval/feedback.py`, `eval/preview.py`, `eval/export_dataset.py` |
+>
+> Not yet verified on real hardware: the generated Tidal code passed Python
+> tests but has not been type-checked against real Tidal in this environment
+> (run `orchestrator.py --selftest`). The SynthDefs and the PipeWire/JACK
+> routing have not been heard yet either.
+
 ---
 
 ## 1. Diagnosis: why it sounds bad today

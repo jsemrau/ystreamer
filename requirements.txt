@@ -1,8 +1,18 @@
-smolagents[litellm]
-ddgs
-smolagents[transformers]
-bitsandbytes 
-accelerate
+# Engine + Director (LLM calls go through LiteLLM)
+litellm
 python-dotenv
-pandas
 requests
+numpy
+
+# Legacy free-form agent loop (orchestrator.py --legacy)
+smolagents[litellm]
+
+# Development
+pytest
+
+# Only needed for the old local-model/dataset scripts (QwenTest.py, sample_gen.py)
+# smolagents[transformers]
+# bitsandbytes
+# accelerate
+# pandas
+# ddgs

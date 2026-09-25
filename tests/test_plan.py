@@ -1,7 +1,7 @@
 import random
 
 from music import presets as P
-from music.plan import (STYLES, Arrangement, arrange, plan_piece, validate_arrangement,
+from music.plan import (STYLES, arrange, plan_piece, validate_arrangement,
                         validate_piece, Piece)
 from music.theory import PROGRESSIONS_BY_NAME, Key
 

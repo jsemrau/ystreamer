@@ -40,3 +40,14 @@ You can edit these markdown files directly to modify the behavior of the AI agen
 - Test changes with the system to ensure agents behave as expected
 - Maintain the critical instructions about code formatting and output structure
 - Be specific about syntax requirements and examples
+
+## Engine-mode prompts (default)
+
+- `director_piece.md`: plans the next piece (title, style, key, BPM, progression, section arc) as JSON.
+- `director_section.md`: picks presets per layer role for the next section as JSON.
+- `free_layer.md`: optional LLM counter-melody, written as pentatonic scale degrees.
+
+The engine validates every answer (`music/plan.py`) and falls back to its
+deterministic planner whenever an answer is missing or invalid. The
+`composer_prompt.md` and `creative_director_prompt.md` prompts are only used
+by the legacy loop (`orchestrator.py --legacy`).

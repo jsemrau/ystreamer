@@ -1,0 +1,14 @@
+[Unit]
+Description=ystreamer: ffmpeg RTMP stream to YouTube
+After=ystreamer-engine.service
+Requires=ystreamer-audio.service
+
+[Service]
+WorkingDirectory=@REPO@
+EnvironmentFile=@REPO@/.env
+ExecStart=@REPO@/stream/stream.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
