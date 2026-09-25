@@ -142,3 +142,25 @@ def test_non_exception_errors_become_llm_errors(monkeypatch):
     monkeypatch.setattr(llm, "_openai_compatible", boom)
     with pytest.raises(llm.LLMError, match="Panic"):
         llm.complete("local", "sys", "user")
+
+
+def test_style_and_theme_from_env(monkeypatch):
+    import sys
+
+    import orchestrator
+
+    monkeypatch.setenv("YS_STYLE", "ambient")
+    monkeypatch.setenv("YS_THEME", "slow sunrise over the ocean, hopeful")
+    monkeypatch.setattr(sys, "argv", ["orchestrator.py"])
+    args = orchestrator.parse_args()
+    assert args.style == "ambient"
+    assert args.theme == "slow sunrise over the ocean, hopeful"
+
+    monkeypatch.setattr(sys, "argv", ["orchestrator.py", "--style", "lofi", "--theme", "rain"])
+    args = orchestrator.parse_args()
+    assert (args.style, args.theme) == ("lofi", "rain")
+
+    monkeypatch.setenv("YS_STYLE", "polka")
+    monkeypatch.setattr(sys, "argv", ["orchestrator.py"])
+    with pytest.raises(SystemExit):
+        orchestrator.parse_args()

@@ -45,6 +45,9 @@ class _Tee:
             stream.flush()
 
 
+STYLE_CHOICES = ["lofi", "ambient", "downtempo", "piano"]
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Endless AI-directed TidalCycles music.")
     parser.add_argument("prompt", nargs="?", help="Legacy mode: musical goal / initial tasks.")
@@ -62,9 +65,11 @@ def parse_args():
                              "local/qwen-agentworld-35b, jevtypesafe/<model>, or any LiteLLM id).")
     engine.add_argument("--show-llm", action="store_true",
                         help="Also print the LLM's full raw replies (its decisions and reasons are always shown).")
-    engine.add_argument("--style", choices=["lofi", "ambient", "downtempo", "piano"],
-                        help="Lock the stream to one style (default: rotate).")
-    engine.add_argument("--theme", default="chill music to relax, study and sleep to")
+    engine.add_argument("--style", choices=STYLE_CHOICES, default=os.getenv("YS_STYLE") or None,
+                        help="Lock the stream to one style (default: YS_STYLE, else rotate).")
+    engine.add_argument("--theme",
+                        default=os.getenv("YS_THEME") or "chill music to relax, study and sleep to",
+                        help="Free-text brief for the LLM Director (default: YS_THEME).")
     engine.add_argument("--piece-minutes", type=float, default=12.0)
     engine.add_argument("--free-layer", action="store_true",
                         help="Let the LLM compose one extra counter-melody layer (key-safe, type-checked).")
@@ -82,7 +87,10 @@ def parse_args():
     legacy.add_argument("--legacy-director-model", default="local/qwen-agentworld-35b")
     legacy.add_argument("--director-interval", type=int, default=config.LEGACY_DIRECTOR_INTERVAL)
     legacy.add_argument("--test-mode", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.style and args.style not in STYLE_CHOICES:  # defaults (YS_STYLE) aren't checked by argparse
+        parser.error(f"YS_STYLE={args.style!r} is not one of {', '.join(STYLE_CHOICES)}")
+    return args
 
 
 def setup_logging() -> str:
