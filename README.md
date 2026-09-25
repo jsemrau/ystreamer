@@ -158,6 +158,24 @@ intimate late-night radio voice, and shown as a subtitle on the stream:
 Run `loginctl enable-linger $USER` so the units keep running after you log out.
 Test the whole thing on an **unlisted** stream for a few days before going public.
 
+### Background image or video
+
+Set `YS_STREAM_BG` in `.env`:
+
+```bash
+YS_STREAM_BG=/home/you/Pictures/rainy-window.jpg   # still image: png, jpg, webp, bmp
+YS_STREAM_BG=/home/you/Videos/ocean-loop.mp4       # video: mp4, mov, webm, mkv (looped, its sound ignored)
+YS_STREAM_BG=/home/you/Pictures/lofi-room.gif      # animated gif (looped)
+```
+
+It's scaled to fill the frame and centre-cropped, so use the same aspect
+ratio as `YS_VIDEO_SIZE` (16:9) to avoid losing the edges. `YS_BG_DIM`
+(default 0.35) darkens it so the text stays readable, and `YS_BG_BLUR=8`
+gives a soft, out-of-focus look. For videos, a short seamless loop (10-60 s)
+works best, and a long, heavily compressed video costs more CPU. Restart
+the stream to apply changes (`systemctl --user restart ystreamer-stream`,
+or Ctrl+C and `stream/stream.sh`).
+
 ## Steering it
 
 ```bash

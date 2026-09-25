@@ -8,7 +8,9 @@
 # Audio = ystream_sink.monitor -> limiter -> loudness normalised to -14 LUFS.
 #
 # Required:   YT_STREAM_KEY           (or YS_STREAM_URL for any RTMP/file target)
-# Optional:   YS_STREAM_BG            image (.png/.jpg) or video (.mp4) background
+# Optional:   YS_STREAM_BG            background: image (png/jpg/webp), animated gif,
+#                                     or video (mp4/mov/webm/mkv, looped, sound ignored)
+#             YS_BG_DIM / YS_BG_BLUR  darken (0-1, default 0.35) / blur (pixels) the background
 #             YS_STREAM_SEGMENT_HOURS reconnect every N hours (default 11; YouTube
 #                                     stops archiving very long single sessions)
 #             YS_AUDIO_INPUT          ffmpeg audio input args (default: pulse sink monitor)
@@ -59,19 +61,38 @@ else
 fi
 
 BG="${YS_STREAM_BG:-}"
+BG_EXT="${BG##*.}"; BG_EXT="${BG_EXT,,}"   # lower-case, so .JPG from a phone works too
+if [[ -n "$BG" && ! -f "$BG" ]]; then
+    echo "YS_STREAM_BG not found: $BG (using a plain background)" >&2
+    BG=""
+fi
 if [[ -z "$BG" ]]; then
     BG_IN=(-f lavfi -i "color=c=0x14161f:s=${SIZE}:r=${FPS}")
-elif [[ "$BG" =~ \.(png|jpg|jpeg)$ ]]; then
-    BG_IN=(-loop 1 -framerate "$FPS" -i "$BG")
+elif [[ "$BG_EXT" =~ ^(png|jpg|jpeg|webp|bmp)$ ]]; then
+    BG_IN=(-loop 1 -framerate "$FPS" -i "$BG")          # still image
+elif [[ "$BG_EXT" == "gif" ]]; then
+    BG_IN=(-ignore_loop 0 -re -i "$BG")                 # animated GIF, looped
 else
-    BG_IN=(-stream_loop -1 -re -i "$BG")
+    BG_IN=(-stream_loop -1 -re -i "$BG")                # video (mp4, mov, webm, mkv...), looped, its audio ignored
+fi
+
+# Keep the overlay readable on busy/bright backgrounds: darken (YS_BG_DIM,
+# 0 = off, 1 = black; default 0.35) and optionally blur (YS_BG_BLUR, pixels).
+BG_LOOK=""
+if [[ -n "$BG" ]]; then
+    DIM="${YS_BG_DIM:-0.35}"
+    KEEP=$(awk -v d="$DIM" 'BEGIN { k = 1 - d; if (k < 0) k = 0; if (k > 1) k = 1; printf "%.3f", k }')
+    BG_LOOK=",colorchannelmixer=rr=${KEEP}:gg=${KEEP}:bb=${KEEP}"
+    if [[ "${YS_BG_BLUR:-0}" != "0" ]]; then
+        BG_LOOK="${BG_LOOK},boxblur=${YS_BG_BLUR}:1"
+    fi
 fi
 
 WAVE_H=$(( H / 5 ))
 FILTER="\
 [0:a]alimiter=limit=0.89:level=disabled,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,asplit=2[aout][awave];\
 [awave]showwaves=s=${W}x${WAVE_H}:mode=cline:rate=${FPS}:colors=0xE8DCC8@0.55[wave];\
-[1:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${FPS},format=yuv420p[bg];\
+[1:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${FPS}${BG_LOOK},format=yuv420p[bg];\
 [bg][wave]overlay=0:H-h-10[v1];\
 [v1]drawtext=fontfile=${FONT}:textfile=${RUNTIME}/now_playing.txt:reload=1:expansion=none:\
 fontsize=$(( H / 24 )):fontcolor=0xF4EEE4:x=40:y=36:shadowcolor=black@0.6:shadowx=2:shadowy=2[v2];\
