@@ -89,3 +89,56 @@ def test_orchestrator_model_selection():
     assert director_model_id(ns(llm="claude")) == "claude"
     assert director_model_id(ns(llm="claude", model="claude-sonnet-5")) == "claude/claude-sonnet-5"
     assert director_model_id(ns(llm="local", director_model="gpt-5-mini")) == "gpt-5-mini"
+
+
+def test_local_is_the_default_llm(monkeypatch):
+    import sys
+
+    import orchestrator
+
+    monkeypatch.delenv("YS_LLM", raising=False)
+    monkeypatch.setattr(sys, "argv", ["orchestrator.py"])
+    args = orchestrator.parse_args()
+    assert args.llm == "local"
+    assert orchestrator.director_model_id(args) == "local"
+    assert llm.resolve("local")[0] == "local"
+
+
+def test_local_uses_openai_compatible_http(monkeypatch):
+    import requests
+
+    seen = {}
+
+    def fake_post(url, headers, json, timeout):
+        seen.update(url=url, body=json)
+        return types.SimpleNamespace(status_code=200, text="",
+                                     json=lambda: {"choices": [{"message": {"content": '{"a": 1}'}}]})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    assert llm.complete("local", "sys", "user") == '{"a": 1}'
+    assert seen["url"].endswith("/v1/chat/completions")
+    assert seen["body"]["model"] == llm.DEFAULT_MODELS["local"]
+    assert seen["body"]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_unreachable_local_server_is_an_llm_error(monkeypatch):
+    import requests
+
+    def refuse(*a, **k):
+        raise requests.ConnectionError("refused")
+
+    monkeypatch.setattr(requests, "post", refuse)
+    with pytest.raises(llm.LLMError, match="cannot reach"):
+        llm.complete("local", "sys", "user")
+
+
+def test_non_exception_errors_become_llm_errors(monkeypatch):
+    class Panic(BaseException):
+        pass
+
+    def boom(*a, **k):
+        raise Panic("native crash")
+
+    monkeypatch.setattr(llm, "_openai_compatible", boom)
+    with pytest.raises(llm.LLMError, match="Panic"):
+        llm.complete("local", "sys", "user")

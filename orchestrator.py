@@ -6,11 +6,11 @@ Default mode runs the harmony engine forever: the Director (LLM or
 deterministic) plans pieces and sections, the engine renders in-key Tidal
 code and schedules it on phrase boundaries.
 
-    python orchestrator.py                                   # deterministic director
-    python orchestrator.py --llm claude --free-layer                 # Claude (Anthropic API)
-    python orchestrator.py --llm local                               # local llama.cpp model
-    python orchestrator.py --llm jevtypesafe                         # jevtypesafeai.com (see .env)
-    python orchestrator.py --llm claude --model claude-sonnet-5      # pick a specific model
+    python orchestrator.py                                   # local llama.cpp model (default)
+    python orchestrator.py --llm claude --free-layer         # Claude (Anthropic API)
+    python orchestrator.py --llm none                        # deterministic director, no LLM
+    python orchestrator.py --llm jevtypesafe                 # jevtypesafeai.com (see .env)
+    python orchestrator.py --llm claude --model claude-sonnet-5   # pick a specific model
     python orchestrator.py --resume                          # continue after a crash
     python orchestrator.py --dry-run --pieces 1              # print code, no audio
     python orchestrator.py --selftest                        # type-check all templates with GHCi
@@ -53,8 +53,8 @@ def parse_args():
 
     engine = parser.add_argument_group("engine mode")
     engine.add_argument("--llm", choices=["none", "claude", "local", "jevtypesafe"],
-                        default=os.getenv("YS_LLM", "none"),
-                        help="Which LLM directs the music (default from YS_LLM; 'none' = deterministic director).")
+                        default=os.getenv("YS_LLM", "local"),
+                        help="Which LLM directs the music (default: local, or YS_LLM; 'none' = deterministic director).")
     engine.add_argument("--model", default=os.getenv("YS_LLM_MODEL", ""),
                         help="Model name for the chosen --llm (default: that provider's default model).")
     engine.add_argument("--director-model", default=os.getenv("YS_DIRECTOR_MODEL", ""),

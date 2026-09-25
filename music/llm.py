@@ -3,7 +3,8 @@ LLM client for the Director, with three selectable providers:
 
 - claude      : Anthropic's Claude via the official `anthropic` SDK
                 (needs ANTHROPIC_API_KEY or an `ant auth login` profile)
-- local       : a local llama.cpp server (OpenAI-compatible, LOCAL_LLM_API_BASE)
+- local       : a local llama.cpp server (OpenAI-compatible, LOCAL_LLM_API_BASE),
+                called with plain HTTP so it needs no extra packages
 - jevtypesafe : jevtypesafeai.com (endpoint/key/style configured in .env)
 
 Model ids are "<provider>/<model>", e.g. "claude/claude-opus-5",
@@ -95,19 +96,32 @@ def _claude(model: str, system: str, user: str, timeout: float, max_tokens: int)
 
 def _openai_compatible(model: str, api_base: str, api_key: str, system: str, user: str, timeout: float,
                        max_tokens: int, temperature: float, extra_body: dict | None = None) -> str:
-    import litellm
+    """POST to an OpenAI-compatible /chat/completions endpoint (llama.cpp, vLLM, ...)."""
+    import requests
 
-    response = litellm.completion(
-        model=f"openai/{model}",
-        api_base=api_base,
-        api_key=api_key or "sk-no-key-required",
-        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-        max_tokens=max_tokens,
-        temperature=temperature,
-        timeout=timeout,
-        **({"extra_body": extra_body} if extra_body else {}),
-    )
-    return response.choices[0].message.content or ""
+    url = api_base.rstrip("/")
+    if not url.endswith("/chat/completions"):
+        url += "/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    body = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        **(extra_body or {}),
+    }
+    try:
+        resp = requests.post(url, headers=headers, json=body, timeout=timeout)
+    except requests.RequestException as e:
+        raise LLMError(f"cannot reach {url}: {e}") from e
+    if resp.status_code >= 400:
+        raise LLMError(f"HTTP {resp.status_code} from {url}: {resp.text[:300]}")
+    try:
+        return resp.json()["choices"][0]["message"]["content"] or ""
+    except (ValueError, KeyError, IndexError, TypeError) as e:
+        raise LLMError(f"unexpected reply from {url}: {resp.text[:300]}") from e
 
 
 def _jevtypesafe(model: str, system: str, user: str, timeout: float, max_tokens: int, temperature: float) -> str:
@@ -172,8 +186,10 @@ def complete(model_id: str, system: str, user: str, timeout: float | None = None
         raise LLMError(f"{provider} call timed out after {timeout:.0f}s") from e
     except LLMError:
         raise
-    except Exception as e:  # network, auth, bad model id...
-        raise LLMError(f"{provider} call failed: {e}") from e
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as e:  # network, auth, bad model id, even native-extension panics
+        raise LLMError(f"{provider} call failed: {type(e).__name__}: {e}") from e
 
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)

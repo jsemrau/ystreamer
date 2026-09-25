@@ -24,18 +24,18 @@ behind the design.
 ./venv/bin/python -m eval.preview --style lofi --out preview.wav   # rough audio sketch, no SuperCollider
 
 stream/setup_audio.sh --monitor               # create the stream sink and listen to it
-./venv/bin/python orchestrator.py             # play forever (deterministic director)
+./venv/bin/python orchestrator.py             # play forever, directed by the local model (default)
 ./venv/bin/python orchestrator.py --llm claude --free-layer
 ```
 
 ## Choosing the LLM
 
-`--llm` (or `YS_LLM` in `.env`) picks who directs the music. `--model` overrides the provider's default model.
+`--llm` (or `YS_LLM` in `.env`) picks who directs the music. The default is `local`. `--model` overrides the provider's default model.
 
 | `--llm` | Provider | Setup |
 |---|---|---|
 | `claude` | Claude via the official Anthropic SDK (default `claude-opus-5`) | `ANTHROPIC_API_KEY` in `.env`, or `ant auth login` |
-| `local` | local llama.cpp server (default `qwen-agentworld-35b`) | `LLAMA_SERVER_BIN`, `LLAMA_GGUF_MODEL`; started automatically |
+| `local` (default) | local llama.cpp server (default `qwen-agentworld-35b`) | `LLAMA_SERVER_BIN`, `LLAMA_GGUF_MODEL`; started automatically |
 | `jevtypesafe` | [jevtypesafeai.com](https://jevtypesafeai.com/how-to-use) | `YS_JEV_API_BASE`, `YS_JEV_API_KEY`, `YS_JEV_API_STYLE` (`openai` or `json`) |
 | `none` | deterministic director, no LLM | nothing |
 

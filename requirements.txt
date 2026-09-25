@@ -1,6 +1,6 @@
 # Engine + Director
 anthropic     # Claude provider (official SDK)
-litellm       # local llama.cpp / jevtypesafe (OpenAI-compatible) / other providers
+litellm       # only for other LiteLLM model ids (gpt-5-mini, ollama/...)
 python-dotenv
 requests
 numpy
