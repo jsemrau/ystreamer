@@ -9,7 +9,8 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHON="${PYTHON:-$(command -v python3)}"
+if [[ -x "$REPO/venv/bin/python" ]]; then DEFAULT_PY="$REPO/venv/bin/python"; else DEFAULT_PY="$(command -v python3)"; fi
+PYTHON="${PYTHON:-$DEFAULT_PY}"
 DEST="$HOME/.config/systemd/user"
 mkdir -p "$DEST"
 
