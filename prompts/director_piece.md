@@ -30,6 +30,8 @@ that was used recently.
   `bars` (a multiple of 8, 8-64) and `energy` (0.05-1.0). Start low (intro),
   rise, contrast with a breakdown, and end low (outro). Chill music: peak
   energy about 0.8, never several peaks in a row.
+- `reason`: one or two sentences, in plain words, on why this piece follows
+  the previous one well (key, tempo, mood). It is shown to the audience.
 - Reply with ONE JSON object and nothing else.
 
 ## Reply format
@@ -37,5 +39,6 @@ that was used recently.
 ```json
 {{"title": "Two or three evocative words", "style": "lofi", "key": "D minor", "bpm": 78,
   "progression": "i-VI-III-VII", "mood": "late-night, cozy",
-  "sections": [{{"name": "intro", "bars": 16, "energy": 0.2}}, {{"name": "verse", "bars": 32, "energy": 0.45}}]}}
+  "sections": [{{"name": "intro", "bars": 16, "energy": 0.2}}, {{"name": "verse", "bars": 32, "energy": 0.45}}],
+  "reason": "Moving to the relative minor keeps the warmth of the last piece but makes it more intimate."}}
 ```

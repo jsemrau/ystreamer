@@ -7,6 +7,7 @@ Runtime files shared with the streaming/ops side:
 - now_playing.txt : overlay text for ffmpeg drawtext
 - code.txt        : the live Tidal code, for the overlay
 - heartbeat       : unix timestamp, touched while the engine is healthy
+- thoughts.log    : what the Director decided and why (human-readable)
 """
 
 from __future__ import annotations
@@ -69,6 +70,21 @@ def write_overlay(now_playing: str, code_lines: list[str], width: int = 110, max
     # drawtext treats '%' specially when expansion is on; the stream script
     # disables expansion, but strip it anyway to be safe.
     atomic_write(_path("code.txt"), "\n".join(wrapped).replace("%", "") + "\n")
+
+
+def append_thought(line: str) -> None:
+    """Human-readable Director log for `tail -f runtime/thoughts.log`."""
+    path = _path("thoughts.log")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"{time.strftime('%H:%M:%S')}  {line}\n")
+    try:
+        if os.path.getsize(path) > 2_000_000:
+            with open(path, encoding="utf-8") as f:
+                lines = f.readlines()[-2000:]
+            atomic_write(path, "".join(lines))
+    except OSError:
+        pass
 
 
 def heartbeat() -> None:
