@@ -370,19 +370,132 @@ def local_llm_status() -> str:
         return "down"
 
 
+_llama_process: subprocess.Popen | None = None
+
+# llama-server log lines -> loading stage shown to the user. The last log line
+# that matches wins; within a line, the more specific needle (listed first) wins.
+_LLAMA_STAGES = [
+    ("server is listening", "listening"),
+    ("warming up", "warming up"),
+    ("kv_self", "allocating the KV cache"),
+    ("kv cache", "allocating the KV cache"),
+    ("llama_context", "creating the context"),
+    ("offloaded", None),                      # "offloaded 65/65 layers to GPU", shown as is
+    ("load_tensors", "loading weights"),
+    ("loaded meta data", "reading model metadata"),
+]
+
+
+def _llama_pid() -> int | None:
+    """PID of the running llama-server (ours, or one started earlier)."""
+    if _llama_process is not None and _llama_process.poll() is None:
+        return _llama_process.pid
+    name = os.path.basename(config.LLAMA_SERVER_BIN or "llama-server")
+    try:
+        pids = [int(p) for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
+        return None
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                argv0 = f.read().split(b"\0", 1)[0].decode(errors="replace")
+        except OSError:
+            continue
+        if os.path.basename(argv0) == name:
+            return pid
+    return None
+
+
+def _llama_bytes_loaded(pid: int) -> int | None:
+    """Bytes of the model the server has read so far: read() calls (rchar) or,
+    with the default mmap loading, the file pages it has touched (RssFile)."""
+    loaded = None
+    try:
+        with open(f"/proc/{pid}/io") as f:
+            for line in f:
+                if line.startswith("rchar:"):
+                    loaded = int(line.split()[1])
+    except (OSError, ValueError):
+        pass
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith("RssFile:"):
+                    rss = int(line.split()[1]) * 1024
+                    loaded = max(loaded or 0, rss)
+    except (OSError, ValueError):
+        pass
+    return loaded
+
+
+def _llama_stage(since: float) -> str | None:
+    """The loading stage from the tail of llama-server's log (if written since `since`)."""
+    path = config.LLAMA_SERVER_LOG
+    try:
+        if os.path.getmtime(path) < since:
+            return None
+        with open(path, "rb") as f:
+            f.seek(max(0, os.path.getsize(path) - 32768))
+            lines = f.read().decode(errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        low = line.lower()
+        for needle, label in _LLAMA_STAGES:
+            if needle in low:
+                if label is None:
+                    m = re.search(r"offloaded \d+/\d+ layers to GPU", line)
+                    return m.group(0) if m else "loading weights"
+                return label
+    return None
+
+
+def llama_load_progress(since: float) -> tuple[int | None, str]:
+    """(percent of the model file loaded or None, text like
+    '43% (7.1/16.5 GB) · loading weights')."""
+    parts = []
+    pct = None
+    pid = _llama_pid()
+    size = 0
+    if config.LLAMA_GGUF_MODEL and os.path.exists(config.LLAMA_GGUF_MODEL):
+        size = os.path.getsize(config.LLAMA_GGUF_MODEL)
+    loaded = _llama_bytes_loaded(pid) if pid else None
+    if size and loaded:
+        pct = min(100, int(100 * loaded / size))
+        parts.append(f"{pct}% ({min(loaded, size) / 1e9:.1f}/{size / 1e9:.1f} GB)")
+    stage = _llama_stage(since)
+    if stage:
+        parts.append(stage)
+    return pct, " · ".join(parts)
+
+
 def wait_for_local_llm(timeout: float) -> bool:
-    deadline = time.time() + timeout
+    started = time.time()
+    deadline = started + timeout
     announced = False
+    last_key, last_print = None, 0.0
+    # Log lines written shortly before we started waiting belong to this load
+    # (the server is launched while the audio stack boots).
+    log_since = started - 120
     while time.time() < deadline:
         status = local_llm_status()
         if status == "ready":
-            log("[llama-server] ready")
+            log(f"[llama-server] ready after {time.time() - started:.0f}s" if announced else "[llama-server] ready")
             return True
-        if status == "loading" and not announced:
-            log("[llama-server] loading the model, waiting...")
-            announced = True
+        if status == "loading":
+            if not announced:
+                log("[llama-server] loading the model, waiting...")
+                announced = True
+            pct, text = llama_load_progress(log_since)
+            now = time.time()
+            # A new line when the next 10% or the stage is reached, else every 15 s.
+            key = (None if pct is None else pct // 10, text.rsplit(" · ", 1)[-1])
+            if text and (key != last_key or now - last_print >= 15):
+                elapsed = int(now - started)
+                log(f"[llama-server] {text} · {elapsed // 60}:{elapsed % 60:02d}")
+                last_key, last_print = key, now
         time.sleep(2)
-    log(f"[llama-server] not ready after {timeout:.0f}s; the Director uses its built-in planner "
+    log(f"[llama-server] not ready after {timeout:.0f}s; the built-in performer plays "
         f"until it is (see {config.LLAMA_SERVER_LOG})")
     return False
 
@@ -409,7 +522,8 @@ def ensure_local_llm_server(wait: bool = True) -> None:
     os.makedirs(os.path.dirname(config.LLAMA_SERVER_LOG), exist_ok=True)
     log_file = open(config.LLAMA_SERVER_LOG, "a")
     try:
-        subprocess.Popen(
+        global _llama_process
+        _llama_process = subprocess.Popen(
             [config.LLAMA_SERVER_BIN, "-m", config.LLAMA_GGUF_MODEL, "-ngl", "999",
              "--port", "8080", "--ctx-size", "32768", "--parallel", "2"],
             stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True,
