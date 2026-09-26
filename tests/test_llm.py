@@ -214,3 +214,25 @@ def test_converse_logs_failures(monkeypatch):
     with pytest.raises(llm.LLMError):
         llm.converse("Director", "local/m", "sys", "p", log=lines.append)
     assert "✗ HTTP 503 from server" in lines[-1]
+
+
+def test_claude_request_shape_per_model(monkeypatch):
+    import types
+
+    from music import llm
+
+    calls = []
+    reply = types.SimpleNamespace(stop_reason="end_turn",
+                                  content=[types.SimpleNamespace(type="text", text='{"op": "mute"}')])
+
+    def create(**kw):
+        calls.append(kw)
+        return reply
+
+    client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create),
+                                   beta=types.SimpleNamespace(messages=types.SimpleNamespace(create=create)))
+    monkeypatch.setattr(llm, "_claude_client", types.SimpleNamespace(with_options=lambda **k: client))
+    assert llm._claude("claude-haiku-4-5", "sys", "hi", 30, 500) == '{"op": "mute"}'
+    assert "fallbacks" not in calls[-1] and "betas" not in calls[-1]
+    llm._claude("claude-opus-5", "sys", "hi", 30, 500)
+    assert calls[-1]["fallbacks"] == "default"
