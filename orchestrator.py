@@ -79,6 +79,9 @@ def parse_args():
     engine.add_argument("--theme",
                         default=os.getenv("YS_THEME") or "chill music to relax, study and sleep to",
                         help="Free-text brief for the LLM Director (default: YS_THEME).")
+    engine.add_argument("--edit-bars", type=int, default=int(os.getenv("YS_EDIT_BARS") or 0) or None,
+                        help="Live engine: bars between edits (default: YS_EDIT_BARS, else per style, "
+                             "8 for slow styles and 16 for club styles, about 20-30 s).")
     engine.add_argument("--piece-minutes", type=float, default=12.0)
     engine.add_argument("--free-layer", action="store_true",
                         help="Let the LLM compose one extra counter-melody layer (key-safe, type-checked).")
@@ -184,10 +187,19 @@ def _style_and_model(args, role: str) -> str | None:
 
 
 def build_performer(args, rng):
+    from music import llm
+    from music.director import Director
     from music.performer import Performer
 
     model_id = _style_and_model(args, "Performer")
-    return Performer(rng, style=args.style, model_id=model_id, theme=args.theme, show_llm=args.show_llm)
+    # The Director plans each track and writes its spoken intro; it needs a
+    # text model (jevtypesafe's decision API only chooses, so the built-in
+    # planner plans for it).
+    text_model = model_id and not (llm.resolve(model_id)[0] == "jevtypesafe" and llm.jev_style() == "decide")
+    director = Director(model_id if text_model else None, rng, theme=args.theme, show_llm=args.show_llm,
+                        target_minutes=args.piece_minutes, style=args.style)
+    return Performer(rng, style=args.style, model_id=model_id, theme=args.theme, show_llm=args.show_llm,
+                     edit_bars=args.edit_bars, director=director)
 
 
 def build_director(args, rng):

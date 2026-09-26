@@ -244,6 +244,21 @@ gated saw and supersaw lead.
 
 Without `--style` the stream rotates between lofi, ambient, downtempo and piano, one style per track.
 
+Three agents take part in the live engine:
+
+- **Director:** plans each track (key, tempo, progression, mood, title),
+  shown as `🧠 Next piece: ...` with its reason. Its spoken intro plays when
+  the track starts.
+- **Performer:** makes one edit every `--edit-bars` bars (default: 8 bars
+  for the slow styles, 16 for the club styles, about 20-30 s; set
+  `YS_EDIT_BARS` in `.env` to change it).
+- **Narrator:** at each turn of the arc (`🧭 Arc: groove → breakdown`),
+  writes one warm spoken line about the moment, in the background so the
+  music never waits.
+
+With jevtypesafe (a decision API, no text), the built-in planner plans the
+tracks and the Narrator uses hand-written lines for each moment.
+
 ## How a piece develops (arranger engine)
 
 A piece is about 10-20 minutes long and moves through intro, verse, build,
