@@ -417,14 +417,59 @@ intimate late-night radio voice, and shown as a subtitle on the stream:
 | `ystreamer-audio` | creates the `ystream_sink` PipeWire sink the stream captures from |
 | `ystreamer-llm` | local llama.cpp server for the Director (skip with `--no-llm`) |
 | `ystreamer-engine` | SuperDirt + Tidal + engine, `--resume`s the saved piece after any restart |
-| `ystreamer-stream` | ffmpeg: limiter → -14 LUFS → RTMP, waveform + now-playing + live-code overlay, reconnects every 11 h |
+| `ystreamer-stream` | the stream page (below) captured at 1080p30, limiter → -14 LUFS → RTMP, reconnects every 11 h |
 | `ystreamer-watchdog` | restarts the engine on sustained silence or a stale heartbeat, sends a push via ntfy |
 | `ystreamer-quality` | every 10 min: loudness, clipping and key-conformance check on a clip; bad harmony → automatic thumbs-down |
 
 Run `loginctl enable-linger $USER` so the units keep running after you log out.
 Test the whole thing on an **unlisted** stream for a few days before going public.
 
-### Background image or video
+### The stream page
+
+What viewers see is a web page, `stream/ui/`, rendered by Chromium in a
+virtual display (Xvfb) and captured by ffmpeg:
+
+- **Top:** LIVE badge, channel name, track title, style / key / BPM / mood,
+  and the track's arc (build → groove → breakdown → rebuild → peak → outro).
+- **Left, the artefact:** the live Tidal program, syntax-highlighted. The
+  line just edited types itself in and glows, muted lines are struck
+  through, and the reason for the last move is shown as a `--` comment.
+- **Right, the agents:** a card for every decision as it happens. The
+  Performer shows what it hears, the move and why (tagged AI, AI · judged or
+  built-in). The Judge shows all options with its probabilities, revealing
+  after the choice which were the AI's and which random. The Director shows
+  its track plan and reason, the Narrator its line, the arc its turns.
+  "Performer is thinking with qwen…" shows while a model works.
+- **Bottom:** the narration as a subtitle, and live stats (AI edits,
+  how often the judge prefers the AI).
+- **Behind it:** a beat-synced visual per style, driven by the engine's
+  clock and calmer in breakdowns: darkwave ridgelines, techno and house
+  grids, a trance tunnel, rain for lofi and downtempo, an aurora for ambient
+  and piano.
+
+Preview it while the engine runs (or after a `--dry-run`):
+
+```bash
+./venv/bin/python -m stream.ui_server      # then open http://127.0.0.1:8765
+```
+
+`stream/stream.sh` uses this look automatically when Xvfb and Chromium are
+installed (`install.sh` sets them up); `YS_STREAM_UI=overlay` gives the older
+ffmpeg-only look. Video is 1920x1080 at 4.5 Mbit/s by default
+(`YS_VIDEO_SIZE`, `YS_VIDEO_BITRATE`).
+
+**Thumbnail.** With the page server running:
+
+```bash
+./venv/bin/python -m stream.thumbnail                   # -> runtime/thumbnail.png (1280x720)
+./venv/bin/python -m stream.thumbnail --style darkwave  # a specific style's look
+```
+
+It renders the page's poster mode ("AI agents live-code music", the style's
+visual, the current track); upload it in YouTube Studio as the stream's
+thumbnail.
+
+### Background image or video (overlay look)
 
 Set `YS_STREAM_BG` in `.env`:
 

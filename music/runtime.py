@@ -8,6 +8,7 @@ Runtime files shared with the streaming/ops side:
 - code.txt        : the live Tidal code, for the overlay
 - heartbeat       : unix timestamp, touched while the engine is healthy
 - thoughts.log    : what the Director decided and why (human-readable)
+- ui.json         : what's playing + the latest agent decisions, for the stream page
 """
 
 from __future__ import annotations
@@ -100,6 +101,66 @@ def append_thought(line: str) -> None:
             atomic_write(path, "".join(lines))
     except OSError:
         pass
+
+
+# --------------------------------------------------------------- stream UI
+# runtime/ui.json: a snapshot of what's playing plus the latest agent events,
+# for the stream page (stream/ui). Written from several threads (engine,
+# performer, narrator), so it's guarded by a lock and replaced atomically.
+
+import threading
+from collections import deque
+
+_ui_lock = threading.Lock()
+_ui_state: dict = {"events": [], "thinking": {}}
+_ui_events: deque = deque(maxlen=40)
+_ui_seq = 0
+
+
+def _ui_flush() -> None:
+    _ui_state["events"] = list(_ui_events)
+    _ui_state["updated"] = time.time()
+    try:
+        atomic_write(_path("ui.json"), json.dumps(_ui_state, ensure_ascii=False))
+    except OSError:
+        pass
+
+
+def ui_update(**fields) -> None:
+    """Merge fields into the UI snapshot (track, code, phase, clock, stats, narration...)."""
+    with _ui_lock:
+        _ui_state.update(fields)
+        _ui_flush()
+
+
+def ui_event(agent: str, **data) -> None:
+    """An agent decision for the stream's feed (director, performer, judge, arc, narrator, track)."""
+    global _ui_seq
+    with _ui_lock:
+        _ui_seq += 1
+        _ui_events.append({"id": _ui_seq, "t": time.time(), "agent": agent, **data})
+        _ui_flush()
+
+
+def ui_thinking(agent: str, model: str | None) -> None:
+    """Mark an agent as waiting for its model (model=None when done)."""
+    with _ui_lock:
+        thinking = dict(_ui_state.get("thinking") or {})
+        if model:
+            thinking[agent] = {"model": model, "since": time.time()}
+        else:
+            thinking.pop(agent, None)
+        _ui_state["thinking"] = thinking
+        _ui_flush()
+
+
+def ui_reset() -> None:
+    with _ui_lock:
+        global _ui_seq
+        _ui_events.clear()
+        _ui_state.clear()
+        _ui_state.update({"events": [], "thinking": {}})
+        _ui_seq = 0
 
 
 def heartbeat() -> None:

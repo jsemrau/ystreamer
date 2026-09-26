@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 
 import config
 
-from . import llm
+from . import llm, runtime
 from .blocks import STYLE_SETTINGS, Block, blocks_for, find_block
 from .livecode import (ALL_WRAPPERS, BASS_WRAPPERS, CHOICE_SLOTS, DRUM_WRAPPERS, EDIT_OPS, FX_RANGES,
                        FX_NOTES, LOCKED_SLOTS, MELODIC_WRAPPERS, PF_RANGES, ROLE_CHANNELS, ROLE_FX,
@@ -193,6 +193,7 @@ class Performer:
         if st.phase != before:
             st.edits_in_phase = 0
             self.log(f"🧭 Arc: {before} → {st.phase} ({why})")
+            runtime.ui_event("arc", before=before, after=st.phase, why=why)
             if self.on_arc is not None:
                 self.on_arc(before, st.phase, why)
 
@@ -617,6 +618,11 @@ class Performer:
             self.stats["judge_llm" if from_llm else "judge_builtin"] += 1
             if "probabilities" in info:
                 self.judge_mass.append(sum(p for e, p in zip(pool, info["probabilities"]) if e.source == "LLM"))
+        probs = info.get("probabilities") or []
+        runtime.ui_event("judge", compared=compared, confidence=info.get("confidence"),
+                         chosen=pool.index(chosen), chosen_from="ai" if from_llm else "random",
+                         options=[{"text": e.describe(), "from": "ai" if e.source == "LLM" else "random",
+                                   "p": probs[i] if i < len(probs) else None} for i, e in enumerate(pool)])
         self.log(f"⚖️  Judge chose {'the LLM' if from_llm else 'a built-in'} idea "
                  f"({', '.join(detail + [f'from {len(proposals)} LLM + {len(builtin)} built-in'])}"
                  + ("" if compared else "; not a comparison") + ")" + (f": {why}" if why else ""))

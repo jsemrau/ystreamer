@@ -304,6 +304,7 @@ def converse(agent: str, model_id: str, system: str, user: str, *, log=print, as
     provider, model = resolve(model_id)
     who = f"{provider}/{model}"
     log(f"💬 {agent} → {who}: {asks or 'request'} ({len(user):,} chars)")
+    runtime.ui_thinking(agent, model)
     if show_full:
         log(f"   ┌─ prompt to {who}\n" + "\n".join(f"   │ {line}" for line in user.splitlines()) + "\n   └─")
     started = time.monotonic()
@@ -315,8 +316,10 @@ def converse(agent: str, model_id: str, system: str, user: str, *, log=print, as
         seconds = time.monotonic() - started
         log(f"💬 {agent} ← {who} ({seconds:.1f}s): ✗ {e}")
         runtime.append_llm_call({**record, "seconds": round(seconds, 2), "error": str(e)})
+        runtime.ui_thinking(agent, None)
         raise
     seconds = time.monotonic() - started
+    runtime.ui_thinking(agent, None)
     log(f"💬 {agent} ← {who} ({seconds:.1f}s): {_one_line(reply)}")
     if show_full:
         log("   ┌─ raw reply\n" + "\n".join(f"   │ {line}" for line in reply.strip().splitlines()) + "\n   └─")
@@ -354,6 +357,7 @@ def decide(agent: str, state: str, questions: dict, *, log=print, asks: str = ""
     timeout = timeout or config.LLM_TIMEOUT_SECONDS
     who = "jevtypesafe/decide"
     log(f"💬 {agent} → {who}: {asks or 'decision'} ({len(state):,} chars)")
+    runtime.ui_thinking(agent, "jevtypesafe")
     if show_full:
         log("   ┌─ state\n" + "\n".join(f"   │ {line}" for line in state.splitlines())
             + "\n   ├─ questions\n   │ " + json.dumps(questions) + "\n   └─")
@@ -381,8 +385,10 @@ def decide(agent: str, state: str, questions: dict, *, log=print, asks: str = ""
         seconds = time.monotonic() - started
         log(f"💬 {agent} ← {who} ({seconds:.1f}s): ✗ {e}")
         runtime.append_llm_call({**record, "seconds": round(seconds, 2), "error": str(e)})
+        runtime.ui_thinking(agent, None)
         raise
     seconds = time.monotonic() - started
+    runtime.ui_thinking(agent, None)
     log(f"💬 {agent} ← {who} ({seconds:.1f}s): {_one_line(json.dumps(answers))}")
     runtime.append_llm_call({**record, "seconds": round(seconds, 2), "reply": resp.text})
     return answers
