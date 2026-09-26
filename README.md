@@ -68,6 +68,17 @@ and a syncopated sub bass, and it opens with the groove rather than a pad.
 trance gate (`1 0 1 1 0 1 0 1`) with a sidechain-style pump and filter
 sweeps. Pieces go groove → breakdown (supersaw pad and lead) → build (roll,
 filter rise, kick drop) → drop, twice.
+
+The trance pad is a real trance gate: sustained supersaw chords chopped by
+an amplitude gate inside the synth (`ys_gatesaw`), not separate notes. The
+gate is remapped to 0…1 so "closed" really is silent, and `gatetime` (one
+bar in seconds) locks it to the tempo. It uses either a straight 16th
+chopper (`PulseDPW(freq, mul: 2).range(0, 1)`, or a smoothed `LFPulse`
+without sc3-plugins), or a stutter envelope built from a 16-step pattern and
+retriggered every bar with `Impulse`. Per section: classic `1011 0101` in
+the groove, the straight chopper in builds, a stutter pattern in the drop,
+and wide open in the breakdown. In Tidal it's
+`# pF "gatetime" 1.739 # pI "gatepat" 1 # pF "gatedepth" 1`.
 With `--style`, every piece stays in that style, including the LLM's
 choices. Without it, the style rotates between the chill styles (deep house
 only plays when asked for).

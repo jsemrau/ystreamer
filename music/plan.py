@@ -74,9 +74,9 @@ STYLES = {
         # After Switch Angel's live-coded trance: 138 BPM, four-on-the-floor,
         # rolling bass, gated supersaw arps, breakdown -> build -> drop.
         "bpm": (134, 140), "modes": ["minor"], "cycles_per_chord": 2,
-        "presets": {"pad": "saw_pad", "keys": "piano", "bass": "rolling_bass", "melody": "saw_lead",
+        "presets": {"pad": "gated_saw", "keys": "piano", "bass": "rolling_bass", "melody": "saw_lead",
                     "arp": "trance_gate", "drums": "trance_kit", "texture": "air"},
-        "palette": {"pad": ["saw_pad", "strings_pad", "choir_pad"], "keys": ["piano", "felt"],
+        "palette": {"pad": ["gated_saw", "gated_saw", "saw_pad", "strings_pad"], "keys": ["piano", "felt"],
                     "melody": ["saw_lead", "glass"]},
         "energy_order": ["drums", "bass", "arp", "pad", "texture", "melody", "keys"],
         "openers": [["drums", "bass"], ["drums", "arp"], ["arp", "drums"]],
