@@ -433,6 +433,11 @@ def run_engine(args) -> None:
     if resume_state and live != (resume_state.get("mode") == "live"):
         print("[orchestrator] saved state belongs to the other engine; starting fresh")
         resume_state = None
+    if resume_state and live and args.style and resume_state.get("style") not in (None, args.style):
+        # Never carry an old set's style into a session asked for another one.
+        print(f"[orchestrator] the saved track is {resume_state.get('style')}, but this session is {args.style}; "
+              "starting fresh")
+        resume_state = None
 
     worker = threading.Thread(target=engine.run, kwargs={"resume_state": resume_state}, daemon=True)
     worker.start()

@@ -452,7 +452,7 @@ and prints the end of `logs/stream.log`.
 |---|---|
 | stream page | served from the start on http://127.0.0.1:8765: open it in a browser to see what the stream shows (video only), even before YouTube is set up (log: `logs/ui.log`) |
 | audio sink | `stream/setup_audio.sh` creates the `ystream_sink` the stream captures from |
-| engine | `orchestrator.py --resume --llm local --judge jevtypesafe`; restarted if it stops, resuming the saved track |
+| engine | `orchestrator.py --llm local --judge jevtypesafe` plus your flags, starting fresh with your theme; restarted with `--resume` if it stops, picking up the track that was playing (never a saved track of another style) |
 | stream | `stream/stream.sh`: the stream page (below) captured at 1080p30, limiter → -14 LUFS → RTMP; reconnects by itself (log: `logs/stream.log`) |
 | watchdog | restarts the engine on sustained silence or a stale heartbeat, optional push via ntfy (log: `logs/watchdog.log`) |
 
