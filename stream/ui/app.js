@@ -8,17 +8,17 @@ const POLL_MS = 500;
 const PHASE_NAMES = { build: "build", groove: "groove", breakdown: "breakdown", rebuild: "rebuild",
                       groove2: "peak", outro: "outro" };
 
-// Colours and scene per style.
+// Colours per style (the 3D wave field takes them).
 const STYLES = {
-  lofi:      { accent: "#ffb870", accent2: "#ff7eb6", scene: "rain",   base: ["#1a1020", "#2a1a24"] },
-  downtempo: { accent: "#f5a97f", accent2: "#c6a0f6", scene: "rain",   base: ["#12101c", "#241a2a"] },
-  ambient:   { accent: "#8bd5ca", accent2: "#b7bdf8", scene: "aurora", base: ["#050a14", "#0b1624"] },
-  piano:     { accent: "#e5c890", accent2: "#a6d189", scene: "aurora", base: ["#0b0a10", "#161420"] },
-  deephouse: { accent: "#7dc4e4", accent2: "#f5bde6", scene: "grid",   base: ["#070914", "#101830"] },
-  techno:    { accent: "#8aadf4", accent2: "#ed8796", scene: "grid",   base: ["#050507", "#0e0e16"] },
-  hardcore:  { accent: "#ff5c5c", accent2: "#ffcc4d", scene: "grid",   base: ["#0a0303", "#1a0606"] },
-  trance:    { accent: "#7cf2ff", accent2: "#c792ff", scene: "tunnel", base: ["#04040f", "#0c0a26"] },
-  darkwave:  { accent: "#cfd8ff", accent2: "#8f9bd6", scene: "ridges", base: ["#030305", "#0a0b10"] },
+  lofi:      { accent: "#ffb870", accent2: "#ff7eb6", base: ["#1a1020", "#2a1a24"] },
+  downtempo: { accent: "#f5a97f", accent2: "#c6a0f6", base: ["#12101c", "#241a2a"] },
+  ambient:   { accent: "#8bd5ca", accent2: "#b7bdf8", base: ["#050a14", "#0b1624"] },
+  piano:     { accent: "#e5c890", accent2: "#a6d189", base: ["#0b0a10", "#161420"] },
+  deephouse: { accent: "#7dc4e4", accent2: "#f5bde6", base: ["#070914", "#101830"] },
+  techno:    { accent: "#8aadf4", accent2: "#ed8796", base: ["#050507", "#0e0e16"] },
+  hardcore:  { accent: "#ff5c5c", accent2: "#ffcc4d", base: ["#0a0303", "#1a0606"] },
+  trance:    { accent: "#7cf2ff", accent2: "#c792ff", base: ["#04040f", "#0c0a26"] },
+  darkwave:  { accent: "#cfd8ff", accent2: "#8f9bd6", base: ["#030305", "#0a0b10"] },
 };
 
 const ICONS = {
@@ -56,8 +56,10 @@ function fit() {
   stage.style.left = `${(innerWidth - STAGE_W * s) / 2}px`;
   stage.style.top = `${(innerHeight - STAGE_H * s) / 2}px`;
   const c = $("bg");
-  c.width = Math.round(innerWidth * Math.min(devicePixelRatio || 1, 1.5));
-  c.height = Math.round(innerHeight * Math.min(devicePixelRatio || 1, 1.5));
+  // The background renders at 60% resolution and is scaled up: it is soft
+  // anyway, and this keeps the frame rate up when streaming without a GPU.
+  c.width = Math.round(innerWidth * 0.6);
+  c.height = Math.round(innerHeight * 0.6);
 }
 addEventListener("resize", fit);
 
@@ -262,103 +264,117 @@ function beatPhase() {
   return { beat: cycle * 4, bar: cycle };
 }
 
-// Deterministic noise for the scenes.
+// Deterministic noise for the waves.
 function hash(n) { const x = Math.sin(n * 127.1) * 43758.5453; return x - Math.floor(x); }
 function noise(x) { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f); return hash(i) * (1 - u) + hash(i + 1) * u; }
 
-const drops = Array.from({ length: 140 }, (_, i) => ({ x: hash(i), y: hash(i + 99), v: 0.4 + hash(i + 7) * 0.8, l: 0.02 + hash(i + 3) * 0.05 }));
-const bokeh = Array.from({ length: 26 }, (_, i) => ({ x: hash(i + 11), y: 0.35 + hash(i + 31) * 0.6, r: 0.02 + hash(i + 51) * 0.06, h: hash(i + 71) }));
-const stars = Array.from({ length: 160 }, (_, i) => ({ x: hash(i + 201), y: hash(i + 401) * 0.7, s: hash(i + 601) }));
+// What is playing, as wave energy: the beat pulses, the bass swells, the
+// chords roll, and lead / arp / acid ripple fast. From the live code (roles
+// that play and aren't muted), eased so a new line swells in.
+const ROLE_WAVES = { beat: "kick", perc: "kick", bass: "bass", chords: "pad", keys: "pad", texture: "pad",
+                     lead: "high", arp: "high", acid: "high" };
+let energy = { kick: 0, bass: 0, pad: 0, high: 0 };
+
+function targetEnergy() {
+  const e = { kick: 0, bass: 0, pad: 0, high: 0 };
+  for (const line of (ui && ui.code) || []) {
+    const kind = ROLE_WAVES[line.role];
+    if (kind && !line.muted) e[kind] = Math.min(1, e[kind] + (kind === "pad" || kind === "high" ? 0.55 : 1));
+  }
+  if (document.body.classList.contains("poster")) return { kick: 1, bass: 1, pad: 0.8, high: 0.9 };
+  if (!ui || !ui.code || !ui.code.length) return { kick: 0.25, bass: 0.3, pad: 0.4, high: 0.2 };   // idle: gentle
+  return e;
+}
+
+// The 3D wave field: rows of waveforms on a plane, flying towards the
+// viewer in time with the music, seen by a camera that slowly sways.
+const ROWS = 34, COLS = 84, NEAR = 1.2, FAR = 16, SPAN = 11;
+
+function waveHeight(x, z, t, beat, kick) {
+  const e = energy;
+  const d = Math.hypot(x, (z - 6) * 0.9);
+  const shock = e.kick * kick * 1.1 * Math.exp(-Math.pow(d - (beat % 1) * 9, 2) * 0.6);   // a ring per beat
+  const bass = e.bass * 0.55 * Math.sin(x * 0.55 + t * 1.3) * (0.6 + 0.4 * kick);
+  const pad = e.pad * 0.35 * Math.sin(x * 1.1 + z * 0.45 + t * 0.5) * Math.cos(z * 0.3 - t * 0.35);
+  const high = e.high * 0.14 * Math.sin(x * 2.3 - z * 1.3 + t * 5.5) * (0.5 + noise(x * 0.8 + z + t * 0.7));
+  const calm = 0.12 * Math.sin(x * 0.8 + z * 0.6 + t * 0.4);                        // never quite still
+  return (shock + bass + pad + high + calm) * (0.45 + 0.75 * intensity);
+}
+
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`;
+}
+
+// A smooth line through the points (quadratic curves through the midpoints).
+function smoothPath(g, xs, ys, n) {
+  g.moveTo(xs[0], ys[0]);
+  for (let c = 1; c < n; c++) g.quadraticCurveTo(xs[c], ys[c], (xs[c] + xs[c + 1]) / 2, (ys[c] + ys[c + 1]) / 2);
+  g.lineTo(xs[n], ys[n]);
+}
+
+function drawWaves(g, W, H, st, beat, bar, kick, t) {
+  const target = targetEnergy();
+  for (const k in energy) energy[k] += (target[k] - energy[k]) * 0.03;
+  const f = H * 0.95;                                         // focal length
+  const camY = 2.7 + 0.25 * Math.sin(t * 0.13), horizon = H * 0.2;
+  const yaw = 0.22 * Math.sin(t * 0.07), cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const speed = 0.5;                                          // rows per beat
+  const shift = (beat * speed) % 1, dz = (FAR - NEAR) / ROWS;
+  const lw = Math.max(1, W / 1920);
+
+  // A soft glow on the horizon that breathes with the kick.
+  const glow = g.createRadialGradient(W / 2, horizon, 0, W / 2, horizon, W * 0.6);
+  glow.addColorStop(0, hexA(st.accent2, 0.28 + 0.3 * kick * energy.kick)); glow.addColorStop(1, "rgba(0,0,0,0)");
+  g.fillStyle = glow; g.fillRect(0, 0, W, H);
+
+  const occlude = hexA(st.base[1], 0.9);
+  g.lineJoin = "round";
+  for (let r = ROWS - 1; r >= 0; r--) {                       // far to near: nearer rows hide farther ones
+    const zw = NEAR + (r + 1 - shift) * dz;                   // world depth of this row, moving closer
+    const xs = new Float32Array(COLS + 1), ys = new Float32Array(COLS + 1);
+    let visible = true, low = 0;
+    for (let c = 0; c <= COLS; c++) {
+      const xw = (c / COLS - 0.5) * SPAN * (zw / 6 + 0.6);
+      const y = waveHeight(xw, zw + beat * speed * dz, t, beat, kick) * 1.6;
+      const xr = xw * cy - (zw - 6) * sy, zr = (zw - 6) * cy + xw * sy + 6;   // sway around the field's centre
+      if (zr < 0.3) { visible = false; break; }
+      xs[c] = W / 2 + (xr * f) / zr; ys[c] = horizon + ((camY - y) * f) / zr;
+      if (ys[c] > low) low = ys[c];
+    }
+    if (!visible) continue;
+    const near = 1 - (zw - NEAR) / (FAR - NEAR);              // 0 far .. 1 near
+    g.beginPath();
+    smoothPath(g, xs, ys, COLS);
+    // Occlude a band under the wave (enough to hide the rows behind it).
+    const band = low + (H * 0.07) * (0.3 + near);
+    g.lineTo(xs[COLS], band); g.lineTo(xs[0], band); g.closePath();
+    g.fillStyle = occlude; g.fill();
+    g.beginPath();
+    smoothPath(g, xs, ys, COLS);
+    const width = lw * (0.6 + 2.4 * near * near) * (1 + 0.6 * kick * energy.kick);
+    if (near > 0.6) {                                         // a cheap glow on the nearest rows
+      g.strokeStyle = hexA(st.accent, 0.12 * near); g.lineWidth = width * 4; g.stroke();
+    }
+    g.strokeStyle = hexA(r % 3 === 0 ? st.accent2 : st.accent, 0.3 + 0.65 * near);
+    g.lineWidth = width; g.stroke();
+  }
+}
 
 function draw() {
   const c = $("bg"), g = c.getContext("2d"), W = c.width, H = c.height;
-  const style = (ui && ui.track && ui.track.style) || "techno";
+  const style = (ui && ui.track && ui.track.style) || params.get("style") || "trance";
   const st = STYLES[style] || STYLES.techno;
   intensity += (targetIntensity - intensity) * 0.02;
   const { beat, bar } = beatPhase();
-  const kick = Math.pow(1 - (beat % 1), 3) * intensity;         // decays each beat
+  const kick = Math.pow(1 - (beat % 1), 3);                   // decays each beat
   if (document.body.classList.contains("poster")) intensity = targetIntensity = 1;
   const t = performance.now() / 1000;
 
   const grad = g.createLinearGradient(0, 0, 0, H);
   grad.addColorStop(0, st.base[0]); grad.addColorStop(1, st.base[1]);
   g.fillStyle = grad; g.fillRect(0, 0, W, H);
-
-  if (st.scene === "ridges") {                       // darkwave: Unknown Pleasures ridgelines
-    const rows = 42, left = W * 0.2, right = W * 0.8, top = H * 0.3, step = (H * 0.66) / rows;
-    g.lineWidth = Math.max(1, W / 1300);
-    for (let r = 0; r < rows; r++) {
-      const y0 = top + r * step, pts = [];
-      for (let x = left; x <= right; x += W / 320) {
-        const u = (x - left) / (right - left);
-        const env = Math.pow(Math.sin(Math.PI * u), 8);
-        const n = noise(u * 9 + r * 3.7 + bar * 0.15) * noise(u * 23 + r + t * 0.1);
-        pts.push([x, y0 - env * n * step * (3 + 5 * intensity + 7 * kick)]);
-      }
-      g.beginPath();                                 // hide the rows behind with the background colour
-      pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
-      g.lineTo(right, y0 + step * 2); g.lineTo(left, y0 + step * 2); g.closePath();
-      g.fillStyle = st.base[0]; g.fill();
-      g.beginPath();                                 // then stroke only the ridge itself
-      pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
-      g.strokeStyle = `rgba(214,222,255,${0.25 + 0.5 * (r / rows)})`; g.stroke();
-    }
-  } else if (st.scene === "grid") {                  // techno / house: perspective grid
-    const horizon = H * 0.46, speed = style === "hardcore" ? 2.2 : style === "deephouse" ? 0.8 : 1.3;
-    const glow = g.createRadialGradient(W / 2, horizon, 0, W / 2, horizon, W * 0.55);
-    glow.addColorStop(0, st.accent2 + "88"); glow.addColorStop(1, "transparent");
-    g.globalAlpha = 0.35 + 0.65 * kick; g.fillStyle = glow; g.fillRect(0, 0, W, H); g.globalAlpha = 1;
-    g.strokeStyle = st.accent; g.lineWidth = Math.max(1, W / 1400);
-    for (let i = 0; i < 24; i++) {
-      const z = ((i + (beat * speed) % 1) / 24);
-      const y = horizon + Math.pow(z, 2.2) * (H - horizon);
-      g.globalAlpha = 0.12 + 0.6 * z; g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
-    }
-    for (let i = -20; i <= 20; i++) {
-      g.globalAlpha = 0.25; g.beginPath(); g.moveTo(W / 2 + i * 8, horizon); g.lineTo(W / 2 + i * W / 14, H); g.stroke();
-    }
-    g.globalAlpha = 1;
-  } else if (st.scene === "tunnel") {                // trance: rings flying outwards
-    const cx = W / 2, cy = H * 0.5;
-    for (let i = 0; i < 26; i++) {
-      const z = (i + (beat * 0.5) % 1) / 26;           // rings move outwards, one step per two beats
-      const r = Math.pow(z, 2.4) * W * 0.9;
-      g.strokeStyle = i % 2 ? st.accent : st.accent2;
-      g.globalAlpha = (0.08 + 0.5 * z) * (0.6 + 0.4 * intensity);
-      g.lineWidth = 1 + z * 6 + kick * 4;
-      g.beginPath(); g.ellipse(cx, cy, r, r * 0.62, 0, 0, Math.PI * 2); g.stroke();
-    }
-    g.globalAlpha = 1;
-  } else if (st.scene === "rain") {                  // lofi / downtempo: rain on a window, warm bokeh
-    for (const b of bokeh) {
-      const x = b.x * W, y = b.y * H, r = b.r * W * (1 + 0.15 * kick);
-      const gr = g.createRadialGradient(x, y, 0, x, y, r);
-      gr.addColorStop(0, (b.h > 0.5 ? st.accent : st.accent2) + "55"); gr.addColorStop(1, "transparent");
-      g.fillStyle = gr; g.fillRect(x - r, y - r, 2 * r, 2 * r);
-    }
-    g.strokeStyle = "rgba(220,225,255,0.18)"; g.lineWidth = Math.max(1, W / 1600);
-    for (const d of drops) {
-      const y = ((d.y + t * d.v * 0.25) % 1.1) * H, x = d.x * W;
-      g.beginPath(); g.moveTo(x, y); g.lineTo(x - W * 0.003, y + d.l * H); g.stroke();
-    }
-  } else {                                           // ambient / piano: aurora and stars
-    for (const s of stars) {
-      g.fillStyle = `rgba(255,255,255,${0.2 + 0.5 * s.s * (0.6 + 0.4 * Math.sin(t + s.s * 9))})`;
-      g.fillRect(s.x * W, s.y * H, 1.5, 1.5);
-    }
-    for (let k = 0; k < 4; k++) {
-      g.beginPath();
-      for (let x = 0; x <= W; x += W / 120) {
-        const u = x / W;
-        const y = H * (0.3 + 0.08 * k) + Math.sin(u * 5 + t * 0.15 + k) * H * 0.06 + noise(u * 4 + t * 0.05 + k * 10) * H * 0.08;
-        x === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
-      }
-      g.lineTo(W, H); g.lineTo(0, H); g.closePath();
-      const a = g.createLinearGradient(0, H * 0.2, 0, H);
-      a.addColorStop(0, (k % 2 ? st.accent : st.accent2) + "30"); a.addColorStop(0.5, "transparent");
-      g.fillStyle = a; g.fill();
-    }
-  }
+  drawWaves(g, W, H, st, beat, bar, kick, t);
 
   // Vignette so the panels stay readable.
   const v = g.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, W * 0.75);
