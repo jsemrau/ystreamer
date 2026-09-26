@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
 Render a YouTube thumbnail (1280x720 PNG) from the stream page's poster mode:
-the current style's visual, "AI agents live-code music" and the track.
+the current style's visual, "AI agents live-code music" and the track; or,
+with --banner, the channel banner (2048x1152, text in YouTube's safe area).
 
     python -m stream.thumbnail                       # -> runtime/thumbnail.png
     python -m stream.thumbnail --style trance --out thumb.png
+    python -m stream.thumbnail --banner --style trance   # -> runtime/banner.png
 
 Needs the UI server running (python -m stream.ui_server, or the stream in
 browser mode) and Chromium (same lookup as stream.sh, or YS_CHROMIUM).
@@ -42,28 +44,32 @@ def find_chromium() -> str | None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
     parser.add_argument("--style", help="force a style's look (default: what's playing)")
-    parser.add_argument("--out", default=os.path.join(config.RUNTIME_DIR, "thumbnail.png"))
+    parser.add_argument("--banner", action="store_true", help="the 2048x1152 channel banner instead")
+    parser.add_argument("--out", default=None, help="default: runtime/thumbnail.png (or banner.png)")
     parser.add_argument("--port", default=os.getenv("YS_UI_PORT", "8765"))
     args = parser.parse_args()
     chromium = find_chromium()
     if not chromium:
         print("Chromium not found: install it or set YS_CHROMIUM", file=sys.stderr)
         return 1
-    url = f"http://127.0.0.1:{args.port}/?poster=1" + (f"&style={args.style}" if args.style else "")
+    w, h = (2048, 1152) if args.banner else (1280, 720)
+    args.out = args.out or os.path.join(config.RUNTIME_DIR, "banner.png" if args.banner else "thumbnail.png")
+    mode = "banner" if args.banner else "poster"
+    url = f"http://127.0.0.1:{args.port}/?{mode}=1" + (f"&style={args.style}" if args.style else "")
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         # Headless Chrome's viewport is shorter than its window, so render in a
-        # taller window (the poster is fixed at 1280x720) and crop.
+        # taller window (the poster / banner has a fixed size) and crop.
         raw = os.path.join(tmp, "raw.png")
         subprocess.run([chromium, "--headless=new", "--no-sandbox", "--hide-scrollbars", f"--user-data-dir={tmp}/p",
-                        "--window-size=1280,900", "--virtual-time-budget=4000", f"--screenshot={raw}", url],
+                        f"--window-size={w},{h + 180}", "--virtual-time-budget=4000", f"--screenshot={raw}", url],
                        capture_output=True, timeout=60)
         if not os.path.exists(raw):
             print(f"no thumbnail written (is the UI server running on port {args.port}?)", file=sys.stderr)
             return 1
-        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", raw, "-vf", "crop=1280:720:0:0",
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", raw, "-vf", f"crop={w}:{h}:0:0",
                         os.path.abspath(args.out)], check=True, timeout=30)
-    print(f"thumbnail: {args.out}")
+    print(f"{'banner' if args.banner else 'thumbnail'}: {args.out}")
     return 0
 
 

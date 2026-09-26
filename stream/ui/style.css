@@ -180,6 +180,23 @@ footer { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 
 #stats { display: flex; gap: 10px; }
 #stats .chip { font-size: 17px; }
 
+/* ------------------------------------------ banner (YouTube channel art) */
+/* 2048x1152; YouTube shows only the centre 1235x338 on every device, so all
+   text sits in that safe area. */
+#banner { display: none; }
+body.banner #stage, body.poster.banner #poster { display: none; }
+body.banner #banner {
+  display: flex; align-items: center; justify-content: center; position: fixed; left: 0; top: 0;
+  width: 2048px; height: 1152px;
+  background: radial-gradient(ellipse 760px 260px at 50% 50%, rgba(0,0,0,0.62), rgba(0,0,0,0) 100%);
+}
+.b-safe { width: 1235px; height: 338px; display: flex; flex-direction: column; align-items: center;
+          justify-content: center; text-align: center; }
+.b-live .live { font-size: 26px; padding: 8px 16px; }
+#banner h1 { margin: 18px 0 12px; font-size: 104px; line-height: 1; letter-spacing: -0.02em; white-space: nowrap;
+             text-shadow: 0 0 60px color-mix(in srgb, var(--accent) 55%, transparent); }
+#banner p { margin: 0; font-size: 38px; color: var(--accent); font-weight: 500; text-shadow: 0 2px 16px rgba(0,0,0,0.9); }
+
 /* --------------------------------------------------- poster (thumbnail) */
 #poster { display: none; }
 body.poster #stage { display: none; }
