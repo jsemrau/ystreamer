@@ -443,10 +443,14 @@ stream/live.sh --style darkwave     # extra flags go to orchestrator.py and win 
 stream/live.sh --judge none         # e.g. without the judge
 ```
 
-It runs in that terminal until Ctrl-C:
+It runs in that terminal until Ctrl-C. Watch the stream in YouTube Studio
+(Go live → Stream), or on your channel once it shows LIVE. If the stream
+part stops (no `YT_STREAM_KEY`, no Chromium/Xvfb, ...), the terminal says so
+and prints the end of `logs/stream.log`.
 
 | Part | What it does |
 |---|---|
+| stream page | served from the start on http://127.0.0.1:8765: open it in a browser to see what the stream shows (video only), even before YouTube is set up (log: `logs/ui.log`) |
 | audio sink | `stream/setup_audio.sh` creates the `ystream_sink` the stream captures from |
 | engine | `orchestrator.py --resume --llm local --judge jevtypesafe`; restarted if it stops, resuming the saved track |
 | stream | `stream/stream.sh`: the stream page (below) captured at 1080p30, limiter → -14 LUFS → RTMP; reconnects by itself (log: `logs/stream.log`) |

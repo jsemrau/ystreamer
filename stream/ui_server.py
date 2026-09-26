@@ -54,7 +54,11 @@ class Handler(SimpleHTTPRequestHandler):
 
 def main() -> None:
     port = int(os.getenv("YS_UI_PORT", "8765"))
-    server = ThreadingHTTPServer(("127.0.0.1", port), partial(Handler, directory=UI_DIR))
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", port), partial(Handler, directory=UI_DIR))
+    except OSError as e:
+        sys.exit(f"[ui] can't serve on port {port} ({e.strerror}); is another stream page already running? "
+                 "Set YS_UI_PORT to use another port")
     print(f"[ui] serving the stream UI on http://127.0.0.1:{port}")
     server.serve_forever()
 
