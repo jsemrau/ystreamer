@@ -3,6 +3,8 @@ import random
 
 import pytest
 
+import config
+
 from music import llm
 from music.blocks import BLOCKS, STYLE_SETTINGS, blocks_for, find_block
 from music.live_engine import LiveEngine
@@ -629,3 +631,42 @@ def test_clashing_notes_are_rejected():
     assert harmony_problem("lead", "3 ~ 2 ~ 0 ~ ~ ~") is not None       # a 4th on the downbeat
     assert harmony_problem("lead", "[0 3]*2") is not None               # repeating: chord tones only
     assert harmony_problem("bass", "0 ~ -1 ~") is None                   # -1 = the 7th below
+
+
+def test_a_late_edit_comes_in_on_the_next_bar_instead_of_being_dropped():
+    import threading
+
+    release, first = threading.Event(), []
+
+    class SlowPerformer(Performer):
+        def next_edit(self, program):
+            if not first:
+                first.append(True)
+                release.wait(10)          # the model is still thinking
+            return super().next_edit(program)
+
+    clock, logs, sent = _SimClock(), [], []
+    performer = SlowPerformer(random.Random(3), style="lofi", log=lambda *_: None)
+    engine = LiveEngine(lambda lines: sent.extend(lines), performer, log=logs.append,
+                        now=clock.now, sleep=clock.sleep, max_tracks=1)
+    worker = threading.Thread(target=engine.run)
+    worker.start()
+    for _ in range(200):
+        if any("still deciding" in line for line in logs):
+            break
+        threading.Event().wait(0.01)
+    assert any("still deciding" in line for line in logs)
+    assert not [line for line in sent if line.startswith("d")]   # the edit waits for its reply
+    release.set()
+    worker.join(30)
+    assert engine.edits >= 10 and sent
+
+
+def test_only_the_local_model_gets_a_longer_wait(monkeypatch):
+    monkeypatch.setattr(config, "LOCAL_PERFORMER_WAIT_SECONDS", 60.0)
+    program = _program_with("techno", "techno_kick")
+    window = STYLE_SETTINGS["techno"]["edit_bars"] / program.track.cps * 0.85
+    local = Performer(random.Random(0), style="techno", model_id="local", log=lambda *_: None)
+    claude = Performer(random.Random(0), style="techno", model_id="claude", log=lambda *_: None)
+    assert local._wait_seconds(program) == max(60.0, window)
+    assert claude._wait_seconds(program) == pytest.approx(max(4.0, window))
