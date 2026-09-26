@@ -226,6 +226,26 @@ the chord colour, the key lift, and per section whether to use fills and
 how much movement. The built-in planner makes the same kinds of choices
 at random.
 
+## Watching the agents talk
+
+Every LLM call is shown in the terminal as it happens: which agent asked
+which model, what it asked for, and the model's reply as it came back, with
+the time it took. Each edit is tagged with who chose it, the LLM or the
+built-in performer, so you can see that the model is really playing:
+
+```
+💬 Performer → local/qwen3.8-27b: next edit for 'Silver Waves' (groove, 5 lines playing) (5,321 chars)
+💬 Performer ← local/qwen3.8-27b (6.4s): {"op": "wrap", "role": "keys", "name": "jux rev", "reason": "widen the keys"}
+✎ [LLM] wrap d4 with `jux rev`   -- widen the keys
+✎ [built-in] d2: rhythm -> 0 ~ ~ 0 ~ ~ 4 ~   -- new rhythm pattern on the bass   <- model too slow or unusable
+```
+
+- `--show-llm` also prints the full prompt and the raw reply of every call.
+- `runtime/llm_calls.jsonl` keeps the full prompt and reply of every call
+  (agent, model, seconds, reply or error), so you can audit a whole session.
+- The arranger engine's agents appear the same way, as `Director` (plans
+  pieces), `Arranger` (arranges sections) and `Composer` (counter-melodies).
+
 ## Watching the Director think
 
 Every decision prints in the terminal with the model's reason:
