@@ -148,7 +148,7 @@ BLOCKS: dict[str, list[Block]] = {
               wrappers=['(|* gain "[0.67 0.91 1 1]*4")'], pool=[0, 2, 4, 6, 7, 9, 11]),
         _melodic("rolling_bass", "bass", "ys_tbass", "rhythm",
                  ["[~ 0 0 0]*4", "[~ 0 0 0]*3 [~ 0 0 7]", "[~ ~ 0 ~]*4"],
-                 [["gain", "1.05"], ["lpf", "(slow 16 $ range 800 1600 sine)"], ["legato", "0.5"]], octave=" - 24",
+                 [["gain", "1.05"], ["lpf", "(slow 16 $ range 800 1600 sine)"], ["legato", "0.85"]], octave=" - 24",
                  pool=[0, 7],
                  wrappers=['(|* gain "[0.67 0.91 1 1]*4")']),
         Block("gated_saw", "chords",
@@ -260,8 +260,8 @@ def _techno_blocks(hard: bool) -> list[Block]:
     pump = '(|* gain "[0.67 0.91 1 1]*4")'
     if hard:
         kick = Block("gabber_kick", "beat", 's "{kick}"',
-                     {"kick": ["ys_kick*4", "ys_kick*4", "ys_kick ys_kick ys_kick [ys_kick ys_kick]"]},
-                     fx=[["gain", "1.0"], ["shape", "0.45"], ["lpf", "6000"]], drums=True)
+                     {"kick": ["ys_gabber*4", "ys_gabber*4", "ys_gabber ys_gabber ys_gabber [ys_gabber ys_gabber]"]},
+                     fx=[["gain", "1.0"], ["shape", "0.2"], ["lpf", "7000"]], drums=True)
     else:
         kick = Block("techno_kick", "beat", 's "{kick}"',
                      {"kick": ["ys_kick*4", "ys_kick*4", "ys_kick ys_kick ys_kick [ys_kick ~ ~ ys_kick]"]},
@@ -275,7 +275,7 @@ def _techno_blocks(hard: bool) -> list[Block]:
               wrappers=['(|* gain "[0.8 1]*8")'], drums=True),
         _melodic("rumble", "bass", "ys_tbass", "rhythm",
                  ["[~ 0]*4", "[~ 0 0 0]*4", "[~ 0 ~ 0]*4", "[~ 0 0 ~]*4"],
-                 [["gain", "1.05"], ["lpf", "(slow 16 $ range 320 700 sine)"], ["legato", "0.4"]], octave=" - 24",
+                 [["gain", "1.1"], ["lpf", "(slow 16 $ range 600 1400 sine)"], ["legato", "0.8"]], octave=" - 24",
                  pool=[0, 7, -3],
                  wrappers=[pump]),
         Block("acid", "acid",

@@ -175,13 +175,30 @@ SynthDef(\ys_kick, { |out, pan, sustain = 0.3|
     OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
 }).add;
 
-// Rolling trance bass: saw + square an octave down, a plucky filter envelope, and a sine body.
+// Rolling trance bass: saw + square an octave down under a plucky filter
+// envelope, a sine body and a sub an octave below it for weight, all
+// saturated so the harmonics carry on small speakers (a phone or laptop
+// can't play the fundamental). Notes hold a little past their step, so the
+// low end stays continuous between kicks.
 SynthDef(\ys_tbass, { |out, sustain = 0.2, pan, freq = 55, speed = 1|
     var f = freq * speed;
-    var env = EnvGen.ar(Env.perc(0.003, sustain.max(0.08) * 1.2, 1, -4), doneAction: 2);
-    var cut = EnvGen.ar(Env.perc(0.001, 0.12)).linlin(0, 1, f * 2, f * 8).clip(60, 5000);
-    var sig = RLPF.ar(Saw.ar(f) + Pulse.ar(f * 0.5, 0.5, 0.5), cut, 0.4) + SinOsc.ar(f, 0, 0.4);
-    sig = (sig * 1.5).tanh * 0.8;
+    var env = EnvGen.ar(Env.perc(0.003, sustain.max(0.12) * 1.4, 1, -3), doneAction: 2);
+    var cut = EnvGen.ar(Env.perc(0.001, 0.15)).linlin(0, 1, f * 3, f * 10).clip(80, 6000);
+    var top = RLPF.ar(Saw.ar(f) + Pulse.ar(f * 0.5, 0.5, 0.5), cut, 0.35);
+    var body = SinOsc.ar(f, 0, 0.55) + SinOsc.ar(f * 0.5, 0, 0.3);
+    var sig = ((top + body) * 2.2).tanh * 0.72;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
+// Gabber / hardcore kick: the kick *is* the bass. A fast pitch drop into a
+// long, heavily overdriven 50 Hz boom.
+SynthDef(\ys_gabber, { |out, pan, sustain = 0.3|
+    var len = 0.34;
+    var env = EnvGen.ar(Env([0, 1, 0.85, 0], [0.001, len * 0.55, len * 0.45], [0, -1, -4]), doneAction: 2);
+    var pitch = EnvGen.ar(Env([1500, 170, 58, 50], [0.004, 0.035, len], \exp));
+    var sig = SinOsc.ar(pitch) + SinOsc.ar(pitch * 2, 0, 0.2);
+    sig = (sig * 9).tanh;
+    sig = LPF.ar(sig + ((sig * 3).distort * 0.25), 7000) * 0.36;
     OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
 }).add;
 
