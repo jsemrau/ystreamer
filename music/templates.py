@@ -11,6 +11,7 @@ at any point line up on the same chord automatically.
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass, field
 
@@ -35,6 +36,7 @@ class HarmonyContext:
     variation: int = 0        # how many times this section type was already played
     fills: bool = True
     movement: str = "gentle"  # still | gentle | lively
+    busy: int = 0             # other layers playing in this section (pads back off when busy)
 
     def __post_init__(self):
         if not self.pad_voicings:
@@ -76,11 +78,19 @@ def _fmt(value: float) -> str:
     return f"{value:g}"
 
 
+def _chord_gain_db(voices: int, reference: int) -> float:
+    """Each chord note is its own synth voice, so a 5-note chord is louder
+    than a 3-note one. Keep chords at the loudness of `reference` notes."""
+    return -10 * math.log10(max(1, voices) / reference)
+
+
 def _fx(preset: P.Preset, energy: float, extra: dict | None = None,
-        ctx: HarmonyContext | None = None, move: bool = False) -> str:
+        ctx: HarmonyContext | None = None, move: bool = False, gain_db: float = 0.0) -> str:
     """Mix settings for a layer. With move=True the low-pass filter moves:
-    it opens across a build, or drifts slowly (ctx.movement) otherwise."""
-    parts = [f'# gain {_fmt(P.energy_gain(preset.gain, energy))}']
+    it opens across a build, or drifts slowly (ctx.movement) otherwise.
+    gain_db shifts the level (SuperDirt amplitude ~ gain^4)."""
+    gain = P.energy_gain(preset.gain, energy) * 10 ** (gain_db / 80)
+    parts = [f'# gain {_fmt(round(gain, 3))}']
     fx = dict(preset.fx)
     if extra:
         fx.update(extra)
@@ -127,10 +137,13 @@ def render_pad(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custom:
     if not synth:
         return None
     chords = " ".join(_chord_token(v) for v in ctx.pad_voicings)
+    # Background, not foreground: level-matched to a 4-note chord, and 2.5 dB
+    # further back when four or more other layers are playing.
+    gain_db = _chord_gain_db(len(ctx.pad_voicings[0]), 4) - (2.5 if ctx.busy >= 4 else 0.0)
     # Only the chord sequence is slowed; effects stay on the normal clock so
     # filter sweeps line up with the section.
     return (f'note (slow {ctx.cycles_per_chord} "<{chords}>") # s "{synth}" '
-            f'# legato {_fmt(preset.legato)} {_fx(preset, energy, ctx=ctx, move=True)} '
+            f'# legato {_fmt(preset.legato)} {_fx(preset, energy, ctx=ctx, move=True, gain_db=gain_db)} '
             f'# pan (slow 16 $ range 0.4 0.6 sine)')
 
 
@@ -154,7 +167,7 @@ def render_keys(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custom
     if not synth:
         return None
     rng = random.Random(ctx.seed * 7 + 1)
-    rhythms = _STAB_RHYTHMS if preset.name == "deep_stab" else _KEYS_RHYTHMS
+    rhythms = _STAB_RHYTHMS if preset.name in ("deep_stab", "organ_stab") else _KEYS_RHYTHMS
     cells = rhythms[_intensity(energy)]
     cycles = []
     for i in range(ctx.period):
@@ -170,8 +183,9 @@ def render_keys(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custom
             else:
                 steps.append("~")
         cycles.append("[" + " ".join(steps) + "]")
+    gain_db = _chord_gain_db(len(ctx.keys_voicings[0]), 3)
     return (f'note "<{" ".join(cycles)}>" # s "{synth}" # legato {_fmt(preset.legato)} '
-            f'{_fx(preset, energy, ctx=ctx, move=True)} # pan 0.42')
+            f'{_fx(preset, energy, ctx=ctx, move=True, gain_db=gain_db)} # pan 0.42')
 
 
 def render_bass(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custom: bool) -> str | None:

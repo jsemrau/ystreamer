@@ -20,9 +20,9 @@ SynthDef(\ys_pad, { |out, sustain = 4, pan, freq = 440, speed = 1|
     var env = EnvGen.ar(Env([0, 1, 0.85, 0], [0.3, 0.4, 0.3] * sustain.max(0.5), \sine), doneAction: 2);
     var saws = Mix(LFSaw.ar(f * detune.midiratio, { Rand(0, 2) } ! 5)) / 5;
     var sub = SinOsc.ar(f * 0.5) * 0.3;
-    var cutoff = LFTri.kr(Rand(0.05, 0.12), Rand(0, 2)).range(f * 2, f * 5).clip(200, 5000);
-    var sig = RLPF.ar(saws, cutoff, 0.7) + sub;
-    sig = LPF.ar(sig, 6000) * 0.35;
+    var cutoff = LFTri.kr(Rand(0.05, 0.12), Rand(0, 2)).range(f * 1.5, f * 3.5).clip(200, 3500);
+    var sig = RLPF.ar(saws, cutoff, 0.8) + sub;
+    sig = LPF.ar(sig, 4500) * 0.28;
     OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
 }).add;
 
@@ -61,7 +61,7 @@ SynthDef(\ys_sub, { |out, sustain = 1, pan, freq = 110, speed = 1|
     var f = freq * speed;
     var env = EnvGen.ar(Env.linen(0.015, sustain.max(0.2) * 0.85, 0.15, 1, \sine), doneAction: 2);
     var sig = SinOsc.ar(f) + (SinOsc.ar(f * 2) * 0.12);
-    sig = (sig * 1.3).tanh * 0.55;
+    sig = (sig * 1.3).tanh * 0.32;
     OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
 }).add;
 
@@ -71,8 +71,9 @@ SynthDef(\ys_pluck, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var decay = sustain.max(0.3) * 3;
     var env = EnvGen.ar(Env.perc(0.001, decay + 0.2, 1, -2), doneAction: 2);
     var exc = LPF.ar(PinkNoise.ar(0.5), 3000);
-    var sig = Pluck.ar(exc, Impulse.kr(0), 1 / 30, 1 / f, decay, 0.35);
-    sig = LPF.ar(sig, 4500) * 0.6;
+    var sig = Pluck.ar(exc, Impulse.ar(0), 1 / 30, 1 / f, decay, 0.35);
+    // Karplus-Strong output is very quiet; calibrated to the other voices.
+    sig = LPF.ar(sig, 4500) * 4;
     OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
 }).add;
 
@@ -103,7 +104,44 @@ SynthDef(\ys_vinyl, { |out, sustain = 8, pan, freq = 440, speed = 1|
     var crackle = HPF.ar(Dust2.ar(12) * LFNoise1.kr(0.3).range(0.3, 1), 1500) * 0.4;
     var pops = LPF.ar(Dust2.ar(0.8), 900) * 0.5;
     var hiss = LPF.ar(HPF.ar(PinkNoise.ar(0.015), 2000), 9000);
-    var sig = crackle + pops + hiss;
+    var sig = (crackle + pops + hiss) * 2;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
+// Soft string ensemble: slow swell, gentle vibrato and a dark, bowed top.
+SynthDef(\ys_strings, { |out, sustain = 4, pan, freq = 440, speed = 1|
+    var f = freq * speed;
+    var env = EnvGen.ar(Env([0, 1, 0.9, 0], [0.4, 0.3, 0.3] * sustain.max(0.8), [2, 0, -2]), doneAction: 2);
+    var vib = SinOsc.kr(Rand(4.5, 5.5), 0, 0.004, 1) * LFNoise1.kr(0.3, 0.002, 1);
+    var detune = [-0.07, 0, 0.06];
+    var saws = Mix(Saw.ar(f * vib * detune.midiratio)) / 3;
+    var sig = LPF.ar(saws, (f * 4).clip(600, 3000));
+    sig = BPeakEQ.ar(sig, 1200, 1, -4) * 0.75;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
+// Soft drawbar organ with a slow rotary-speaker shimmer.
+SynthDef(\ys_organ, { |out, sustain = 2, pan, freq = 440, speed = 1|
+    var f = freq * speed;
+    var env = EnvGen.ar(Env.linen(0.03, sustain.max(0.3) * 0.9, 0.25, 1, \sine), doneAction: 2);
+    var bars = [1, 2, 3, 4] * f;
+    var amps = [1, 0.5, 0.2, 0.12];
+    var sig = Mix(SinOsc.ar(bars, 0, amps)) / 1.8;
+    sig = sig * (1 + (SinOsc.kr(0.8) * 0.15));
+    sig = LPF.ar(sig, 3500) * 0.22;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
+// Airy "aah" choir: a saw through vowel formants, slow attack.
+SynthDef(\ys_choir, { |out, sustain = 4, pan, freq = 440, speed = 1|
+    var f = freq * speed;
+    var env = EnvGen.ar(Env([0, 1, 0.85, 0], [0.35, 0.35, 0.3] * sustain.max(0.8), \sine), doneAction: 2);
+    var vib = SinOsc.kr(5, 0, 0.003, 1);
+    var src = Saw.ar(f * vib) + (PinkNoise.ar * 0.05);
+    var sig = Mix([[700, 1, 0.12], [1200, 0.5, 0.1], [2600, 0.25, 0.1]].collect { |fm|
+        BPF.ar(src, fm[0], fm[2]) * fm[1]
+    });
+    sig = sig * 1.9;
     OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
 }).add;
 )
