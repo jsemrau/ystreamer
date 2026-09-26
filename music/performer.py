@@ -66,7 +66,8 @@ class SetState:
 
 class Performer:
     def __init__(self, rng: random.Random, style: str = "lofi", model_id: str | None = None, log=print,
-                 theme: str = "", show_llm: bool = False, edit_bars: int | None = None, director=None):
+                 theme: str = "", show_llm: bool = False, edit_bars: int | None = None, director=None,
+                 judge: str | None = None):
         self.rng = rng
         # A locked style, or None to rotate between the chill styles per track.
         self.locked_style = style if style in STYLE_SETTINGS else None
@@ -80,6 +81,9 @@ class Performer:
         # The Director agent plans each track (key, tempo, progression, mood,
         # title); without one, the built-in planner does.
         self.director = director
+        # Generator/judge mode: the LLM proposes edits, a decision model
+        # ("jevtypesafe") chooses blind among them and built-in candidates.
+        self.judge = judge
         self._last_piece = None
         self.track_narration = ""   # the Director's spoken line for the current track
         self.track_mood = ""
@@ -98,13 +102,20 @@ class Performer:
 
     # ------------------------------------------------------------- tracks
 
-    def _report_stats(self) -> None:
+    def report_stats(self) -> None:
         if not self.model_id or not self.stats:
             return
         total = sum(self.stats.values())
         fallbacks = ", ".join(f"{n} {why}" for why, n in self.stats.most_common() if why != "llm")
+        fallbacks = ", ".join(f"{n} {why}" for why, n in self.stats.most_common()
+                              if why not in ("llm", "judge_llm", "judge_builtin"))
+        total = sum(n for why, n in self.stats.items() if why not in ("judge_llm", "judge_builtin"))
         self.log(f"[Performer] last track: {self.stats['llm']}/{total} edits by the LLM"
                  + (f" (built-in: {fallbacks})" if fallbacks else ""))
+        judged = self.stats["judge_llm"] + self.stats["judge_builtin"]
+        if judged:
+            self.log(f"[Performer] the judge preferred the LLM's idea {self.stats['judge_llm']}/{judged} times "
+                     f"({100 * self.stats['judge_llm'] / judged:.0f}%) over the built-in candidates")
         self.stats.clear()
 
     def _settings_for(self, style: str) -> dict:
@@ -122,7 +133,7 @@ class Performer:
     def new_track(self, previous: Track | None) -> Track:
         self.recent.clear()
         if previous is not None:
-            self._report_stats()
+            self.report_stats()
         if self.locked_style is None:
             rotation = ["lofi", "ambient", "downtempo", "piano"]
             if previous is None or self.rng.random() > 0.6:
@@ -186,12 +197,14 @@ class Performer:
         if self.model_id and self._skip_llm <= 0:
             if llm.resolve(self.model_id)[0] == "jevtypesafe" and llm.jev_style() == "decide":
                 edit = self._jev_edit(program)
+            elif self.judge:
+                edit = self._judged_edit(program)
             else:
                 edit = self._llm_edit(program)
         elif self._skip_llm > 0:
             self._skip_llm -= 1
             self.stats["resting"] += 1
-        if edit is not None:
+        if edit is not None and not edit.source.startswith("built-in"):
             self.stats["llm"] += 1
         if edit is None:
             edit = self._builtin_edit(program)
@@ -450,14 +463,10 @@ class Performer:
             text += f" ({FX_NOTES[edit.name].split(':')[0]})"
         return text[:240]
 
-    def _jev_edit(self, program: Program) -> Edit | None:
-        """jevtypesafe's decision API chooses the next edit from legal candidates."""
-        candidates = self._candidates(program)
-        if not candidates:
-            return None
-        if len(candidates) == 1:
-            return candidates[0]
-        window = self.settings["edit_bars"] / program.track.cps
+    def _judge(self, program: Program, candidates: list[Edit], timeout: float) -> tuple[int, str]:
+        """Ask jevtypesafe to choose one of `candidates` (it isn't told who
+        proposed which). Returns (index, its explanation or ""). Raises
+        LLMError or EditError."""
         options = {f"e{i + 1}": self._explain(e) for i, e in enumerate(candidates)}
         state = "\n".join([
             f"A live coder is performing a {self.style} set in TidalCycles for a 24/7 stream "
@@ -476,28 +485,119 @@ class Performer:
         }
         asks = (f"choose the next edit for '{program.track.title}' ({self.state.phase}) "
                 f"from {len(candidates)} options")
+        agent = "Judge" if self.judge else "Performer"
+        answers = llm.decide(agent, state, questions, log=self.log, asks=asks, show_full=self.show_llm,
+                             timeout=timeout)
+        answer = answers.get("edit") or {}
+        choice = answer.get("choice") if isinstance(answer, dict) else answer
+        if choice not in options:
+            raise EditError(f"chose {choice!r}, not one of {sorted(options)}")
+        why = ""
+        if isinstance(answer, dict):
+            why = next((str(answer[k]) for k in ("reason", "rationale", "explanation", "why") if answer.get(k)), "")
+        return int(choice[1:]) - 1, " ".join(why.split())[:200]
+
+    def _jev_edit(self, program: Program) -> Edit | None:
+        """jevtypesafe's decision API chooses the next edit from legal candidates."""
+        candidates = self._candidates(program)
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        window = self.settings["edit_bars"] / program.track.cps
         try:
-            answers = llm.decide("Performer", state, questions, log=self.log, asks=asks,
-                                 show_full=self.show_llm, timeout=max(4.0, window * 0.85))
-            answer = answers.get("edit") or {}
-            choice = answer.get("choice") if isinstance(answer, dict) else answer
-            if choice not in options:
-                raise EditError(f"chose {choice!r}, not one of {sorted(options)}")
+            index, why = self._judge(program, candidates, max(4.0, window * 0.85))
         except llm.LLMError as e:
             late = "timed out" in str(e)
             return self._llm_failed(f"jevtypesafe {'too slow' if late else 'failed'} ({e})",
                                     "late" if late else "error")
         except EditError as e:
             return self._llm_failed(f"jevtypesafe answer unusable ({e})", "invalid")
-        edit = candidates[int(choice[1:]) - 1]
-        # Keep any explanation the API gives, so the choice can be understood.
-        if isinstance(answer, dict):
-            why = next((str(answer[k]) for k in ("reason", "rationale", "explanation", "why")
-                        if answer.get(k)), "")
-            edit.listening = " ".join(why.split())[:200]
+        edit = candidates[index]
+        edit.listening = why        # keep any explanation, so the choice can be understood
         edit.source = "jevtypesafe"
         self._llm_failures = 0
         return edit
+
+    def _proposals(self, program: Program, timeout: float) -> list[Edit]:
+        """The LLM proposes up to 3 different legal edits (one call)."""
+        edit_schema = self._edit_schema(program)
+        schema = {"type": "object", "properties": {"proposals": {"type": "array", "items": edit_schema,
+                                                                 "minItems": 1, "maxItems": 3}},
+                  "required": ["proposals"], "additionalProperties": False}
+        asks = f"3 ideas for '{program.track.title}' ({self.state.phase})"
+        reply = llm.converse("Performer", self.model_id,
+                             "You are a live coder performing TidalCycles. Reply with JSON only.",
+                             self._prompt(program, proposals=3), log=self.log, asks=asks,
+                             show_full=self.show_llm, max_tokens=900, temperature=0.8, timeout=timeout,
+                             schema=schema)
+        data = llm.extract_json(reply)
+        items = data.get("proposals") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            items = [data]            # a model that answered with a single edit
+        out, seen = [], set()
+        for item in items[:3]:
+            if not isinstance(item, dict):
+                continue
+            try:
+                edit = self._edit_from_json(item, program)
+                apply_edit(program, edit, self.settings["max_lines"])
+            except (EditError, ValueError, TypeError, KeyError) as e:
+                self.log(f"[Performer] proposal dropped ({e})")
+                continue
+            if edit.describe() not in seen:
+                seen.add(edit.describe())
+                edit.source = "LLM"
+                out.append(edit)
+        return out
+
+    def _judged_edit(self, program: Program) -> Edit | None:
+        """Generator/judge: the LLM proposes, jevtypesafe chooses blind among
+        its proposals and a few built-in candidates."""
+        window = self.settings["edit_bars"] / program.track.cps
+        deadline = time.monotonic() + max(6.0, window * 0.85)
+        proposals: list[Edit] = []
+        llm_problem = ""
+        try:
+            proposals = self._proposals(program, timeout=max(3.0, (deadline - time.monotonic()) * 0.6))
+            if not proposals:
+                llm_problem = "invalid"
+        except llm.LLMError as e:
+            self.log(f"[Performer] no proposals from the LLM ({e}); the judge chooses among built-in ideas")
+            llm_problem = "late" if "timed out" in str(e) else "error"
+        seen = {e.describe() for e in proposals}
+        builtin = [e for e in self._candidates(program, limit=6) if e.describe() not in seen][:3]
+        for e in builtin:
+            e.source = "built-in"
+        pool = proposals + builtin
+        if not pool:
+            return None
+        self.rng.shuffle(pool)          # blind: order says nothing about who proposed what
+        if len(pool) == 1:
+            chosen, why = pool[0], ""
+        else:
+            try:
+                index, why = self._judge(program, pool, max(3.0, deadline - time.monotonic()))
+                chosen = pool[index]
+            except (llm.LLMError, EditError) as e:
+                self.log(f"[Performer] judge unavailable ({e}); playing the LLM's first idea")
+                chosen, why = (proposals or builtin)[0], ""
+        from_llm = chosen.source == "LLM"
+        if llm_problem:
+            # Nothing from the LLM to compare against: not a judgement.
+            self.stats[llm_problem] += 1
+            chosen.source = "built-in, judged"
+            return chosen
+        self.stats["judge_llm" if from_llm else "judge_builtin"] += 1
+        self.log(f"⚖️  Judge chose {'the LLM' if from_llm else 'a built-in'} idea "
+                 f"(from {len(proposals)} LLM + {len(builtin)} built-in)" + (f": {why}" if why else ""))
+        if not from_llm:
+            self.stats["judge picked built-in"] += 1
+            chosen.source = "built-in, judged"
+            return chosen               # counted as a built-in edit (not "llm")
+        chosen.source = "LLM, judged"
+        self._llm_failures = 0
+        return chosen
 
     def _llm_failed(self, why: str, kind: str) -> None:
         self.stats[kind] += 1
@@ -573,7 +673,7 @@ class Performer:
             edit.line = block.make(self.rng)
         return edit
 
-    def _prompt(self, program: Program) -> str:
+    def _prompt(self, program: Program, proposals: int = 0) -> str:
         editable = {}
         for role, line in program.lines.items():
             editable[role] = {
@@ -597,6 +697,7 @@ class Performer:
             wrapper_notes="\n".join(f"- `{w}`: {n}" for w, n in WRAPPER_NOTES.items()),
             fx_notes="\n".join(f"- `{n}` [{lo:g}-{hi:g}]: {FX_NOTES[n]}"
                                 for n, (lo, hi) in {**FX_RANGES, **PF_RANGES}.items()),
+            reply=REPLY_PROPOSALS.replace("N", str(proposals)) if proposals else REPLY_SINGLE,
         )
 
 
@@ -634,6 +735,46 @@ PHASE_HELP = {
     "outro": "Outro: remove or mute lines one by one; the track is ending.",
 }
 
+
+REPLY_SINGLE = """## Reply
+
+ONE JSON object with, in this order:
+
+- `"listening"`: what you hear in the program right now that matters for
+  the next move (one sentence, concrete: which lines, what's too much or
+  missing).
+- `"reason"`: why this move, and what the listener should hear change
+  (one sentence).
+- the operation fields.
+- optionally `"narration"`: one warm sentence for listeners, no numbers or
+  jargon, only for bigger moments.
+
+```json
+{"listening": "The acid line has sat at the same brightness for 16 bars and the groove feels static.",
+  "reason": "Open the acid slowly so the line starts to scream towards the next phrase.",
+  "op": "set_pf", "role": "acid", "name": "acid", "value": "(slow 8 $ range 0.4 0.75 sine)"}
+```
+"""
+
+REPLY_PROPOSALS = """## Reply: propose N different edits
+
+A judge will pick one of your ideas (or someone else's), so propose N
+genuinely DIFFERENT moves: e.g. one on the melody, one on the sound, one
+structural. Each is a full edit with, in this order, `"listening"` (what you
+hear that matters), `"reason"` (why this move, what should change), the
+operation fields, and optionally `"narration"`.
+
+```json
+{"proposals": [
+  {"listening": "The melody repeats the same four notes.", "reason": "Answer the phrase a step lower.",
+   "op": "set_pattern", "role": "lead", "name": "melody", "value": "4 ~ 3 ~ 0 ~ ~ ~"},
+  {"listening": "The keys are bright and flat.", "reason": "Let the keys breathe with a slow filter sweep.",
+   "op": "set_fx", "role": "keys", "name": "lpf", "value": "(slow 16 $ range 1200 4000 sine)"},
+  {"listening": "Everything plays all the time.", "reason": "Drop the hats for air before the next phrase.",
+   "op": "mute", "role": "perc"}
+]}
+```
+"""
 
 # A few example moves per phase: local models copy good examples far more
 # reliably than they follow rules.

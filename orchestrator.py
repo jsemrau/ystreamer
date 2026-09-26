@@ -82,6 +82,9 @@ def parse_args():
     engine.add_argument("--edit-bars", type=int, default=int(os.getenv("YS_EDIT_BARS") or 0) or None,
                         help="Live engine: bars between edits (default: YS_EDIT_BARS, else per style, "
                              "8 for slow styles and 16 for club styles, about 20-30 s).")
+    engine.add_argument("--judge", choices=["jevtypesafe"], default=os.getenv("YS_JUDGE") or None,
+                        help="Live engine: the LLM proposes 3 edits and this decision model picks one blind "
+                             "(also among built-in candidates). Default: YS_JUDGE, else off.")
     engine.add_argument("--piece-minutes", type=float, default=12.0)
     engine.add_argument("--free-layer", action="store_true",
                         help="Let the LLM compose one extra counter-melody layer (key-safe, type-checked).")
@@ -198,8 +201,16 @@ def build_performer(args, rng):
     text_model = model_id and not (llm.resolve(model_id)[0] == "jevtypesafe" and llm.jev_style() == "decide")
     director = Director(model_id if text_model else None, rng, theme=args.theme, show_llm=args.show_llm,
                         target_minutes=args.piece_minutes, style=args.style)
+    judge = args.judge if text_model else None
+    if args.judge and not text_model:
+        print("[orchestrator] --judge needs a text model to propose edits (e.g. --llm local); ignoring it")
+    elif judge:
+        print(f"[orchestrator] Judge: {judge} chooses blind among the LLM's proposals and built-in ideas")
+        if not (os.getenv("YS_JEV_API_KEY") or os.getenv("JEV_API_KEY")):
+            print("[orchestrator] WARNING: YS_JEV_API_KEY is not set; the judge can't decide "
+                  "(the LLM's first idea plays)")
     return Performer(rng, style=args.style, model_id=model_id, theme=args.theme, show_llm=args.show_llm,
-                     edit_bars=args.edit_bars, director=director)
+                     edit_bars=args.edit_bars, director=director, judge=judge)
 
 
 def build_director(args, rng):

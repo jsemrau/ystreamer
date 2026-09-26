@@ -444,3 +444,69 @@ def test_edit_bars_override():
     performer.new_track(None)
     assert performer.settings["edit_bars"] == 12
     assert Performer(random.Random(0), style="lofi", log=lambda *_: None).settings["edit_bars"] == 8
+
+
+# ------------------------------------------------------ generator / judge
+
+_PROPOSALS = json_text = (
+    '{"proposals": ['
+    '{"listening": "bass is plain", "reason": "walk the bass", "op": "set_pattern", "role": "bass", '
+    '"name": "rhythm", "value": "0 ~ 4 ~ 7 ~ 4 ~"},'
+    '{"listening": "drums too bright", "reason": "darken the drums", "op": "set_fx", "role": "beat", '
+    '"name": "lpf", "value": "2200"},'
+    '{"listening": "x", "reason": "nonsense", "op": "set_fx", "role": "lead", "name": "lpf", "value": "900"}'
+    ']}')
+
+
+def _judge_setup(monkeypatch, pick):
+    """pick(options) -> option id; returns (performer, program, calls)."""
+    calls = {}
+    monkeypatch.setattr(llm, "converse", lambda *a, **k: _PROPOSALS)
+
+    def decide(agent, state, questions, **kw):
+        options = questions["edit"]["criteria"]
+        calls["options"] = options
+        calls["agent"] = agent
+        return {"edit": {"choice": pick(options), "reason": "it develops the groove"}}
+
+    monkeypatch.setattr(llm, "decide", decide)
+    performer = Performer(random.Random(0), style="lofi", model_id="local", log=lambda *_: None,
+                          judge="jevtypesafe")
+    program = _program_with("lofi", "dusty_beat", "sub_walk")
+    performer.state.phase = "groove"
+    return performer, program, calls
+
+
+def test_judge_picks_the_llm_idea(monkeypatch):
+    performer, program, calls = _judge_setup(
+        monkeypatch, lambda opts: next(k for k, v in opts.items() if "walk the bass" in v))
+    edit = performer.next_edit(program)
+    assert edit.source == "LLM, judged" and edit.value == "0 ~ 4 ~ 7 ~ 4 ~"
+    assert edit.listening == "bass is plain"                 # the LLM's own explanation is kept
+    assert calls["agent"] == "Judge"
+    texts = list(calls["options"].values())
+    assert len(texts) >= 4                                   # 2 valid LLM ideas + built-in candidates
+    assert not any("lead" in t and "900" in t for t in texts)  # the invalid proposal was dropped
+    assert not any("LLM" in t or "built-in" in t for t in texts)   # blind
+    assert performer.stats["judge_llm"] == 1 and performer.stats["llm"] == 1
+
+
+def test_judge_picks_a_builtin_idea(monkeypatch):
+    performer, program, calls = _judge_setup(
+        monkeypatch, lambda opts: next(k for k, v in opts.items()
+                                       if "walk the bass" not in v and "darken the drums" not in v))
+    edit = performer.next_edit(program)
+    assert edit.source == "built-in, judged"
+    assert performer.stats["judge_builtin"] == 1 and performer.stats["llm"] == 0
+    apply_edit(program, edit)
+
+
+def test_judge_unavailable_plays_the_llms_idea(monkeypatch):
+    performer, program, _ = _judge_setup(monkeypatch, lambda opts: "e1")
+
+    def down(*a, **k):
+        raise llm.LLMError("jevtypesafe HTTP 503")
+
+    monkeypatch.setattr(llm, "decide", down)
+    edit = performer.next_edit(program)
+    assert edit.source == "LLM, judged"

@@ -74,21 +74,4 @@ Operations (exactly one per reply):
 Make each edit count: something a listener will notice, but not a jolt.
 Prefer revising what's there over adding more. Vary what you touch.
 
-## Reply
-
-ONE JSON object with, in this order:
-
-- `"listening"`: what you hear in the program right now that matters for
-  the next move (one sentence, concrete: which lines, what's too much or
-  missing).
-- `"reason"`: why this move, and what the listener should hear change
-  (one sentence).
-- the operation fields.
-- optionally `"narration"`: one warm sentence for listeners, no numbers or
-  jargon, only for bigger moments.
-
-```json
-{{"listening": "The acid line has sat at the same brightness for 16 bars and the groove feels static.",
-  "reason": "Open the acid slowly so the line starts to scream towards the next phrase.",
-  "op": "set_pf", "role": "acid", "name": "acid", "value": "(slow 8 $ range 0.4 0.75 sine)"}}
-```
+{reply}

@@ -213,6 +213,7 @@ class LiveEngine:
                 self._announce(program)
                 self._publish(program, None, "")
             next_cycle += edit_bars
+        self.performer.report_stats()
         self._pool.shutdown(wait=False, cancel_futures=True)
         self._voice_pool.shutdown(wait=False, cancel_futures=True)
 
