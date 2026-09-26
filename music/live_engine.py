@@ -72,6 +72,7 @@ class LiveEngine:
                      block=edit.line.block if edit.line is not None else "",
                      describe=edit.describe(), listening=edit.listening, reason=edit.reason,
                      narration=edit.narration, judgement=edit.judgement or None,
+                     request=edit.request or None, review=edit.review or None,
                      line_before=before.statement(role) if role in before.lines else None,
                      line_after=after.statement(role) if role in after.lines else None,
                      complexity_before=complexity(before), complexity_after=complexity(after),

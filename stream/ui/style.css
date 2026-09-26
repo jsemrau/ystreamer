@@ -180,6 +180,25 @@ footer { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 
 #stats { display: flex; gap: 10px; }
 #stats .chip { font-size: 17px; }
 
+/* ------------------------------------------------ host request box */
+/* Only on the host's own view: the captured stream (?capture=1) and the
+   poster / banner / logo renders hide it. */
+#ask {
+  position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 10;
+  display: flex; gap: 8px; align-items: center; padding: 8px; border-radius: 14px;
+  background: rgba(10, 12, 19, 0.88); border: 1px solid var(--edge); backdrop-filter: blur(10px);
+  font-family: var(--ui);
+}
+#ask input { width: min(46vw, 560px); padding: 10px 14px; border-radius: 10px; border: 1px solid var(--edge);
+             background: rgba(255,255,255,0.06); color: var(--ink); font-size: 16px; outline: none; }
+#ask input:focus { border-color: var(--accent); }
+#ask button { padding: 10px 16px; border-radius: 10px; border: 0; background: var(--accent); color: #0b0d14;
+              font-weight: 700; font-size: 15px; cursor: pointer; }
+#ask-note { color: var(--muted); font-size: 14px; min-width: 150px; }
+body.capture #ask, body.poster #ask { display: none; }
+.card .asked { font-size: 19px; color: var(--ink); }
+.card .asked::before { content: "“"; } .card .asked::after { content: "”"; }
+
 /* ------------------------------------------ banner (YouTube channel art) */
 /* 2048x1152; YouTube shows only the centre 1235x338 on every device, so all
    text sits in that safe area. */

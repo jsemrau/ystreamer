@@ -300,6 +300,8 @@ class Edit:
     source: str = ""        # who chose it: "LLM" or "built-in"
     listening: str = ""     # what the performer heard that led to it (LLM only)
     judgement: dict = field(default_factory=dict)   # with a judge: the options it weighed and chose from
+    request: str = ""       # the host's request this edit answers ("more bass")
+    review: str = ""        # the performer's answer to it: what it does and why
 
     def describe(self) -> str:
         if self.op == "add":

@@ -103,6 +103,9 @@ class Performer:
         # build's quick pace still leaves it time to make the moves.
         self.latency: float | None = None
         self._bar_seconds = 0.0
+        # Requests typed into the stream page (music/host_requests.py); the
+        # engine connects the queue.
+        self.requests = None
         # Compact prompts (no glossary or example moves) once the model's
         # context window turned out to be too small for the full one.
         self._compact = False
@@ -232,6 +235,9 @@ class Performer:
         """Choose the next edit (LLM if available, built-in otherwise)."""
         self._advance_phase(program)
         self._bar_seconds = 1 / program.track.cps
+        request = self.requests.take() if self.requests is not None else None
+        if request is not None:
+            return self._answer_request(program, request["text"])
         edit = None
         if self.model_id and self._skip_llm <= 0:
             started, late_before = time.monotonic(), self.stats["late"]
@@ -256,6 +262,103 @@ class Performer:
         if edit.op == "mute" and self.state.phase == "breakdown":
             self.state.muted_for_breakdown.append(edit.role)
         return edit
+
+    # ------------------------------------------------------------ requests
+
+    def request_waiting(self) -> bool:
+        return self.requests is not None and self.requests.pending()
+
+    def _answer_request(self, program: Program, text: str) -> Edit:
+        """The host asked for something: review it and make the move that
+        best answers it (the model if there is one, else simple rules)."""
+        self.log(f"📨 Request from the host: {text!r}")
+        runtime.append_thought(f"📨 request: {text}")
+        edit = None
+        if self.model_id and llm.resolve(self.model_id)[0] != "jevtypesafe":
+            started, late_before = time.monotonic(), self.stats["late"]
+            edit = self._llm_edit(program, request=text)
+            self._note_latency(time.monotonic() - started, late=self.stats["late"] > late_before,
+                               answered=edit is not None)
+        if edit is None:
+            edit = self._builtin_request(program, text)
+        edit.request = text
+        if edit.source.startswith("LLM"):
+            self.stats["llm"] += 1
+            edit.source = "LLM, request"
+        self.state.edits_in_phase += 1
+        self.state.edits_in_track += 1
+        if edit.op == "mute" and self.state.phase == "breakdown":
+            self.state.muted_for_breakdown.append(edit.role)
+        self.log(f"📨 Performer: {edit.review or edit.reason}")
+        runtime.ui_event("request", text=text, review=edit.review or edit.reason, edit=edit.describe(),
+                         source=edit.source)
+        return edit
+
+    def _builtin_request(self, program: Program, text: str) -> Edit:
+        """Keyword rules for when there's no model: more/less/drop/bring back
+        a part, darker/brighter, faster/slower. Anything else: say so."""
+        words = text.lower()
+        roles = {"bass": "bass", "sub": "bass", "kick": "beat", "beat": "beat", "drum": "beat",
+                 "hat": "perc", "perc": "perc", "clap": "beat", "lead": "lead", "melod": "lead",
+                 "hook": "lead", "chord": "chords", "pad": "chords", "string": "chords", "keys": "keys",
+                 "piano": "keys", "arp": "arp", "acid": "acid", "303": "acid", "texture": "texture",
+                 "noise": "texture", "vinyl": "texture"}
+        role = next((r for w, r in roles.items() if w in words), None)
+        active = program.active_roles()
+        line = program.lines.get(role) if role else None
+        edit = None
+        if any(w in words for w in ("faster", "speed up", "tempo up", "more energy")):
+            edit = Edit("tempo", value=str(program.track.bpm + 4), review="a little faster, +4 BPM")
+        elif any(w in words for w in ("slower", "slow down", "tempo down", "calmer")):
+            edit = Edit("tempo", value=str(program.track.bpm - 4), review="a little slower, -4 BPM")
+        elif role and any(w in words for w in ("bring back", "unmute")) and line is not None and line.muted:
+            edit = Edit("unmute", role=role, review=f"bringing the {role} back in")
+        elif role and any(w in words for w in ("drop", "mute", "stop", "no ", "without", "remove")):
+            if line is not None and not line.muted and len(active) > 1:
+                edit = Edit("mute", role=role, review=f"dropping the {role} for now")
+        elif any(w in words for w in ("darker", "warmer", "muffled", "brighter", "open", "sharper")):
+            target = role if role in program.lines else next((r for r in ("lead", "acid", "arp", "chords")
+                                                               if r in active), None)
+            if target:
+                fx = dict(program.lines[target].fx)
+                base = float(fx["lpf"]) if _NUM_RE.match(fx.get("lpf", "")) else 3000.0
+                darker = any(w in words for w in ("darker", "warmer", "muffled"))
+                value = max(300, min(8000, round(base * (0.6 if darker else 1.5))))
+                edit = Edit("set_fx", role=target, name="lpf", value=str(value),
+                            review=f"{'darker' if darker else 'brighter'}: the {target} filter to {value} Hz")
+        elif role and any(w in words for w in ("more", "louder", "up", "bigger", "add", "need")):
+            if line is None or line.muted:
+                blocks = [b for b in blocks_for(self.style) if b.role == role]
+                if blocks and len(active) < self.settings["max_lines"]:
+                    edit = self._add(program, role)
+                    edit.review = f"bringing in the {role}"
+                elif line is not None and line.muted and len(active) < self.settings["max_lines"]:
+                    edit = Edit("unmute", role=role, review=f"bringing the {role} back in")
+            else:
+                from .livecode import gain_range
+
+                lo, hi = gain_range(line)
+                edit = Edit("set_fx", role=role, name="gain", value=f"{hi:g}",
+                            review=f"the {role} up to the top of its level window (+3 dB at most, to keep the mix)")
+        elif role and any(w in words for w in ("less", "quieter", "softer", "down", "lower")) and line is not None:
+            from .livecode import gain_range
+
+            lo, hi = gain_range(line)
+            edit = Edit("set_fx", role=role, name="gain", value=f"{lo:g}", review=f"the {role} down a little")
+        if edit is not None:
+            try:
+                apply_edit(program, edit, self.settings["max_lines"])
+                edit.reason = edit.reason or edit.review
+                edit.source = "built-in"
+                return edit
+            except EditError as e:
+                why = str(e)
+        else:
+            why = "the built-in performer only understands simple requests (more/less/drop a part, darker, faster)"
+        fallback = self._builtin_edit(program)
+        fallback.source = "built-in"
+        fallback.review = f"couldn't do that as asked ({why}); making a regular move instead"
+        return fallback
 
     def _block_for(self, role: str) -> Block:
         options = blocks_for(self.style, role)
@@ -434,7 +537,8 @@ class Performer:
         line every YS_BUILD_BARS bars, or as many more as the model needs to
         answer in time, so the build stays the AI's), then the style's edit
         interval."""
-        if self.state.phase == "build":
+        if self.state.phase == "build" or self.request_waiting():
+            # (A host's request is answered at the same quick pace.)
             bars = config.BUILD_BARS
             if self.model_id and self.latency and self._bar_seconds:
                 # The model's reply must fit the deadline (85% of the window);
@@ -456,12 +560,15 @@ class Performer:
             return max(window, config.LOCAL_PERFORMER_WAIT_SECONDS)
         return window
 
-    def _llm_edit(self, program: Program) -> Edit | None:
+    def _llm_edit(self, program: Program, request: str = "") -> Edit | None:
         deadline = time.monotonic() + self._wait_seconds(program)
-        extra = ""   # a correction request, added after a rejected reply
-        schema = self._edit_schema(program)
+        # A host's request, then (after a rejected reply) a correction.
+        extra = REQUEST_SECTION.format(request=request) if request else ""
+        schema = self._edit_schema(program, review=bool(request))
         asks = (f"next edit for '{program.track.title}' ({self.state.phase}, "
                 f"{len(program.active_roles())} line{'' if len(program.active_roles()) == 1 else 's'} playing)")
+        if request:
+            asks = f"the host's request {request!r}"
         for attempt in (1, 2):
             remaining = deadline - time.monotonic()
             try:
@@ -471,17 +578,21 @@ class Performer:
                                           schema=schema)
                 if time.monotonic() > deadline + 1:
                     raise llm.LLMError("reply came after the edit was due")
-                edit = self._edit_from_json(llm.extract_json(reply), program)
+                data = llm.extract_json(reply)
+                edit = self._edit_from_json(data, program)
                 apply_edit(program, edit, self.settings["max_lines"])
                 self._llm_failures = 0
                 edit.source = "LLM"
+                if request:
+                    edit.request = request
+                    edit.review = " ".join(str(data.get("review", "")).split())[:200] or edit.reason
                 return edit
             except (EditError, ValueError, TypeError, KeyError) as e:
                 # A usable-looking reply that broke a rule: if there's time,
                 # say what was wrong and let the model correct itself once.
                 if attempt == 1 and deadline - time.monotonic() > 3.0:
                     self.log(f"[Performer] edit rejected ({e}); asking the model to correct it")
-                    extra = (f"\n\n## Your previous reply was rejected\n\n{reply.strip()[:400]}\n\n"
+                    extra += (f"\n\n## Your previous reply was rejected\n\n{reply.strip()[:400]}\n\n"
                              f"Reason: {e}. Reply with a corrected edit (one JSON object).")
                     continue
                 return self._llm_failed(f"edit unusable ({e})", "invalid")
@@ -732,7 +843,7 @@ class Performer:
             self.log("[Performer] too many LLM failures; the built-in performer plays the next 5 edits")
         return None
 
-    def _edit_schema(self, program: Program) -> dict:
+    def _edit_schema(self, program: Program, review: bool = False) -> dict:
         """JSON schema of every edit that is legal right now. A local server
         decodes under it, so only real block, role, slot, effect and wrapper
         names can come out; numbers are still range-checked afterwards."""
@@ -742,10 +853,12 @@ class Performer:
         def variant(op: str, **props) -> dict:
             # What it hears, then why, then the move: the model explains
             # itself before it commits.
-            properties = {"listening": note, "reason": note, "op": {"const": op}, **props,
+            # Answering a host's request, the review comes first.
+            head = {"review": note} if review else {}
+            properties = {**head, "listening": note, "reason": note, "op": {"const": op}, **props,
                           "narration": {"type": "string", "maxLength": 160}}
             return {"type": "object", "properties": properties,
-                    "required": ["listening", "reason", "op", *props], "additionalProperties": False}
+                    "required": [*head, "listening", "reason", "op", *props], "additionalProperties": False}
 
         options = []
         addable = [b.name for b in blocks_for(self.style) if b.role not in program.lines]
@@ -921,6 +1034,20 @@ PHASE_HELP = {
                "then start easing off.",
     "outro": "Outro: remove or mute lines one by one; the track is ending.",
 }
+
+
+REQUEST_SECTION = """
+
+## A request from the host
+
+The host is listening and asked: "{request}"
+
+Review it before you play it. Make the ONE edit that best gives the host
+what they asked for, within the rules above (harmony, the kit, the gain
+window: +3 dB at most) and the track's style. If it can't be done as asked,
+or would hurt the music, make the closest good move instead and say so.
+Start your reply with `"review"`: one sentence to the host, what you'll do
+and why (or why not exactly as asked)."""
 
 
 REPLY_SINGLE = """## Reply

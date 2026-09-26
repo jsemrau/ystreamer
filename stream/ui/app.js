@@ -28,9 +28,10 @@ const ICONS = {
   narrator:  '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M2 3h12v8H7l-4 3v-3H2z"/></svg>',
   arc:       '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M1 11c3-7 6-7 7-2s4 5 7-2v5H1z"/></svg>',
   track:     '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M6 2l8-1v10a2 2 0 11-2-2V4L7 5v8a2 2 0 11-2-2V2z"/></svg>',
+  request:   '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M1 7l14-6-5 14-2-6z"/></svg>',
 };
 const AGENT_NAMES = { director: "Director", performer: "Performer", judge: "Judge", narrator: "Narrator",
-                      arc: "Arc", track: "New track" };
+                      arc: "Arc", track: "New track", request: "Host request" };
 
 let ui = null;              // latest ui.json
 let shownEvents = new Set();
@@ -167,7 +168,8 @@ function animateTyping() {
 function card(ev, old, fresh) {
   const kind = ev.agent;
   const colour = { director: "var(--director)", performer: "var(--performer)", judge: "var(--judge)",
-                   narrator: "var(--narrator)", arc: "var(--arc)", track: "var(--accent)" }[kind] || "var(--accent)";
+                   narrator: "var(--narrator)", arc: "var(--arc)", track: "var(--accent)",
+                   request: "var(--director)" }[kind] || "var(--accent)";
   let meta = "", body = "";
   if (kind === "performer") {
     const src = ev.source || "";
@@ -195,6 +197,11 @@ function card(ev, old, fresh) {
   } else if (kind === "arc") {
     body = `<div class="why"><b>${esc(PHASE_NAMES[ev.before] || ev.before)} → ${esc(PHASE_NAMES[ev.after] || ev.after)}</b></div>` +
            (ev.why ? `<div class="note">${esc(ev.why)}</div>` : "");
+  } else if (kind === "request") {
+    const src = ev.source || "";
+    meta = `<span class="badge ${src.startsWith("LLM") ? "ai" : "random"}">${src.startsWith("LLM") ? "AI review" : "built-in"}</span>`;
+    body = `<div class="asked">${esc(ev.text)}</div>` + `<div class="move">${esc(ev.edit)}</div>` +
+           (ev.review ? `<div class="why">${esc(ev.review)}</div>` : "");
   } else if (kind === "track") {
     body = `<div class="why"><b>${esc(ev.title)}</b> · ${esc(ev.style)} · ${esc(ev.key)} · ${Math.round(ev.bpm || 0)} bpm</div>`;
   }
@@ -436,6 +443,24 @@ function draw() {
 // ?style=trance forces a style (for previews without a running engine).
 const params = new URLSearchParams(location.search);
 if (params.get("poster")) document.body.classList.add("poster");
+// ?capture=1: the page as captured for the stream (no request box).
+if (params.get("capture")) document.body.classList.add("capture");
+
+// The host's request box: POST /request, picked up at the Performer's next edit.
+$("ask").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = $("ask-text"), note = $("ask-note"), text = input.value.trim();
+  if (!text) return;
+  try {
+    const r = await fetch("/request", { method: "POST", headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ text }) });
+    note.textContent = r.ok ? "sent: the performer takes it at the next edit" : "couldn't send it";
+    if (r.ok) input.value = "";
+  } catch (err) {
+    note.textContent = "couldn't reach the page server";
+  }
+  setTimeout(() => { note.textContent = ""; }, 8000);
+});
 // ?banner=1: YouTube channel art, 2048x1152 (stream/thumbnail.py --banner).
 if (params.get("banner")) document.body.classList.add("poster", "banner");
 // ?logo=1: the channel logo, 800x800 (stream/thumbnail.py --logo).

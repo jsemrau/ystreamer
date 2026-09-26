@@ -139,7 +139,7 @@ if [[ "$UI_MODE" == "browser" ]]; then
     DISPLAY="$DISPLAY_NUM" "$CHROMIUM" --kiosk --no-first-run --noerrdialogs --disable-infobars \
         --disable-session-crashed-bubble --disable-features=Translate --password-store=basic \
         --no-sandbox --user-data-dir="$PROFILE" --window-position=0,0 --window-size="${W},${H}" \
-        --force-device-scale-factor=1 --hide-scrollbars "http://127.0.0.1:${UI_PORT}/" \
+        --force-device-scale-factor=1 --hide-scrollbars "http://127.0.0.1:${UI_PORT}/?capture=1" \
         >/dev/null 2>&1 & PIDS+=($!)
     sleep 4
     echo "Streaming the browser look ($CHROMIUM on $DISPLAY_NUM, ${W}x${H})" >&2
