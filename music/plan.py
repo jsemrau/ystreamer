@@ -70,10 +70,26 @@ STYLES = {
         # Only when asked for (--style, a theme, or the LLM): not in the chill rotation.
         "rotate": False,
     },
+    "trance": {
+        # After Switch Angel's live-coded trance: 138 BPM, four-on-the-floor,
+        # rolling bass, gated supersaw arps, breakdown -> build -> drop.
+        "bpm": (134, 140), "modes": ["minor"], "cycles_per_chord": 2,
+        "presets": {"pad": "saw_pad", "keys": "piano", "bass": "rolling_bass", "melody": "saw_lead",
+                    "arp": "trance_gate", "drums": "trance_kit", "texture": "air"},
+        "palette": {"pad": ["saw_pad", "strings_pad", "choir_pad"], "keys": ["piano", "felt"],
+                    "melody": ["saw_lead", "glass"]},
+        "energy_order": ["drums", "bass", "arp", "pad", "texture", "melody", "keys"],
+        "openers": [["drums", "bass"], ["drums", "arp"], ["arp", "drums"]],
+        "arc": [("intro", 0.3, 2), ("verse", 0.6, 4), ("breakdown", 0.3, 2), ("build", 0.65, 2),
+                ("chorus", 0.9, 4), ("verse", 0.6, 2), ("build", 0.7, 2), ("chorus", 0.95, 4),
+                ("outro", 0.3, 2)],
+        "rotate": False,
+    },
 }
 
 # Theme words that select a style (checked in this order).
 THEME_STYLE_KEYWORDS = [
+    ("trance", ("trance", "switch angel", "switchangel", "uplifting", "psytrance", "supersaw")),
     ("deephouse", ("deep house", "house", "garage", "club", "dance")),
     ("lofi", ("lofi", "lo-fi", "hip hop", "hiphop", "study", "beats")),
     ("ambient", ("ambient", "sleep", "drone", "meditation", "space")),
@@ -251,8 +267,8 @@ def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | N
 
 
 # Styles where a lifted final chorus fits; chance of ninth chords per style.
-_LIFT_STYLES = {"lofi", "downtempo", "deephouse"}
-_NINTH_CHANCE = {"lofi": 0.6, "deephouse": 0.7, "downtempo": 0.5, "ambient": 0.5, "piano": 0.4}
+_LIFT_STYLES = {"lofi", "downtempo", "deephouse", "trance"}
+_NINTH_CHANCE = {"lofi": 0.6, "deephouse": 0.7, "downtempo": 0.5, "ambient": 0.5, "piano": 0.4, "trance": 0.2}
 
 
 def _add_variety(piece: Piece, rng: random.Random, avoid: set[str] | None = None,
@@ -305,10 +321,11 @@ def apply_key_lift(piece: Piece, semitones: int = 2) -> bool:
 
 def _default_sections(piece: Piece, target_minutes: float) -> list[Section]:
     period = piece.period
-    base_bars = sum(m for _, _, m in DEFAULT_ARC) * period
+    arc = STYLES.get(piece.style, {}).get("arc", DEFAULT_ARC)
+    base_bars = sum(m for _, _, m in arc) * period
     seconds_per_bar = 1.0 / piece.cps
     scale = max(1, round(target_minutes * 60 / (base_bars * seconds_per_bar)))
-    return [Section(name, bars=m * period * scale, energy=e) for name, e, m in DEFAULT_ARC]
+    return [Section(name, bars=m * period * scale, energy=e) for name, e, m in arc]
 
 
 def arrange(piece: Piece, section: Section, rng: random.Random, max_layers: int = 6) -> Arrangement:

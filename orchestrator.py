@@ -46,7 +46,7 @@ class _Tee:
             stream.flush()
 
 
-STYLE_CHOICES = ["lofi", "ambient", "downtempo", "piano", "deephouse"]
+STYLE_CHOICES = ["lofi", "ambient", "downtempo", "piano", "deephouse", "trance"]
 
 
 def parse_args():

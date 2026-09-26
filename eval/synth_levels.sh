@@ -25,7 +25,8 @@ cat > "$OUT/render.scd" <<SC
 ~jobs = [
   [\ys_pad, [62], 4], [\ys_pad, [50, 57, 62, 65], 4], [\ys_strings, [62], 4], [\ys_organ, [62], 4],
   [\ys_choir, [62], 4], [\ys_air, [62], 4], [\ys_epiano, [62], 1], [\ys_keys, [62], 1],
-  [\ys_sub, [38], 1], [\ys_glass, [74], 1], [\ys_pluck, [62], 1], [\ys_vinyl, [60], 4]
+  [\ys_sub, [38], 1], [\ys_glass, [74], 1], [\ys_pluck, [62], 1], [\ys_vinyl, [60], 4],
+  [\ys_supersaw, [69], 0.15], [\ys_supersaw, [57, 60, 64], 2], [\ys_kick, [36], 0.3], [\ys_tbass, [33], 0.1]
 ];
 Routine {
   ~jobs.do { |job|
