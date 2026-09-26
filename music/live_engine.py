@@ -10,6 +10,7 @@ edited line marked and the performer's reason as a code comment.
 from __future__ import annotations
 
 import concurrent.futures
+import math
 import threading
 import time
 from typing import Callable
@@ -57,6 +58,14 @@ class LiveEngine:
                 runtime.heartbeat()
                 last_beat = time.monotonic()
             self._sleep(min(remaining, 1.0))
+
+    def _wait_for(self, future) -> None:
+        last_beat = 0.0
+        while not self.stop_event.is_set() and not future.done():
+            if time.monotonic() - last_beat > 5:
+                runtime.heartbeat()
+                last_beat = time.monotonic()
+            concurrent.futures.wait([future], timeout=1.0)
 
     def _send(self, lines: list[str]) -> bool:
         if not lines:
@@ -213,6 +222,13 @@ class LiveEngine:
         while not self.stop_event.is_set():
             future = self._pool.submit(self.performer.next_edit, program)
             self._wait_until(next_cycle)
+            if not future.done():
+                # A slow model: keep playing and bring the edit in on the
+                # bar after it arrives, rather than dropping it.
+                self.log("[Live] the performer is still deciding; the music plays on")
+                self._wait_for(future)
+                next_cycle = math.floor(self.clock.cycle()) + 1
+                self._wait_until(next_cycle)
             if self.stop_event.is_set():
                 break
             try:

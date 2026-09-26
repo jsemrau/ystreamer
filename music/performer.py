@@ -385,11 +385,18 @@ class Performer:
 
     # ------------------------------------------------------------------ LLM
 
+    def _wait_seconds(self, program: Program) -> float:
+        """How long to wait for the model: the edit window at the current
+        tempo (with a little margin); a local model gets at least
+        YS_LOCAL_PERFORMER_WAIT, and the engine keeps playing and applies
+        its late edit on the next bar."""
+        window = max(4.0, self.settings["edit_bars"] / program.track.cps * 0.85)
+        if llm.resolve(self.model_id)[0] == "local":
+            return max(window, config.LOCAL_PERFORMER_WAIT_SECONDS)
+        return window
+
     def _llm_edit(self, program: Program) -> Edit | None:
-        # The reply must arrive before the next edit is due (the edit window
-        # at the current tempo), with a little margin for applying it.
-        window = self.settings["edit_bars"] / program.track.cps
-        deadline = time.monotonic() + max(4.0, window * 0.85)
+        deadline = time.monotonic() + self._wait_seconds(program)
         extra = ""   # a correction request, added after a rejected reply
         schema = self._edit_schema(program)
         asks = (f"next edit for '{program.track.title}' ({self.state.phase}, "
@@ -571,12 +578,13 @@ class Performer:
     def _judged_edit(self, program: Program) -> Edit | None:
         """Generator/judge: the LLM proposes, jevtypesafe chooses blind among
         its proposals and a few built-in candidates."""
-        window = self.settings["edit_bars"] / program.track.cps
-        deadline = time.monotonic() + max(6.0, window * 0.85)
+        deadline = time.monotonic() + max(6.0, self._wait_seconds(program))
         proposals: list[Edit] = []
         llm_problem = ""
         try:
-            proposals = self._proposals(program, timeout=max(3.0, (deadline - time.monotonic()) * 0.6))
+            # Most of the time goes to the proposals; the judge answers in seconds.
+            remaining = deadline - time.monotonic()
+            proposals = self._proposals(program, timeout=max(3.0, remaining - min(10.0, remaining * 0.3)))
             if not proposals:
                 llm_problem = "invalid"
         except llm.LLMError as e:

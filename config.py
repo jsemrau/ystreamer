@@ -77,6 +77,12 @@ LLAMA_CTX_SIZE = int(_env("LLAMA_CTX_SIZE", "16384"))
 LLAMA_GPU_LAYERS = _env("LLAMA_GPU_LAYERS", "999")
 LLAMA_SERVER_ARGS = _env("LLAMA_SERVER_ARGS", "")
 LLM_TIMEOUT_SECONDS = _env_float("YS_LLM_TIMEOUT", 60.0)
+# The local model gets longer: a big model on one GPU can take minutes on a
+# long prompt. Its Performer waits up to YS_LOCAL_PERFORMER_WAIT for an edit;
+# if that is longer than the edit interval, the music keeps playing and the
+# edit comes in late, on the next bar, instead of being dropped.
+LOCAL_LLM_TIMEOUT_SECONDS = _env_float("YS_LOCAL_LLM_TIMEOUT", 180.0)
+LOCAL_PERFORMER_WAIT_SECONDS = _env_float("YS_LOCAL_PERFORMER_WAIT", 60.0)
 # How long to wait at startup for the local model to finish loading.
 LLM_LOAD_TIMEOUT = _env_float("YS_LLM_LOAD_TIMEOUT", 300.0)
 

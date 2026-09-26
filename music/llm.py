@@ -211,8 +211,8 @@ def complete(model_id: str, system: str, user: str, timeout: float | None = None
     schema: a JSON schema the reply must follow. Local servers enforce it
     while decoding (llama.cpp turns it into a grammar), so the reply is always
     valid JSON with only the allowed names; other providers ignore it."""
-    timeout = timeout or config.LLM_TIMEOUT_SECONDS
     provider, model = resolve(model_id)
+    timeout = timeout or (config.LOCAL_LLM_TIMEOUT_SECONDS if provider == "local" else config.LLM_TIMEOUT_SECONDS)
 
     def call() -> str:
         global _local_schema_ok
