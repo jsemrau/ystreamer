@@ -44,10 +44,12 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 const POSTER = new URLSearchParams(location.search).get("poster");
+const BANNER = new URLSearchParams(location.search).get("banner");
 function fit() {
-  if (POSTER) {                     // the thumbnail is always exactly 1280x720
+  if (POSTER || BANNER) {           // thumbnail 1280x720, channel banner 2048x1152, exactly
+    const [w, h] = BANNER ? [2048, 1152] : [1280, 720];
     const c = $("bg");
-    c.style.width = "1280px"; c.style.height = "720px"; c.width = 1280; c.height = 720;
+    c.style.width = `${w}px`; c.style.height = `${h}px`; c.width = w; c.height = h;
     return;
   }
   const s = Math.min(innerWidth / STAGE_W, innerHeight / STAGE_H);
@@ -389,6 +391,8 @@ function draw() {
 // ?style=trance forces a style (for previews without a running engine).
 const params = new URLSearchParams(location.search);
 if (params.get("poster")) document.body.classList.add("poster");
+// ?banner=1: YouTube channel art, 2048x1152 (stream/thumbnail.py --banner).
+if (params.get("banner")) document.body.classList.add("poster", "banner");
 
 function renderPoster() {
   const t = (ui && ui.track) || {};
