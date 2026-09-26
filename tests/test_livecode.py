@@ -227,3 +227,98 @@ def test_resume_from_saved_state():
                          now=clock.now, sleep=clock.sleep, max_tracks=1)
     resumed.run(resume_state=state)
     assert sent[0] == "hush"
+
+
+# ------------------------------------------------------- local-model quality
+
+def test_edit_schema_allows_legal_edits_and_rejects_made_up_names():
+    jsonschema = pytest.importorskip("jsonschema")
+    performer = Performer(random.Random(0), style="lofi", model_id="local", log=lambda *_: None)
+    program = _program_with("lofi", "dusty_beat", "sub_walk")
+    schema = performer._edit_schema(program)
+    ok = [
+        {"reason": "keys in", "op": "add", "block": "rhodes_comp"},
+        {"reason": "darker", "op": "set_fx", "role": "beat", "name": "lpf", "value": "2400"},
+        {"reason": "swing", "op": "wrap", "role": "bass", "name": "degradeBy 0.1"},
+        {"reason": "drop", "op": "mute", "role": "beat", "narration": "The drums step aside."},
+        {"reason": "faster", "op": "tempo", "value": "84"},
+    ]
+    bad = [
+        {"reason": "x", "op": "add", "block": "laser_harp"},                          # no such block
+        {"reason": "x", "op": "set_fx", "role": "bass", "name": "room", "value": "0.5"},  # no reverb on bass
+        {"reason": "x", "op": "set_fx", "role": "lead", "name": "lpf", "value": "900"},   # lead isn't playing
+        {"reason": "x", "op": "wrap", "role": "bass", "name": "jux rev"},              # not a bass wrapper
+        {"op": "mute", "role": "beat"},                                                # no reason
+        {"reason": "x", "op": "explode"},
+    ]
+    for edit in ok:
+        jsonschema.validate(edit, schema)
+    for edit in bad:
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(edit, schema)
+
+
+def test_out_of_range_numbers_are_clamped_not_rejected():
+    from music.performer import _clamp_value
+
+    program = _program_with("lofi", "dusty_beat")
+    assert _clamp_value("set_fx", "lpf", "12000", program) == "9000"
+    assert _clamp_value("set_fx", "room", "-1", program) == "0"
+    assert _clamp_value("set_pf", "acid", "1.4", program) == "0.95"
+    assert _clamp_value("set_fx", "lpf", "(slow 8 $ range 100 20000 sine)", program) == \
+        "(slow 8 $ range 200 9000 sine)"
+    assert _clamp_value("tempo", "", "120", program) == "92"     # 80 BPM + at most 12
+    assert _clamp_value("set_pattern", "melody", "0 2 4", program) == "0 2 4"
+
+
+def test_rejected_edit_gets_one_corrected_retry(monkeypatch):
+    replies = iter(['{"reason": "x", "op": "set_pattern", "role": "bass", "name": "rhythm", "value": "c e g"}',
+                    '{"reason": "fixed", "op": "set_pattern", "role": "bass", "name": "rhythm", "value": "0 ~ 4 ~"}'])
+    prompts = []
+
+    def fake(agent, model_id, system, prompt, **kw):
+        prompts.append(prompt)
+        return next(replies)
+
+    monkeypatch.setattr(llm, "converse", fake)
+    performer = Performer(random.Random(0), style="lofi", model_id="local", log=lambda *_: None)
+    program = _program_with("lofi", "dusty_beat", "sub_walk")
+    performer.state.phase = "groove"
+    edit = performer.next_edit(program)
+    assert edit.source == "LLM" and edit.value == "0 ~ 4 ~"
+    assert "previous reply was rejected" in prompts[1]
+    assert performer.stats["llm"] == 1
+
+
+def test_slow_model_counts_as_late_and_falls_back(monkeypatch):
+    def slow(*a, **k):
+        raise llm.LLMError("local call timed out after 9s")
+
+    monkeypatch.setattr(llm, "converse", slow)
+    logs = []
+    performer = Performer(random.Random(0), style="lofi", model_id="local", log=logs.append)
+    program = _program_with("lofi", "dusty_beat")
+    edit = performer.next_edit(program)
+    assert edit.source == "built-in"
+    assert performer.stats["late"] == 1
+    assert any("too slow" in line for line in logs)
+
+
+def test_local_request_carries_schema_and_survives_servers_without_it(monkeypatch):
+    from music import llm as L
+
+    bodies = []
+
+    def fake_post(model, api_base, key, system, user, timeout, max_tokens, temperature, extra=None):
+        bodies.append(extra or {})
+        if "response_format" in (extra or {}):
+            raise L.LLMError("HTTP 400 from server: response_format not supported")
+        return '{"op": "tempo", "value": "80"}'
+
+    monkeypatch.setattr(L, "_openai_compatible", fake_post)
+    monkeypatch.setattr(L, "_local_schema_ok", True)
+    reply = L.complete("local/m", "s", "u", timeout=5, schema={"type": "object"})
+    assert "tempo" in reply
+    assert bodies[0]["response_format"]["json_schema"]["schema"] == {"type": "object"}
+    assert "response_format" not in bodies[1]
+    assert L._local_schema_ok is False

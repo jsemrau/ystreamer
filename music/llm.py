@@ -171,19 +171,40 @@ def _jevtypesafe(model: str, system: str, user: str, timeout: float, max_tokens:
     return json.dumps(data)  # structured reply: let extract_json find the object
 
 
+# Whether the local server accepted a JSON schema (llama.cpp does; some
+# OpenAI-compatible servers don't). Set to False after the first rejection.
+_local_schema_ok = True
+
+
 def complete(model_id: str, system: str, user: str, timeout: float | None = None,
-             max_tokens: int = 1200, temperature: float = 0.8) -> str:
-    """Return the model's text reply, or raise LLMError (including on timeout)."""
+             max_tokens: int = 1200, temperature: float = 0.8, schema: dict | None = None) -> str:
+    """Return the model's text reply, or raise LLMError (including on timeout).
+
+    schema: a JSON schema the reply must follow. Local servers enforce it
+    while decoding (llama.cpp turns it into a grammar), so the reply is always
+    valid JSON with only the allowed names; other providers ignore it."""
     timeout = timeout or config.LLM_TIMEOUT_SECONDS
     provider, model = resolve(model_id)
 
     def call() -> str:
+        global _local_schema_ok
         if provider == "claude":
             return _claude(model, system, user, timeout, max_tokens)
         if provider == "local":
             # Qwen-style chat templates otherwise "think" for thousands of tokens.
+            extra = {"chat_template_kwargs": {"enable_thinking": False}}
+            if schema is not None and _local_schema_ok:
+                try:
+                    return _openai_compatible(
+                        model, config.LOCAL_LLM_API_BASE, "", system, user, timeout, max_tokens, temperature,
+                        {**extra, "response_format": {"type": "json_schema",
+                                                      "json_schema": {"name": "reply", "schema": schema}}})
+                except LLMError as e:
+                    if "HTTP 400" not in str(e):
+                        raise
+                    _local_schema_ok = False  # the server can't do schemas; ask without
             return _openai_compatible(model, config.LOCAL_LLM_API_BASE, "", system, user, timeout, max_tokens,
-                                      temperature, {"chat_template_kwargs": {"enable_thinking": False}})
+                                      temperature, extra)
         if provider == "jevtypesafe":
             return _jevtypesafe(model, system, user, timeout, max_tokens, temperature)
         import litellm
@@ -262,7 +283,8 @@ def _one_line(text: str, limit: int = 400) -> str:
 
 
 def converse(agent: str, model_id: str, system: str, user: str, *, log=print, asks: str = "",
-             show_full: bool = False, max_tokens: int = 1200, temperature: float = 0.8) -> str:
+             show_full: bool = False, max_tokens: int = 1200, temperature: float = 0.8,
+             timeout: float | None = None, schema: dict | None = None) -> str:
     """complete() plus a visible record of the exchange: what the agent asked
     which model, what came back and how long it took (terminal), and the full
     prompt and reply (runtime/llm_calls.jsonl). Raises LLMError like complete()."""
@@ -278,7 +300,8 @@ def converse(agent: str, model_id: str, system: str, user: str, *, log=print, as
     started = time.monotonic()
     record = {"agent": agent, "model": who, "asks": asks, "system": system, "prompt": user}
     try:
-        reply = complete(model_id, system, user, max_tokens=max_tokens, temperature=temperature)
+        reply = complete(model_id, system, user, timeout=timeout, max_tokens=max_tokens,
+                         temperature=temperature, schema=schema)
     except LLMError as e:
         seconds = time.monotonic() - started
         log(f"💬 {agent} ← {who} ({seconds:.1f}s): ✗ {e}")
