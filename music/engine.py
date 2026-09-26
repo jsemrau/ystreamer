@@ -34,7 +34,7 @@ from . import runtime
 from .director import Director
 from .plan import Arrangement, Piece
 from .templates import HarmonyContext, render_layer, statement, with_orbit
-from .theory import PROGRESSIONS_BY_NAME, Key, progression_chords
+from .theory import PROGRESSIONS_BY_NAME, Key, progression_chords, transpose_key
 
 
 class Clock:
@@ -105,18 +105,32 @@ class MusicEngine:
 
     # ------------------------------------------------------------------ render
 
-    def harmony_for(self, piece: Piece, section_name: str) -> HarmonyContext:
-        key = Key.parse(piece.key)
-        chords = progression_chords(key, PROGRESSIONS_BY_NAME[piece.progression])
-        # Same section name -> same seed -> recurring sections reuse their melody.
-        seed = (piece.seed * 31 + stable_hash(section_name)) % 1_000_000
-        return HarmonyContext(key=key, chords=chords, cycles_per_chord=piece.cycles_per_chord, seed=seed)
+    def harmony_for(self, piece: Piece, index: int, start: int = 0,
+                    arrangement: Arrangement | None = None) -> HarmonyContext:
+        section = piece.sections[index]
+        key = transpose_key(Key.parse(piece.key), section.key_shift)
+        progression = PROGRESSIONS_BY_NAME[piece.progression_for(section.name)]
+        if key.mode not in progression.modes:
+            progression = PROGRESSIONS_BY_NAME[piece.progression]
+        chords = progression_chords(key, progression, color=piece.color)
+        # Same section name -> same seed -> recurring sections reuse their
+        # melody's opening; `variation` makes each return answer differently.
+        seed = (piece.seed * 31 + stable_hash(section.name)) % 1_000_000
+        variation = sum(1 for s in piece.sections[:index] if s.name == section.name)
+        next_name = piece.sections[index + 1].name if index + 1 < len(piece.sections) else ""
+        return HarmonyContext(
+            key=key, chords=chords, cycles_per_chord=piece.cycles_per_chord, seed=seed,
+            start=start, bars=section.bars, section=section.name, next_section=next_name,
+            variation=variation,
+            fills=arrangement.fills if arrangement else True,
+            movement=arrangement.movement if arrangement else "gentle",
+        )
 
     def render_section(self, piece: Piece, index: int, arrangement: Arrangement,
                        previous_active: dict[str, str], transition: str = "jumpMod",
-                       free_cycles: list[str] | None = None) -> RenderedSection:
+                       free_cycles: list[str] | None = None, start: int = 0) -> RenderedSection:
         section = piece.sections[index]
-        ctx = self.harmony_for(piece, section.name)
+        ctx = self.harmony_for(piece, index, start, arrangement)
         out = RenderedSection()
         for role in P.ROLES:
             preset_name = arrangement.layers.get(role) if role != "free" else ("free_glass" if free_cycles else None)
@@ -175,7 +189,8 @@ class MusicEngine:
     def _publish(self, piece: Piece, index: int, arrangement: Arrangement, rendered: RenderedSection,
                  start_cycle: int) -> None:
         section = piece.sections[index]
-        now_playing = (f"{piece.title}  ·  {piece.key}  ·  {piece.bpm:.0f} BPM  ·  "
+        key_name = transpose_key(Key.parse(piece.key), section.key_shift).name
+        now_playing = (f"{piece.title}  ·  {key_name}  ·  {piece.bpm:.0f} BPM  ·  "
                        f"{section.name} ({index + 1}/{len(piece.sections)})")
         runtime.write_overlay(now_playing, list(rendered.statements.values()))
         state = {
@@ -255,7 +270,7 @@ class MusicEngine:
         self.clock.reset(piece.cps)
         self._send(["hush", f"setcps {piece.cps:.6f}", "resetCycles"])
         self.clock.reset(piece.cps)
-        rendered = self.render_section(piece, index, arrangement, {}, transition="now", free_cycles=free)
+        rendered = self.render_section(piece, index, arrangement, {}, transition="now", free_cycles=free, start=0)
         self._apply(rendered, piece.period, "now")
         start = 0
         self.piece, self.section_index, self.arrangement = piece, index, arrangement
@@ -293,7 +308,7 @@ class MusicEngine:
                 self._send(lines_before)
                 self.clock.set_cps(next_piece.cps)
 
-            rendered = self.render_section(next_piece, next_index, next_arrangement, self.active,
+            rendered = self.render_section(next_piece, next_index, next_arrangement, self.active, start=next_start,
                                            transition="jumpMod", free_cycles=free)
             self._apply(rendered, next_piece.period, "jumpMod")
             piece, index, arrangement, start = next_piece, next_index, next_arrangement, next_start

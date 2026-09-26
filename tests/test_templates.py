@@ -44,10 +44,10 @@ def test_layers_share_the_harmonic_clock(role):
         if expr is None or preset.name == "vinyl":
             continue
         entries = sequence(expr)
-        if expr.startswith(f"slow {ctx.cycles_per_chord} $"):
-            assert len(entries) * ctx.cycles_per_chord == ctx.period
-        else:
-            assert len(entries) == ctx.period, (role, expr)
+        slowed = expr.startswith(f"slow {ctx.cycles_per_chord} $") or f'note (slow {ctx.cycles_per_chord} "<' in expr
+        cycles = len(entries) * (ctx.cycles_per_chord if slowed else 1)
+        # One loop, or a whole number of loops (melody phrases span two).
+        assert cycles % ctx.period == 0 and cycles >= ctx.period, (role, expr)
 
 
 def test_bass_plays_chord_roots_on_the_downbeat():
@@ -63,7 +63,7 @@ def test_melody_strong_beats_are_chord_tones():
     for ctx in contexts():
         expr = render_layer("melody", ctx, P.default_for("melody"), 0.6)
         for i, entry in enumerate(sequence(expr)):
-            chord = ctx.chords[i // ctx.cycles_per_chord]
+            chord = ctx.chords[(i // ctx.cycles_per_chord) % len(ctx.chords)]
             steps = entry.strip("[]").split()
             assert len(steps) == 8
             for pos in (0, 4):

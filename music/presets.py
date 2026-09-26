@@ -157,20 +157,15 @@ DRUM_PATTERNS: dict[str, list[list[tuple[str, str, float]]]] = {
     "lofi_kit": [
         [("bd", "bd ~ ~ ~ ~ ~ ~ ~ bd ~ ~ ~ ~ ~ ~ ~", 0.95), ("hh27", "~ ~ hh27 ~ ~ ~ hh27 ~ ~ ~ hh27 ~ ~ ~ hh27 ~", 0.72)],
         [("bd", "bd ~ ~ ~ ~ ~ ~ bd ~ ~ bd ~ ~ ~ ~ ~", 0.95), ("sn", "~ ~ ~ ~ sn ~ ~ ~ ~ ~ ~ ~ sn ~ ~ ~", 0.8),
-         ("hh27", "hh27*8", 0.7)],
+         ("hh27", "hh27*8", 0.7), ("sn:2", "~ ~ ~ ~ ~ ~ ~ sn:2? ~ ~ ~ ~ ~ ~ sn:2? ~", 0.5)],
         [("bd", "bd ~ ~ ~ ~ ~ ~ bd ~ ~ bd ~ ~ ~ ~ ~", 0.97), ("sn", "~ ~ ~ ~ sn ~ ~ ~ ~ ~ ~ ~ sn ~ ~ [~ sn]", 0.82),
-         ("hh27", "hh27*8", 0.74), ("hh27:3", "~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ hh27:3 ~", 0.68)],
+         ("hh27", "hh27*8", 0.74), ("hh27:3", "~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ hh27:3 ~", 0.68),
+         ("sn:2", "~ ~ ~ ~ ~ ~ ~ sn:2? ~ ~ ~ sn:2? ~ ~ sn:2? ~", 0.5)],
     ],
     "soft_pulse": [
         [("bd", "bd ~ ~ ~", 0.85)],
         [("bd", "bd ~ ~ ~", 0.88), ("hh", "~ hh ~ hh", 0.62)],
         [("bd", "bd ~ [~ bd] ~", 0.9), ("hh", "hh*4", 0.62), ("cp", "~ ~ cp ~", 0.7)],
-    ],
-    "house_kit": [
-        [("bd", "bd*4", 0.97), ("hh", "[~ hh]*4", 0.68)],
-        [("bd", "bd*4", 0.97), ("hh", "[~ hh]*4", 0.7), ("cp", "~ cp ~ cp", 0.78)],
-        [("bd", "bd*4", 1.0), ("808oh", "[~ 808oh]*4", 0.64), ("cp", "~ cp ~ cp", 0.8),
-         ("hh", "hh*16", 0.52)],
     ],
     "downtempo_kit": [
         [("808bd", "808bd ~ ~ ~ ~ ~ ~ ~", 0.95), ("808hc", "~ 808hc ~ 808hc ~ 808hc ~ 808hc", 0.66)],
@@ -179,7 +174,40 @@ DRUM_PATTERNS: dict[str, list[list[tuple[str, str, float]]]] = {
         [("808bd", "808bd ~ ~ 808bd ~ ~ 808bd ~", 0.97), ("808sd", "~ ~ 808sd ~", 0.8),
          ("808hc", "808hc*8", 0.66), ("808oh", "~ ~ ~ ~ ~ ~ ~ 808oh", 0.6)],
     ],
+    "house_kit": [
+        [("bd", "bd*4", 0.97), ("hh", "[~ hh]*4", 0.68)],
+        [("bd", "bd*4", 0.97), ("hh", "[~ hh]*4", 0.7), ("cp", "~ cp ~ cp", 0.78),
+         ("808lc", "[~ ~ ~ 808lc] [~ 808mc ~ ~] [~ ~ 808lc ~] ~", 0.6)],
+        [("bd", "bd*4", 1.0), ("808oh", "[~ 808oh]*4", 0.64), ("cp", "~ cp ~ cp", 0.8),
+         ("hh", "hh*16", 0.52), ("808lc", "[~ ~ ~ 808lc] [~ 808mc ~ ~] [~ ~ 808lc ~] [808mc ~ ~ ~]", 0.62)],
+    ],
 }
+
+# Played on the last bar of every 8-bar phrase (replaces the groove).
+DRUM_FILLS: dict[str, list[tuple[str, str, float]]] = {
+    "lofi_kit": [("bd", "bd ~ ~ ~ ~ ~ ~ ~ bd ~ ~ ~ ~ ~ ~ ~", 0.95),
+                 ("sn", "~ ~ ~ ~ sn ~ ~ ~ ~ ~ sn ~ [sn sn] ~ sn sn", 0.78), ("hh27", "hh27*8", 0.66)],
+    "soft_pulse": [("bd", "bd ~ ~ ~", 0.85), ("hh", "~ hh [hh hh] hh", 0.6)],
+    "downtempo_kit": [("808bd", "808bd ~ ~ 808bd ~ ~ ~ ~", 0.95),
+                      ("808sd", "~ ~ 808sd ~ ~ ~ [808sd 808sd] 808sd", 0.78), ("808hc", "808hc*8", 0.62)],
+    "house_kit": [("bd", "bd*4", 0.97), ("cp", "~ cp ~ [cp cp]", 0.8), ("hh", "hh*16", 0.55),
+                  ("sn:1", "~ ~ ~ [~ sn:1 sn:1 sn:1]", 0.7)],
+}
+
+# Added on the 4th bar of every 4 (a small turnaround, not a full fill).
+DRUM_VARIATIONS: dict[str, list[tuple[str, str, float]]] = {
+    "lofi_kit": [("hh27:3", "~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ hh27:3", 0.62)],
+    "soft_pulse": [("hh", "~ ~ ~ [~ hh]", 0.55)],
+    "downtempo_kit": [("808oh", "~ ~ ~ ~ ~ ~ ~ 808oh", 0.55)],
+    "house_kit": [("808oh", "~ ~ ~ [~ 808oh]", 0.6)],
+}
+
+# Snare/clap used for the roll at the end of a build.
+DRUM_ROLL_SAMPLE = {"lofi_kit": "sn", "soft_pulse": "hh", "downtempo_kit": "808sd", "house_kit": "cp"}
+
+# Kits that get small random timing offsets (a laid-back, human feel).
+LOOSE_KITS = {"lofi_kit", "downtempo_kit"}
+
 
 # Instruments the legacy composer may use. Harsh demo synths are mapped to
 # softer equivalents by the normaliser.

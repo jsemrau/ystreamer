@@ -106,7 +106,8 @@ class Director:
     def next_piece(self, previous: Piece | None) -> Piece:
         avoid = feedback.disliked()
         fallback = plan_piece(self.rng, previous, style=self.style,
-                              avoid_progressions=set(self.recent_progressions) | avoid["progressions"],
+                              avoid_progressions=set(self.recent_progressions),
+                              disliked=avoid["progressions"],
                               target_minutes=self.target_minutes)
         piece = fallback
         if self._llm_available():

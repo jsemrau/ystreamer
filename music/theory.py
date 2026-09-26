@@ -208,8 +208,28 @@ def progressions_for(mode: str, energy: float | None = None) -> list[Progression
     return out
 
 
-def progression_chords(key: Key, progression: Progression, seventh: bool = True) -> list[Chord]:
-    return [diatonic_chord(key, d, seventh=seventh) for d in progression.degrees]
+CHORD_COLORS = ("sevenths", "ninths")
+
+
+def with_ninth(key: Key, chord: Chord) -> Chord:
+    """Add the diatonic 9th, but only when it's a whole step above the root
+    (a flat 9th rubs against the root and sounds harsh in chill music)."""
+    ninth = key.degree_pitch(chord.degree + 8) % 12
+    if (ninth - chord.root) % 12 != 2:
+        return chord
+    return Chord(chord.degree, chord.notes + (ninth,), chord.root, chord.quality, chord.seventh)
+
+
+def progression_chords(key: Key, progression: Progression, seventh: bool = True,
+                       color: str = "sevenths") -> list[Chord]:
+    chords = [diatonic_chord(key, d, seventh=seventh) for d in progression.degrees]
+    if color == "ninths":
+        chords = [with_ninth(key, c) for c in chords]
+    return chords
+
+
+def transpose_key(key: Key, semitones: int) -> Key:
+    return Key((key.root + semitones) % 12, key.mode)
 
 
 # ---------------------------------------------------------------------------
