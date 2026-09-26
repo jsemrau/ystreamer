@@ -414,6 +414,10 @@ def run_engine(args) -> None:
                           build_bars=config.BUILD_BARS, max_lines=director.settings["max_lines"],
                           resume=bool(args.resume))
         print(f"[orchestrator] Session log: {session_log.path}")
+        from music.host_requests import RequestQueue
+
+        # Requests typed into the stream page ("more bass") reach the Performer.
+        director.requests = RequestQueue()
         engine = LiveEngine(send, director, narrator=narrator, type_checker=type_checker,
                             max_tracks=args.pieces, session_log=session_log)
     else:

@@ -11,6 +11,7 @@ stream; stream/stream.sh (YS_STREAM_UI=browser) captures it for YouTube.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from functools import partial
@@ -38,6 +39,27 @@ class Handler(SimpleHTTPRequestHandler):
                             missing=b'{"events": [], "code": [], "thinking": {}}')
             return
         super().do_GET()
+
+    def do_POST(self) -> None:  # noqa: N802
+        """A request from the host ("more bass"), typed into the page. The
+        server only listens on 127.0.0.1, so only this machine can send one."""
+        if self.path.split("?", 1)[0] != "/request":
+            self.send_error(404)
+            return
+        from music import host_requests
+
+        try:
+            length = min(int(self.headers.get("Content-Length") or 0), 4096)
+            data = json.loads(self.rfile.read(length) or b"{}")
+            record = host_requests.submit(data.get("text", ""))
+        except (ValueError, OSError):
+            record = None
+        body = json.dumps({"ok": bool(record), "text": record["text"] if record else ""}).encode()
+        self.send_response(200 if record else 400)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _send_file(self, path: str, content_type: str, missing: bytes) -> None:
         try:

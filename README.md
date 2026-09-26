@@ -353,6 +353,21 @@ built-in performer, so you can see that the model is really playing:
 - The arranger engine's agents appear the same way, as `Director` (plans
   pieces), `Arranger` (arranges sections) and `Composer` (counter-melodies).
 
+## Asking the performer for something
+
+Open the stream page on the machine that runs it (http://127.0.0.1:8765) and
+type into the box at the bottom, e.g. `more bass`, `darker`, `drop the beat`,
+`faster`. The Performer takes the request at its next edit (which comes
+sooner while a request waits), reviews it and makes the move that best
+answers it, within the usual rules (harmony, the kit, +3 dB at most per
+line); if it can't do it as asked, it says why and makes the closest good
+move. The stream shows a "Host request" card with your words, the move and
+the review; the box itself is only on your view (the captured stream loads
+the page with `?capture=1`). Without an LLM, simple keyword rules answer
+(more / less / drop / bring back a part, darker / brighter, faster / slower).
+Requests are logged in the terminal (`📨`) and in the session memory; the
+page server only listens on 127.0.0.1.
+
 ## Session memory: every change to the artefact
 
 Each live session writes `sessions/<date>_<time>.jsonl` (set
