@@ -8,10 +8,12 @@ Shared by the harmony engine (music/engine.py) and the legacy agent loop
 
 import os
 import re
+import shlex
 import signal
 import subprocess
 import threading
 import time
+import urllib.parse
 from collections import deque
 from datetime import datetime
 from queue import Empty, Queue
@@ -469,6 +471,51 @@ def llama_load_progress(since: float) -> tuple[int | None, str]:
     return pct, " · ".join(parts)
 
 
+# llama-server log patterns -> what to do about them.
+_LLAMA_ERRORS = [
+    (r"out of memory|failed to allocate|cudaMalloc failed|ErrorOutOfDeviceMemory|unable to allocate",
+     "the GPU ran out of memory. Lower LLAMA_CTX_SIZE in .env (e.g. 8192), or offload fewer layers "
+     "with LLAMA_GPU_LAYERS (e.g. 50), or add LLAMA_SERVER_ARGS=--cache-type-k q8_0 --cache-type-v q8_0 -fa on"),
+    (r"unknown model architecture|unknown architecture|unsupported model",
+     "this llama.cpp build doesn't know the model's architecture. Update and rebuild llama.cpp"),
+    (r"failed to load model|error loading model|invalid magic|gguf_init.*failed",
+     "llama.cpp couldn't load the model file. Check LLAMA_GGUF_MODEL and that the download is complete, "
+     "or update llama.cpp"),
+    (r"address already in use|couldn't bind|bind.*failed",
+     "port 8080 is taken by another program. Stop it (or the old llama-server: pkill -f llama-server)"),
+    (r"invalid argument|unknown argument|error: unrecognized",
+     "llama-server rejected a command-line flag. Check LLAMA_SERVER_ARGS, or update llama.cpp"),
+]
+
+
+def _llama_log_tail(n: int = 12) -> list[str]:
+    try:
+        with open(config.LLAMA_SERVER_LOG, "rb") as f:
+            f.seek(max(0, os.path.getsize(config.LLAMA_SERVER_LOG) - 65536))
+            lines = [line.rstrip() for line in f.read().decode(errors="replace").splitlines()]
+    except OSError:
+        return []
+    return [line for line in lines if line.strip()][-n:]
+
+
+def diagnose_llama_failure() -> str:
+    """Last lines of llama-server's log plus a likely fix, for when it died."""
+    tail = _llama_log_tail(40)
+    hint = ""
+    for line in reversed(tail):
+        for pattern, fix in _LLAMA_ERRORS:
+            if re.search(pattern, line, re.IGNORECASE):
+                hint = fix
+                break
+        if hint:
+            break
+    shown = "\n".join(f"    {line}" for line in tail[-12:]) or "    (the log is empty)"
+    text = f"last lines of {config.LLAMA_SERVER_LOG}:\n{shown}"
+    if hint:
+        text += f"\n  Likely cause: {hint}."
+    return text
+
+
 def wait_for_local_llm(timeout: float) -> bool:
     started = time.time()
     deadline = started + timeout
@@ -479,6 +526,12 @@ def wait_for_local_llm(timeout: float) -> bool:
     log_since = started - 120
     while time.time() < deadline:
         status = local_llm_status()
+        exited = _llama_process is not None and _llama_process.poll() is not None
+        if exited or (status == "down" and announced):
+            code = f" with exit code {_llama_process.returncode}" if exited else ""
+            log(f"[llama-server] stopped{code} while loading the model; the built-in performer plays instead.\n"
+                f"  {diagnose_llama_failure()}")
+            return False
         if status == "ready":
             log(f"[llama-server] ready after {time.time() - started:.0f}s" if announced else "[llama-server] ready")
             return True
@@ -495,8 +548,8 @@ def wait_for_local_llm(timeout: float) -> bool:
                 log(f"[llama-server] {text} · {elapsed // 60}:{elapsed % 60:02d}")
                 last_key, last_print = key, now
         time.sleep(2)
-    log(f"[llama-server] not ready after {timeout:.0f}s; the built-in performer plays "
-        f"until it is (see {config.LLAMA_SERVER_LOG})")
+    log(f"[llama-server] not ready after {timeout:.0f}s; the built-in performer plays until it is.\n"
+        f"  {diagnose_llama_failure()}")
     return False
 
 
@@ -514,7 +567,7 @@ def ensure_local_llm_server(wait: bool = True) -> None:
     if not config.LLAMA_GGUF_MODEL or not os.path.exists(config.LLAMA_GGUF_MODEL):
         log(f"[llama-server] not starting: LLAMA_GGUF_MODEL in .env is "
             f"{'not set' if not config.LLAMA_GGUF_MODEL else 'missing: ' + config.LLAMA_GGUF_MODEL}. "
-            "The Director will use its built-in planner until a server answers at "
+            "The built-in performer plays until a server answers at "
             f"{config.LOCAL_LLM_API_BASE}.")
         return
 
@@ -523,11 +576,14 @@ def ensure_local_llm_server(wait: bool = True) -> None:
     log_file = open(config.LLAMA_SERVER_LOG, "a")
     try:
         global _llama_process
-        _llama_process = subprocess.Popen(
-            [config.LLAMA_SERVER_BIN, "-m", config.LLAMA_GGUF_MODEL, "-ngl", "999",
-             "--port", "8080", "--ctx-size", "32768", "--parallel", "2"],
-            stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True,
-        )
+        port = urllib.parse.urlparse(config.LOCAL_LLM_API_BASE).port or 8080
+        cmd = [config.LLAMA_SERVER_BIN, "-m", config.LLAMA_GGUF_MODEL, "-ngl", str(config.LLAMA_GPU_LAYERS),
+               "--port", str(port), "--ctx-size", str(config.LLAMA_CTX_SIZE), "--parallel", "2",
+               *shlex.split(config.LLAMA_SERVER_ARGS)]
+        log(f"[llama-server] {' '.join(cmd)}")
+        log_file.write(f"\n===== {datetime.now():%Y-%m-%d %H:%M:%S} {' '.join(cmd)}\n")
+        log_file.flush()
+        _llama_process = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True)
     except FileNotFoundError as e:
         log(f"[llama-server] could not launch: {e}")
         return

@@ -66,6 +66,11 @@ LLAMA_SERVER_BIN = _env("LLAMA_SERVER_BIN", "llama-server")
 LLAMA_GGUF_MODEL = _env("LLAMA_GGUF_MODEL", "")
 LOCAL_LLM_API_BASE = _env("LOCAL_LLM_API_BASE", "http://127.0.0.1:8080/v1")
 LLAMA_SERVER_LOG = _env("LLAMA_SERVER_LOG", os.path.join(REPO_DIR, "logs", "llama-server.log"))
+# llama-server launch options: context size (shared by the parallel slots),
+# layers on the GPU (999 = all), and any extra flags (e.g. "-fa on --cache-type-k q8_0").
+LLAMA_CTX_SIZE = int(_env("LLAMA_CTX_SIZE", "16384"))
+LLAMA_GPU_LAYERS = _env("LLAMA_GPU_LAYERS", "999")
+LLAMA_SERVER_ARGS = _env("LLAMA_SERVER_ARGS", "")
 LLM_TIMEOUT_SECONDS = _env_float("YS_LLM_TIMEOUT", 60.0)
 # How long to wait at startup for the local model to finish loading.
 LLM_LOAD_TIMEOUT = _env_float("YS_LLM_LOAD_TIMEOUT", 300.0)
