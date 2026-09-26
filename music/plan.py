@@ -74,12 +74,17 @@ STYLES = {
         # After Switch Angel's live-coded trance: 138 BPM, four-on-the-floor,
         # rolling bass, gated supersaw arps, breakdown -> build -> drop.
         "bpm": (134, 140), "modes": ["minor"], "cycles_per_chord": 2,
-        "presets": {"pad": "gated_saw", "keys": "piano", "bass": "rolling_bass", "melody": "saw_lead",
-                    "arp": "trance_gate", "drums": "trance_kit", "texture": "air"},
-        "palette": {"pad": ["gated_saw", "gated_saw", "saw_pad", "strings_pad"], "keys": ["piano", "felt"],
-                    "melody": ["saw_lead", "glass"]},
-        "energy_order": ["drums", "bass", "arp", "pad", "texture", "melody", "keys"],
-        "openers": [["drums", "bass"], ["drums", "arp"], ["arp", "drums"]],
+        # The acid line is the heart of it (Switch Angel's Strudel acid trance):
+        # a squelchy 16th saw line, a kick, and everything pumping on the kick.
+        "presets": {"pad": "gated_saw", "keys": "piano", "bass": "acid_line", "melody": "saw_lead",
+                    "arp": "acid_hi", "drums": "trance_kit", "texture": "air"},
+        "palette": {"pad": ["gated_saw", "gated_saw", "saw_pad"], "keys": ["piano", "felt"],
+                    "bass": ["acid_line"],
+                    "arp": ["acid_hi", "trance_gate"], "melody": ["saw_lead", "glass"]},
+        "energy_order": ["bass", "drums", "arp", "pad", "texture", "melody", "keys"],
+        "openers": [["bass"], ["bass", "drums"], ["drums", "bass"]],
+        # The acid line keeps going under the pad in breakdowns, knob turned down.
+        "breakdown": ["bass", "pad"],
         "arc": [("intro", 0.3, 2), ("verse", 0.6, 4), ("breakdown", 0.3, 2), ("build", 0.65, 2),
                 ("chorus", 0.9, 4), ("verse", 0.6, 2), ("build", 0.7, 2), ("chorus", 0.95, 4),
                 ("outro", 0.3, 2)],
@@ -339,9 +344,14 @@ def arrange(piece: Piece, section: Section, rng: random.Random, max_layers: int 
         count = min(count, 3)
     count = max(1, min(count, max_layers))
     roles = order[:count]
-    # In a breakdown keep the pad and let the melody float over it.
-    if section.name == "breakdown" and "melody" not in roles:
-        roles = ["pad", "melody"]
+    # In a breakdown keep the pad and let the melody float over it (styles can
+    # choose other breakdown layers, e.g. trance keeps its acid line, knob down).
+    if section.name == "breakdown":
+        style_roles = STYLES.get(piece.style, {}).get("breakdown")
+        if style_roles:
+            roles = list(style_roles)
+        elif "melody" not in roles:
+            roles = ["pad", "melody"]
     layers = {role: (piece.instrument(role) if role in roles else None) for role in P.ENERGY_ORDER}
     return Arrangement(layers=layers, melody_character=None, variation_seed=rng.randrange(1_000_000))
 

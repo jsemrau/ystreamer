@@ -229,7 +229,8 @@ def run_selftest(args) -> int:
             # Plain; a mid-phrase verse (fills, turnarounds, movement); and a
             # build into a chorus (roll, kick/bass drop, filter rise).
             contexts = ({}, {"start": 12, "bars": 16, "section": "verse", "variation": 1, "movement": "lively"},
-                        {"start": 40, "bars": 16, "section": "build", "next_section": "chorus"})
+                        {"start": 40, "bars": 16, "section": "build", "next_section": "chorus"},
+                        {"start": 8, "bars": 16, "section": "chorus", "sidechain": True, "cps": 136 / 240})
             for cpc, color, extra in itertools.product((1, 2), ("sevenths", "ninths"), contexts):
                 if not full and (color != "sevenths" or extra):
                     continue

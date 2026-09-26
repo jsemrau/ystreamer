@@ -126,6 +126,8 @@ class MusicEngine:
             movement=arrangement.movement if arrangement else "gentle",
             busy=max(0, len(arrangement.active_roles()) - 1) if arrangement else 0,
             cps=piece.cps,
+            # Trance pumps: everything ducks on the kick while the drums play.
+            sidechain=piece.style == "trance" and bool(arrangement and arrangement.layers.get("drums")),
         )
 
     def render_section(self, piece: Piece, index: int, arrangement: Arrangement,

@@ -38,6 +38,7 @@ class HarmonyContext:
     movement: str = "gentle"  # still | gentle | lively
     busy: int = 0             # other layers playing in this section (pads back off when busy)
     cps: float = 0.5625       # tempo (cycles = bars per second); trance gates lock to it
+    sidechain: bool = False   # duck everything on the kick (trance with drums playing)
 
     def __post_init__(self):
         if not self.pad_voicings:
@@ -142,11 +143,26 @@ def render_pad(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custom:
     # further back when four or more other layers are playing.
     gain_db = _chord_gain_db(len(ctx.pad_voicings[0]), 4) - (2.5 if ctx.busy >= 4 else 0.0)
     gate = _trance_gate_params(ctx, energy) if synth == "ys_gatesaw" else ""
+    if synth in ("ys_gatesaw", "ys_supersaw"):
+        gate += _duck_params(ctx)
     # Only the chord sequence is slowed; effects stay on the normal clock so
     # filter sweeps line up with the section.
     return (f'note (slow {ctx.cycles_per_chord} "<{chords}>") # s "{synth}" '
             f'# legato {_fmt(preset.legato)} {_fx(preset, energy, ctx=ctx, move=True, gain_db=gain_db)} '
             f'# pan (slow 16 $ range 0.4 0.6 sine){gate}')
+
+
+# Per-16th gain for short-note layers, the same shape as the in-synth duck
+# (depth 0.8): amplitude ~ gain^4, so 0.67 -> ~0.2 on the kick, 0.91 -> ~0.7.
+PUMP = '|* gain "[0.67 0.91 1 1]*4"'
+
+
+def _duck_params(ctx: HarmonyContext) -> str:
+    """Sidechain for sustained supersaws (in-synth duck on every beat)."""
+    if not ctx.sidechain:
+        return ""
+    beat = round(1.0 / ctx.cps / 4, 4)
+    return f' # pF "duckdepth" 0.8 # pF "duckattack" 0.16 # pF "beattime" {_fmt(beat)}'
 
 
 def _trance_gate_params(ctx: HarmonyContext, energy: float) -> str:
@@ -211,6 +227,8 @@ def render_keys(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custom
 
 
 def render_bass(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custom: bool) -> str | None:
+    if preset.synth == "ys_acid":
+        return render_acid(ctx, preset, energy, use_custom)
     synth = _synth(preset, use_custom)
     if not synth:
         return None
@@ -313,9 +331,58 @@ def _render_trance_gate(ctx: HarmonyContext, preset: P.Preset, energy: float, sy
                 steps.append("~")
         cycles.append("[" + " ".join(steps) + "]")
     # A sidechain-style pump: each beat's first 16th ducks under the kick.
+    pump = PUMP if ctx.sidechain else '|* gain "[0.82 1 0.94 1]*4"'
     return (f'(note "<{" ".join(cycles)}>" # s "{synth}" # legato {_fmt(preset.legato)} '
             f'{_fx(preset, energy, ctx=ctx, move=True)} # pan (slow 8 $ range 0.35 0.65 sine)) '
-            f'|* gain "[0.82 1 0.94 1]*4"')
+            f'{pump}')
+
+
+def acid_motif(seed: int) -> list[int]:
+    """A short scale-degree cycle in the shape of Switch Angel's <0 4 0 9 7>:
+    3, 5 or 7 steps, returning to the root. Played as 16ths it drifts against
+    the bar (a 5-step cycle only realigns every 5 bars)."""
+    rng = random.Random(seed)
+    pool = [2, 3, 4, 5, 7, 9, 11]
+    length = rng.choice([3, 5, 5, 7])
+    others = [rng.choice(pool) for _ in range(4)]
+    shapes = {3: [0, others[0], others[1]],
+              5: [0, others[0], 0, others[1], others[2]],
+              7: [0, others[0], 0, others[1], others[2], 0, others[3]]}
+    return shapes[length]
+
+
+def _acid_knob(ctx: HarmonyContext, energy: float) -> str:
+    """The squelch slider (0..1), automated like a hand on the knob."""
+    if ctx.section == "breakdown":
+        return "0.25"
+    if ctx.is_build:
+        return f"({section_relative(ctx, ctx.bars, f'slow {ctx.bars}', 'range 0.3 0.9 saw')})"
+    lo, hi, rate = [(0.25, 0.45, 16), (0.4, 0.65, 16), (0.55, 0.85, 8)][_intensity(energy)]
+    return f"(slow {rate} $ range {lo} {hi} sine)"
+
+
+def render_acid(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custom: bool) -> str | None:
+    """Acid line: 16ths of a short polymetric motif, relative to each chord's
+    root so it follows the harmony, through the ys_acid filter envelope."""
+    synth = _synth(preset, use_custom)
+    if not synth:
+        return None
+    low = preset.register[0]
+    motif = acid_motif(ctx.seed * 3 + (7 if preset.role == "arp" else 0))
+    cycles = []
+    for i in range(ctx.period):
+        chord = ctx.chords[i // ctx.cycles_per_chord]
+        root = bass_note(chord, low, low + 11)
+        base = ctx.key.degree_pitch(chord.degree)
+        steps = []
+        for step in range(16):
+            degree = motif[(i * 16 + step) % len(motif)]
+            steps.append(str(root + ctx.key.degree_pitch(chord.degree + degree) - base))
+        cycles.append("[" + " ".join(steps) + "]")
+    knob = f' # pF "acid" {_acid_knob(ctx, energy)}' if synth == "ys_acid" else ""
+    expr = (f'(note "<{" ".join(cycles)}>" # s "{synth}" # legato {_fmt(preset.legato)} '
+            f'{_fx(preset, energy)}{knob} # pan {0.45 if preset.role == "bass" else 0.6})')
+    return f"{expr} {PUMP}" if ctx.sidechain else expr
 
 
 def render_arp(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custom: bool) -> str | None:
@@ -324,6 +391,8 @@ def render_arp(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custom:
         return None
     if preset.name == "trance_gate":
         return _render_trance_gate(ctx, preset, energy, synth)
+    if preset.synth == "ys_acid":
+        return render_acid(ctx, preset, energy, use_custom)
     rng = random.Random(ctx.seed * 17 + 3)
     style = rng.choice(["up", "updown", "down"])
     low, high = preset.register
