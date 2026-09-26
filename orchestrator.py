@@ -170,6 +170,9 @@ def _style_and_model(args, role: str) -> str | None:
     if model_id:
         provider, model = llm.resolve(model_id)
         print(f"[orchestrator] {role} LLM: {provider} / {model}")
+        if provider == "claude" and not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
+            print("[orchestrator] WARNING: ANTHROPIC_API_KEY is not set. Add a line ANTHROPIC_API_KEY=sk-ant-... "
+                  f"to {os.path.join(config.REPO_DIR, '.env')}; until then the built-in performer plays.")
     else:
         print(f"[orchestrator] {role} LLM: none (built-in)")
     return model_id

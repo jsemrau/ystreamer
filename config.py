@@ -9,11 +9,24 @@ import os
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 
 try:
-    from dotenv import load_dotenv
+    from dotenv.parser import parse_stream
 
-    load_dotenv(os.path.join(REPO_DIR, ".env"), override=True)
+    # .env wins over the shell, but an empty entry (e.g. a leftover
+    # `ANTHROPIC_API_KEY=` from .env.example, before or after the real one)
+    # never wipes out a real value.
+    _env_file = os.path.join(REPO_DIR, ".env")
+    if os.path.exists(_env_file):
+        with open(_env_file, encoding="utf-8") as _f:
+            for _binding in parse_stream(_f):
+                if _binding.error:
+                    print(f"[config] WARNING: .env line {_binding.original.line} can't be read "
+                          "(unclosed quote or stray character?), so it is ignored")
+                elif _binding.key and _binding.value and _binding.value.strip():
+                    os.environ[_binding.key] = _binding.value.strip()
 except ImportError:  # python-dotenv is optional for the engine/tests
-    pass
+    if os.path.exists(os.path.join(REPO_DIR, ".env")):
+        print("[config] WARNING: python-dotenv isn't installed, so .env is NOT loaded "
+              "(./venv/bin/pip install python-dotenv)")
 
 
 def _env(name: str, default: str) -> str:
