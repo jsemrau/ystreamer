@@ -668,8 +668,21 @@ def test_only_the_local_model_gets_a_longer_wait(monkeypatch):
     window = STYLE_SETTINGS["techno"]["edit_bars"] / program.track.cps * 0.85
     local = Performer(random.Random(0), style="techno", model_id="local", log=lambda *_: None)
     claude = Performer(random.Random(0), style="techno", model_id="claude", log=lambda *_: None)
+    local.state.phase = claude.state.phase = "groove"
     assert local._wait_seconds(program) == max(60.0, window)
     assert claude._wait_seconds(program) == pytest.approx(max(4.0, window))
+    # The build doesn't wait for a slow model: lines keep coming in.
+    local.state.phase = "build"
+    assert local._wait_seconds(program) == pytest.approx(max(4.0, 4 / program.track.cps * 0.85))
+
+
+def test_the_build_adds_lines_every_few_bars_then_the_groove_slows_down(monkeypatch):
+    monkeypatch.setattr(config, "BUILD_BARS", 4)
+    performer = Performer(random.Random(0), style="trance", log=lambda *_: None)
+    performer.state.phase = "build"
+    assert performer.edit_bars_now() == 4
+    performer.state.phase = "groove"
+    assert performer.edit_bars_now() == STYLE_SETTINGS["trance"]["edit_bars"]
 
 
 @pytest.mark.parametrize("style", ["trance", "techno", "darkwave"])

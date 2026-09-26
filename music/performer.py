@@ -389,13 +389,22 @@ class Performer:
 
     # ------------------------------------------------------------------ LLM
 
+    def edit_bars_now(self) -> int:
+        """Bars until the next edit: short while the track builds up (a new
+        line every YS_BUILD_BARS bars), then the style's edit interval."""
+        if self.state.phase == "build":
+            return max(1, min(self.settings["edit_bars"], config.BUILD_BARS))
+        return self.settings["edit_bars"]
+
     def _wait_seconds(self, program: Program) -> float:
         """How long to wait for the model: the edit window at the current
-        tempo (with a little margin); a local model gets at least
-        YS_LOCAL_PERFORMER_WAIT, and the engine keeps playing and applies
-        its late edit on the next bar."""
-        window = max(4.0, self.settings["edit_bars"] / program.track.cps * 0.85)
-        if llm.resolve(self.model_id)[0] == "local":
+        tempo (with a little margin); outside the build, a local model gets
+        at least YS_LOCAL_PERFORMER_WAIT, and the engine keeps playing and
+        applies its late edit on the next bar. The build doesn't wait: a
+        late reply gives way to the built-in performer, so lines keep
+        coming in."""
+        window = max(4.0, self.edit_bars_now() / program.track.cps * 0.85)
+        if llm.resolve(self.model_id)[0] == "local" and self.state.phase != "build":
             return max(window, config.LOCAL_PERFORMER_WAIT_SECONDS)
         return window
 
@@ -664,8 +673,10 @@ class Performer:
 
     def _llm_failed(self, why: str, kind: str) -> None:
         self.stats[kind] += 1
-        self._llm_failures += 1
         self.log(f"[Performer] {why}; built-in performer takes this one")
+        if kind == "late" and self.state.phase == "build":
+            return None     # the build's short window isn't the model's fault
+        self._llm_failures += 1
         if self._llm_failures >= 3:
             self._skip_llm, self._llm_failures = 5, 0
             self.log("[Performer] too many LLM failures; the built-in performer plays the next 5 edits")

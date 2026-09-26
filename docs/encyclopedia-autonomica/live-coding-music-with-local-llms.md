@@ -849,8 +849,10 @@ built-in performer chooses edits with simple, phase-aware randomness:
 
 - **build**: start with one of the style's openers, then add missing
   roles in the style's order (lofi: beat, keys, bass, lead, texture,
-  percussion): always until three lines play, then 85% of the time, so
-  a club track reaches its full groove in two to four minutes.
+  percussion): always until three lines play, then 85% of the time.
+  The build also runs faster than the rest of the track: an edit every
+  4 bars (`YS_BUILD_BARS`) instead of 8 to 16, so a track reaches its
+  full groove in about a minute.
 - **breakdown**: mute beat, then bass, then make calm tweaks (darker
   filters, lower acid).
 - **rebuild**: unmute bass, then beat.
@@ -1316,8 +1318,15 @@ kick, a filter knob that never stops moving), it sounded like a sketch.
   favour notes, rhythms and wrappers over effect nudges.
 - **A prompt that asks for density**, per style, instead of caution.
 
-**Result.** In simulation, club styles reach their groove in two to four
-minutes, with seven interlocking lines including a 16th-note layer and
+The build was still too slow to hold attention: at one edit per 16 bars,
+six new lines took three to four minutes. So the build got its own pace:
+an edit every 4 bars until the groove, then the style's interval. A
+model that can't answer in that short window gives way to the built-in
+performer for that edit, without counting as a failure, so the lines
+keep coming in and the model takes over for the groove.
+
+**Result.** In simulation, club styles reach their groove in about a
+minute, with seven interlocking lines including a 16th-note layer and
 at least one sweep. A test pins this down. The stream page had to follow:
 seven long lines no longer fit the code panel, so the code now shrinks
 until every line shows.
