@@ -238,17 +238,17 @@ def _techno_blocks(hard: bool) -> list[Block]:
 BLOCKS["techno"] = _techno_blocks(hard=False)
 BLOCKS["hardcore"] = _techno_blocks(hard=True)
 
-# Per style: bars between edits, how many lines a track builds up to, and
+# Per style: bars between edits (about 20-30 s; override with --edit-bars), how many lines a track builds up to, and
 # which roles open a track.
 STYLE_SETTINGS = {
-    "lofi": {"edit_bars": 4, "max_lines": 6, "openers": [["beat"], ["keys"], ["bass", "beat"]]},
-    "deephouse": {"edit_bars": 8, "max_lines": 6, "openers": [["beat"], ["beat", "bass"]]},
-    "trance": {"edit_bars": 8, "max_lines": 6, "openers": [["acid"], ["beat"], ["acid", "beat"]]},
-    "ambient": {"edit_bars": 4, "max_lines": 5, "openers": [["chords"], ["texture"], ["keys"]]},
-    "piano": {"edit_bars": 4, "max_lines": 4, "openers": [["keys"]]},
-    "downtempo": {"edit_bars": 4, "max_lines": 5, "openers": [["beat"], ["keys"]]},
-    "techno": {"edit_bars": 8, "max_lines": 6, "openers": [["beat"], ["beat", "perc"]]},
-    "hardcore": {"edit_bars": 8, "max_lines": 5, "openers": [["beat"]]},
+    "lofi": {"edit_bars": 8, "max_lines": 6, "openers": [["beat"], ["keys"], ["bass", "beat"]]},
+    "deephouse": {"edit_bars": 16, "max_lines": 6, "openers": [["beat"], ["beat", "bass"]]},
+    "trance": {"edit_bars": 16, "max_lines": 6, "openers": [["acid"], ["beat"], ["acid", "beat"]]},
+    "ambient": {"edit_bars": 8, "max_lines": 5, "openers": [["chords"], ["texture"], ["keys"]]},
+    "piano": {"edit_bars": 8, "max_lines": 4, "openers": [["keys"]]},
+    "downtempo": {"edit_bars": 8, "max_lines": 5, "openers": [["beat"], ["keys"]]},
+    "techno": {"edit_bars": 16, "max_lines": 6, "openers": [["beat"], ["beat", "perc"]]},
+    "hardcore": {"edit_bars": 16, "max_lines": 5, "openers": [["beat"]]},
 }
 
 

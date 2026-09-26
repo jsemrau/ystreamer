@@ -401,3 +401,46 @@ def test_jevtypesafe_without_key_falls_back(monkeypatch):
     edit = performer.next_edit(_program_with("lofi", "dusty_beat"))
     assert edit.source == "built-in"
     assert any("YS_JEV_API_KEY" in line for line in logs)
+
+
+def test_director_plans_the_track_in_live_mode():
+    from music.director import Director
+
+    director = Director(None, random.Random(1), style="lofi", log=lambda *_: None)
+    performer = Performer(random.Random(0), style="lofi", log=lambda *_: None, director=director)
+    track = performer.new_track(None)
+    assert track.title == performer._last_piece.title and track.style == "lofi"
+    second = performer.new_track(track)
+    assert second.title and performer._last_piece.title == second.title
+
+
+def test_arc_moments_are_narrated_without_a_text_model():
+    class Voice:
+        def __init__(self):
+            self.lines = []
+
+        def wants(self, kind):
+            return True
+
+        def say(self, text, kind="section"):
+            self.lines.append((kind, text))
+
+    voice = Voice()
+    engine, _, _ = None, None, None
+    clock = _SimClock()
+    performer = Performer(random.Random(3), style="lofi", log=lambda *_: None)
+    engine = LiveEngine(lambda lines: None, performer, log=lambda *_: None, narrator=voice,
+                        now=clock.now, sleep=clock.sleep, max_tracks=1)
+    engine.run()
+    engine._voice_pool.shutdown(wait=True)
+    kinds = [k for k, _ in voice.lines]
+    assert kinds[0] == "piece" and voice.lines[0][1].startswith("Now playing:")
+    assert kinds.count("section") >= 3       # groove, breakdown, rebuild, ...
+
+
+def test_edit_bars_override():
+    performer = Performer(random.Random(0), style="lofi", log=lambda *_: None, edit_bars=12)
+    assert performer.settings["edit_bars"] == 12
+    performer.new_track(None)
+    assert performer.settings["edit_bars"] == 12
+    assert Performer(random.Random(0), style="lofi", log=lambda *_: None).settings["edit_bars"] == 8

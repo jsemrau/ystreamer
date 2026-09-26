@@ -37,6 +37,10 @@ class LiveEngine:
         self.program: Program | None = None
         self.edits = 0
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="performer")
+        # Narration lines are written in the background so the music never waits.
+        self._voice_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="narrator")
+        self._last_reason = ""
+        performer.on_arc = self._on_arc
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -91,7 +95,44 @@ class LiveEngine:
         self.log(f"\n♪ New track: {track.title}  ·  {track.key}  ·  {track.bpm:g} BPM  ·  {track.style}")
         runtime.append_thought(f"♪ {track.title} · {track.key} · {track.bpm:g} BPM · {track.style}")
         if self.narrator is not None:
-            self.narrator.say(f"Now playing: {track.title}.", kind="piece")
+            line = self.performer.track_narration
+            self.narrator.say(f"Now playing: {track.title}. {line}".strip(), kind="piece")
+
+    def _on_arc(self, before: str, after: str, why: str) -> None:
+        """The arc moved on (e.g. groove -> breakdown): have the Narrator
+        say something about the moment, written in the background."""
+        if self.narrator is None or not self.narrator.wants("section"):
+            return
+        program = self.program
+        self._voice_pool.submit(self._narrate_moment, after, why, program, self._last_reason)
+
+    def _narrate_moment(self, phase: str, why: str, program: Program | None, reason: str) -> None:
+        from . import llm
+        from .narrator import clean_narration
+
+        line = ""
+        model_id = self.performer.model_id
+        text_model = model_id and not (llm.resolve(model_id)[0] == "jevtypesafe" and llm.jev_style() == "decide")
+        if text_model and program is not None:
+            prompt = (
+                "You are the warm, intimate late-night voice of a 24/7 live-coded music stream. "
+                f"The track '{program.track.title}' ({program.track.style}, mood: {self.performer.track_mood or 'calm'}) "
+                f"is moving into its {phase.replace('groove2', 'second peak')} ({why}). "
+                + (f"The last change: {reason}. " if reason else "")
+                + "Say ONE sentence (under 20 words) to the listeners about this moment. No numbers, no technical "
+                  "words, no quotes. Reply with the sentence only."
+            )
+            try:
+                reply = llm.converse("Narrator", model_id, "You write one spoken sentence. No JSON.", prompt,
+                                     log=self.log, asks=f"a line for the {phase}", max_tokens=80, timeout=20)
+                line = clean_narration(reply.strip().splitlines()[0] if reply.strip() else "")
+            except llm.LLMError:
+                line = ""
+        if not line:
+            options = _ARC_LINES.get(phase, [])
+            line = options[hash((program.track.title if program else "", phase)) % len(options)] if options else ""
+        if line:
+            self.narrator.say(line, kind="section")
 
     # --------------------------------------------------------------------- run
 
@@ -153,6 +194,7 @@ class LiveEngine:
                                     "name": edit.name, "value": edit.value, "reason": edit.reason,
                                     "program": program.to_dict()})
             self._publish(program, highlight, edit.reason)
+            self._last_reason = edit.reason
             if edit.narration and self.narrator is not None:
                 self.narrator.say(edit.narration, kind="section")
 
@@ -172,3 +214,19 @@ class LiveEngine:
                 self._publish(program, None, "")
             next_cycle += edit_bars
         self._pool.shutdown(wait=False, cancel_futures=True)
+        self._voice_pool.shutdown(wait=False, cancel_futures=True)
+
+
+# Spoken at the arc's turning points when no text model writes the line.
+_ARC_LINES = {
+    "groove": ["Everything's in now. Let it settle and carry you.",
+               "There it is. Stay with the groove for a while."],
+    "breakdown": ["The floor drops away for a moment. Just breathe.",
+                  "Let's take the weight off and float for a bit."],
+    "rebuild": ["Here it comes back, piece by piece.",
+                "Feel it gathering again. Almost there."],
+    "groove2": ["And we're back, a little brighter this time.",
+                "All together again. This is the peak of it."],
+    "outro": ["The track starts to let go now, slowly.",
+              "Let it fade out gently. Something new is coming."],
+}

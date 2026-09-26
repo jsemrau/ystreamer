@@ -66,7 +66,7 @@ class SetState:
 
 class Performer:
     def __init__(self, rng: random.Random, style: str = "lofi", model_id: str | None = None, log=print,
-                 theme: str = "", show_llm: bool = False):
+                 theme: str = "", show_llm: bool = False, edit_bars: int | None = None, director=None):
         self.rng = rng
         # A locked style, or None to rotate between the chill styles per track.
         self.locked_style = style if style in STYLE_SETTINGS else None
@@ -75,7 +75,18 @@ class Performer:
         self.log = log
         self.theme = theme
         self.show_llm = show_llm
-        self.settings = STYLE_SETTINGS[self.style]
+        # Bars between edits: the style's default unless set (--edit-bars).
+        self.edit_bars = edit_bars
+        # The Director agent plans each track (key, tempo, progression, mood,
+        # title); without one, the built-in planner does.
+        self.director = director
+        self._last_piece = None
+        self.track_narration = ""   # the Director's spoken line for the current track
+        self.track_mood = ""
+        # Called as on_arc(before, after, why) when the arc moves on (the
+        # engine narrates these moments).
+        self.on_arc = None
+        self.settings = self._settings_for(self.style)
         self.state = SetState()
         self._llm_failures = 0
         self._skip_llm = 0
@@ -96,6 +107,12 @@ class Performer:
                  + (f" (built-in: {fallbacks})" if fallbacks else ""))
         self.stats.clear()
 
+    def _settings_for(self, style: str) -> dict:
+        settings = dict(STYLE_SETTINGS[style])
+        if self.edit_bars:
+            settings["edit_bars"] = self.edit_bars
+        return settings
+
     def applied(self, edit: Edit) -> None:
         """Called by the engine once an edit is actually playing."""
         who = "you" if edit.source in ("LLM", "jevtypesafe") else "the built-in performer"
@@ -110,12 +127,19 @@ class Performer:
             rotation = ["lofi", "ambient", "downtempo", "piano"]
             if previous is None or self.rng.random() > 0.6:
                 self.style = self.rng.choice(rotation)
-            self.settings = STYLE_SETTINGS[self.style]
-        prev_piece = None
-        if previous is not None:
+            self.settings = self._settings_for(self.style)
+        prev_piece = self._last_piece
+        if previous is not None and prev_piece is None:
             prev_piece = plan_piece(random.Random(0), style=self.style)
             prev_piece.key, prev_piece.bpm = previous.key, previous.bpm
-        piece = plan_piece(self.rng, prev_piece, style=self.style)
+        if self.director is not None:
+            self.director.style = self.style
+            piece = self.director.next_piece(prev_piece)
+        else:
+            piece = plan_piece(self.rng, prev_piece, style=self.style)
+        self._last_piece = piece
+        self.track_narration = getattr(piece, "narration", "") or ""
+        self.track_mood = piece.mood
         from .theory import PROGRESSIONS_BY_NAME
 
         degrees = list(PROGRESSIONS_BY_NAME[piece.progression].degrees)
@@ -147,6 +171,8 @@ class Performer:
         if st.phase != before:
             st.edits_in_phase = 0
             self.log(f"🧭 Arc: {before} → {st.phase} ({why})")
+            if self.on_arc is not None:
+                self.on_arc(before, st.phase, why)
 
     def track_finished(self, program: Program) -> bool:
         return self.state.phase == "outro" and len(program.active_roles()) <= 1 and self.state.edits_in_phase > 0
