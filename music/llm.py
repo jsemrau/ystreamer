@@ -243,3 +243,46 @@ def extract_json(text: str) -> dict:
                         break
             start = candidate.find("{", start + 1)
     raise LLMError("no JSON object found in reply")
+
+
+def _one_line(text: str, limit: int = 400) -> str:
+    """The reply's JSON (or text) on one line, for the terminal."""
+    text = text or ""
+    candidates = _FENCE_RE.findall(text)
+    body = candidates[0] if candidates else text
+    start, end = body.find("{"), body.rfind("}")
+    if start != -1 and end > start:
+        body = body[start:end + 1]
+    body = " ".join(body.split())
+    return body if len(body) <= limit else body[:limit - 1] + "…"
+
+
+def converse(agent: str, model_id: str, system: str, user: str, *, log=print, asks: str = "",
+             show_full: bool = False, max_tokens: int = 1200, temperature: float = 0.8) -> str:
+    """complete() plus a visible record of the exchange: what the agent asked
+    which model, what came back and how long it took (terminal), and the full
+    prompt and reply (runtime/llm_calls.jsonl). Raises LLMError like complete()."""
+    import time
+
+    from . import runtime
+
+    provider, model = resolve(model_id)
+    who = f"{provider}/{model}"
+    log(f"💬 {agent} → {who}: {asks or 'request'} ({len(user):,} chars)")
+    if show_full:
+        log(f"   ┌─ prompt to {who}\n" + "\n".join(f"   │ {line}" for line in user.splitlines()) + "\n   └─")
+    started = time.monotonic()
+    record = {"agent": agent, "model": who, "asks": asks, "system": system, "prompt": user}
+    try:
+        reply = complete(model_id, system, user, max_tokens=max_tokens, temperature=temperature)
+    except LLMError as e:
+        seconds = time.monotonic() - started
+        log(f"💬 {agent} ← {who} ({seconds:.1f}s): ✗ {e}")
+        runtime.append_llm_call({**record, "seconds": round(seconds, 2), "error": str(e)})
+        raise
+    seconds = time.monotonic() - started
+    log(f"💬 {agent} ← {who} ({seconds:.1f}s): {_one_line(reply)}")
+    if show_full:
+        log("   ┌─ raw reply\n" + "\n".join(f"   │ {line}" for line in reply.strip().splitlines()) + "\n   └─")
+    runtime.append_llm_call({**record, "seconds": round(seconds, 2), "reply": reply})
+    return reply

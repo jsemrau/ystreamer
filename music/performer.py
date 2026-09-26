@@ -130,6 +130,7 @@ class Performer:
             self._skip_llm -= 1
         if edit is None:
             edit = self._builtin_edit(program)
+            edit.source = "built-in"
         self.state.edits_in_phase += 1
         self.state.edits_in_track += 1
         if edit.op == "mute" and self.state.phase == "breakdown":
@@ -296,21 +297,23 @@ class Performer:
     def _llm_edit(self, program: Program) -> Edit | None:
         prompt = self._prompt(program)
         try:
-            reply = llm.complete(self.model_id, "You are a live coder performing TidalCycles. Reply with JSON only.",
-                                 prompt, max_tokens=500)
-            if self.show_llm:
-                self.log(f"[Performer] raw reply:\n{reply.strip()}")
+            asks = (f"next edit for '{program.track.title}' ({self.state.phase}, "
+                    f"{len(program.active_roles())} line{'' if len(program.active_roles()) == 1 else 's'} playing)")
+            reply = llm.converse("Performer", self.model_id,
+                                 "You are a live coder performing TidalCycles. Reply with JSON only.", prompt,
+                                 log=self.log, asks=asks, show_full=self.show_llm, max_tokens=500)
             data = llm.extract_json(reply)
             edit = self._edit_from_json(data, program)
             apply_edit(program, edit, self.settings["max_lines"])
             self._llm_failures = 0
+            edit.source = "LLM"
             return edit
         except (llm.LLMError, EditError, ValueError, TypeError, KeyError) as e:
             self._llm_failures += 1
             self.log(f"[Performer] LLM edit unusable ({e}); built-in performer takes this one")
             if self._llm_failures >= 3:
                 self._skip_llm, self._llm_failures = 5, 0
-                self.log("[Performer] too many LLM failures; skipping the next 5 LLM edits")
+                self.log("[Performer] too many LLM failures; the built-in performer plays the next 5 edits")
             return None
 
     def _edit_from_json(self, data: dict, program: Program) -> Edit:

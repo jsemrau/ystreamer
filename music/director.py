@@ -33,6 +33,14 @@ def _load_prompt(name: str) -> str:
         return f.read()
 
 
+# The Director's calls, as the agents they are: (name, what it is asked).
+_AGENTS = {
+    "piece": ("Director", "plan the next piece"),
+    "section": ("Arranger", "arrange the next section"),
+    "free": ("Composer", "write a counter-melody"),
+}
+
+
 class Director:
     def __init__(self, model_id: str | None, rng: random.Random, log=print,
                  theme: str = "chill music to relax, study and sleep to",
@@ -66,9 +74,9 @@ class Director:
     def _ask(self, kind: str, system: str, user: str) -> dict | None:
         started = time.monotonic()
         try:
-            reply = llm.complete(self.model_id, system, user)
-            if self.show_llm:
-                self.log(f"[Director/{kind}] raw reply ({time.monotonic() - started:.1f}s):\n{reply.strip()}")
+            agent, asks = _AGENTS.get(kind, ("Director", kind))
+            reply = llm.converse(agent, self.model_id, system, user, log=self.log, asks=asks,
+                                 show_full=self.show_llm)
             data = llm.extract_json(reply)
             self.consecutive_failures = 0
             data["_seconds"] = time.monotonic() - started

@@ -221,6 +221,7 @@ class Edit:
     line: LineSpec | None = None   # for "add"
     reason: str = ""
     narration: str = ""
+    source: str = ""        # who chose it: "LLM" or "built-in"
 
     def describe(self) -> str:
         if self.op == "add":

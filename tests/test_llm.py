@@ -181,3 +181,36 @@ def test_theme_picks_style_unless_style_given(monkeypatch, capsys):
                                       "--theme", "frankfurt deep house"])
     args = orchestrator.parse_args()
     assert orchestrator.build_director(args, random.Random(0)).style == "lofi"
+
+
+def test_converse_logs_both_sides_and_records_the_call(monkeypatch):
+    import json
+
+    import config
+    from music import llm
+
+    monkeypatch.setattr(llm, "complete", lambda *a, **k: 'Sure!\n```json\n{"op": "mute", "role": "beat"}\n```')
+    lines = []
+    reply = llm.converse("Performer", "local/test-model", "sys", "the prompt", log=lines.append, asks="next edit")
+    assert "mute" in reply
+    assert lines[0] == "💬 Performer → local/test-model: next edit (10 chars)"
+    assert lines[1].startswith("💬 Performer ← local/test-model (")
+    assert lines[1].endswith('{"op": "mute", "role": "beat"}')
+    with open(f"{config.RUNTIME_DIR}/llm_calls.jsonl") as f:
+        record = json.loads(f.readlines()[-1])
+    assert record["agent"] == "Performer" and record["prompt"] == "the prompt" and "mute" in record["reply"]
+
+
+def test_converse_logs_failures(monkeypatch):
+    import pytest
+
+    from music import llm
+
+    def boom(*a, **k):
+        raise llm.LLMError("HTTP 503 from server")
+
+    monkeypatch.setattr(llm, "complete", boom)
+    lines = []
+    with pytest.raises(llm.LLMError):
+        llm.converse("Director", "local/m", "sys", "p", log=lines.append)
+    assert "✗ HTTP 503 from server" in lines[-1]

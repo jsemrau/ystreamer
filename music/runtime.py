@@ -60,6 +60,21 @@ def append_history(record: dict, limit: int | None = None) -> None:
         pass
 
 
+def append_llm_call(record: dict) -> None:
+    """Full prompt and reply of every LLM call (runtime/llm_calls.jsonl), for auditing."""
+    path = _path("llm_calls.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"ts": time.time(), "time": time.strftime("%Y-%m-%d %H:%M:%S"), **record}) + "\n")
+    try:
+        if os.path.getsize(path) > 20_000_000:
+            with open(path, encoding="utf-8") as f:
+                lines = f.readlines()[-2000:]
+            atomic_write(path, "".join(lines))
+    except OSError:
+        pass
+
+
 def write_overlay(now_playing: str, code_lines: list[str], width: int = 110, max_lines: int = 14) -> None:
     atomic_write(_path("now_playing.txt"), now_playing + "\n")
     wrapped: list[str] = []
