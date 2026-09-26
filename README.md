@@ -352,6 +352,7 @@ Tunables such as the layer cap, timeouts and paths live in `.env` (see
 |---|---|
 | `Ambiguous module name 'Sound.Tidal.Context': it was found in multiple packages: tidal-X tidal-X` | Tidal was installed twice. Run `python3 tidal/fix_ghc_env.py` (keeps the newest copy, backs up the file). |
 | `Could not find module 'Sound.Tidal.Context'` | `cabal update && cabal install --lib tidal` |
+| `[llama-server] stopped ... failed to allocate buffer for kv cache` / `cudaMalloc failed: out of memory` | The model fits but its context doesn't. Lower `LLAMA_CTX_SIZE` in `.env` (default 16384; 8192 is enough), add `LLAMA_SERVER_ARGS=-fa on --cache-type-k q8_0 --cache-type-v q8_0`, or lower `LLAMA_GPU_LAYERS`. The error and a likely fix are printed as soon as llama-server stops. |
 | `[Director] LLM unavailable (cannot reach http://127.0.0.1:8080/...)` | The local model isn't running. Set `LLAMA_SERVER_BIN` and `LLAMA_GGUF_MODEL` in `.env` (the engine then starts it), start llama-server yourself, or use `--llm none`. The music keeps playing on the built-in planner meanwhile. |
 | `apt-get update` fails on a third-party PPA | Harmless for this project; `install.sh` continues. To silence it: `sudo add-apt-repository --remove ppa:<name>`. |
 | No sound, but no errors | `pw-link -l \| grep -A2 SuperCollider`; if it isn't connected to `ystream_sink`, run `stream/route_audio.sh`. |

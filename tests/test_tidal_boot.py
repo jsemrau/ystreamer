@@ -145,3 +145,53 @@ def test_llama_load_progress_from_proc_and_log(monkeypatch, tmp_path):
     assert pct == 43
     assert text == "43% (0.0/0.0 GB) · offloaded 65/65 layers to GPU"
     assert audio_stack._llama_bytes_loaded(os.getpid()) is not None   # real /proc read works
+
+
+def test_wait_for_local_llm_reports_crash(monkeypatch, tmp_path):
+    import types
+
+    import config
+
+    log_file = tmp_path / "llama.log"
+    log_file.write_text("load_tensors: loading model\n"
+                        "ggml_backend_cuda_buffer_type_alloc_buffer: allocating 9000 MiB on device 0: "
+                        "cudaMalloc failed: out of memory\n")
+    statuses = iter(["loading", "down"])
+    logs = []
+    monkeypatch.setattr(config, "LLAMA_SERVER_LOG", str(log_file))
+    monkeypatch.setattr(audio_stack, "local_llm_status", lambda: next(statuses))
+    monkeypatch.setattr(audio_stack, "llama_load_progress", lambda since: (100, "100% (16.5/16.5 GB)"))
+    monkeypatch.setattr(audio_stack, "_llama_process", types.SimpleNamespace(poll=lambda: None, returncode=None))
+    monkeypatch.setattr(audio_stack, "log", logs.append)
+    monkeypatch.setattr(audio_stack.time, "sleep", lambda s: None)
+    assert not audio_stack.wait_for_local_llm(timeout=300)
+    report = logs[-1]
+    assert "stopped while loading" in report
+    assert "cudaMalloc failed" in report
+    assert "LLAMA_CTX_SIZE" in report
+
+
+def test_launch_uses_config_and_detects_exit(monkeypatch, tmp_path):
+    import config
+
+    fake = tmp_path / "llama-server"
+    fake.write_text("#!/bin/sh\necho \"$@\"\necho 'llama_model_load: error loading model: unknown model architecture: qwen9'\nexit 1\n")
+    fake.chmod(0o755)
+    model = tmp_path / "m.gguf"
+    model.write_bytes(b"GGUF")
+    logs = []
+    monkeypatch.setattr(config, "LLAMA_SERVER_BIN", str(fake))
+    monkeypatch.setattr(config, "LLAMA_GGUF_MODEL", str(model))
+    monkeypatch.setattr(config, "LLAMA_SERVER_LOG", str(tmp_path / "logs" / "llama.log"))
+    monkeypatch.setattr(config, "LLAMA_CTX_SIZE", 8192)
+    monkeypatch.setattr(config, "LLAMA_SERVER_ARGS", "-fa on")
+    monkeypatch.setattr(config, "LOCAL_LLM_API_BASE", "http://127.0.0.1:8099/v1")
+    monkeypatch.setattr(audio_stack, "local_llm_status", lambda: "down")
+    monkeypatch.setattr(audio_stack, "_llama_process", None)
+    monkeypatch.setattr(audio_stack, "log", logs.append)
+    audio_stack.ensure_local_llm_server(wait=False)
+    audio_stack._llama_process.wait(timeout=10)
+    assert not audio_stack.wait_for_local_llm(timeout=30)
+    assert "--ctx-size 8192" in logs[1] and "--port 8099" in logs[1] and logs[1].endswith("-fa on")
+    assert "exit code 1" in logs[-1]
+    assert "update and rebuild llama.cpp" in logs[-1].lower()
