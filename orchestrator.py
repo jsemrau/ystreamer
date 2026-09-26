@@ -405,8 +405,17 @@ def run_engine(args) -> None:
     if live:
         from music.live_engine import LiveEngine
 
+        from music.sessionlog import SessionLog
+
+        # Every change to the artefact this session, kept as memory (sessions/<id>.jsonl).
+        session_log = SessionLog()
+        session_log.start(theme=args.theme, style=director.style, llm=director.model_id or "none",
+                          judge=args.judge or "none", edit_bars=director.settings["edit_bars"],
+                          build_bars=config.BUILD_BARS, max_lines=director.settings["max_lines"],
+                          resume=bool(args.resume))
+        print(f"[orchestrator] Session log: {session_log.path}")
         engine = LiveEngine(send, director, narrator=narrator, type_checker=type_checker,
-                            max_tracks=args.pieces)
+                            max_tracks=args.pieces, session_log=session_log)
     else:
         engine = MusicEngine(send, director, use_custom_synths=not args.no_custom_synths, narrator=narrator,
                              free_layer=args.free_layer, type_checker=type_checker, max_pieces=args.pieces)
@@ -430,6 +439,8 @@ def run_engine(args) -> None:
     while worker.is_alive():
         worker.join(timeout=1)
 
+    if live:
+        session_log.close(edits=engine.edits)
     print("[orchestrator] Shutting down audio...")
     if args.record:
         print(audio_stack.stop_recording())

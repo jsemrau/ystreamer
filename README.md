@@ -353,6 +353,33 @@ built-in performer, so you can see that the model is really playing:
 - The arranger engine's agents appear the same way, as `Director` (plans
   pieces), `Arranger` (arranges sections) and `Composer` (counter-melodies).
 
+## Session memory: every change to the artefact
+
+Each live session writes `sessions/<date>_<time>.jsonl` (set
+`YS_SESSIONS_DIR` to move it). It is append-only and never truncated, so it
+is the memory to learn from:
+
+- `session_start`: theme, style, models, judge, pacing, git commit
+- `track_start` / `track_end`: the track, the Director's line, the program it
+  starts and ends on, edits by source, groove complexity
+- `edit`: every change that played: who chose it (`LLM`, `LLM, judged`,
+  `built-in`, ...), what it heard, why, the op, the line before and after,
+  the whole code after, the phase, complexity before and after, and with a
+  judge every option it weighed and their probabilities
+- `rejected`: edits that never played, and why
+- `arc`: the track's shape moving on
+
+Read it back:
+
+```bash
+python -m eval.export_edits --summary                       # what the memory holds
+python -m eval.export_edits --style trance --source llm > trance_llm.jsonl
+```
+
+Each exported line is a learning example: the code before, the move, and the
+reason (`music/sessionlog.py` has `iter_records()` / `iter_edits()` for
+retrieval in code). A 15-minute track takes about 75 KB.
+
 ## Watching the Director think
 
 Every decision prints in the terminal with the model's reason:

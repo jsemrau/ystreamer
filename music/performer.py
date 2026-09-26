@@ -641,10 +641,12 @@ class Performer:
             if "probabilities" in info:
                 self.judge_mass.append(sum(p for e, p in zip(pool, info["probabilities"]) if e.source == "LLM"))
         probs = info.get("probabilities") or []
+        options = [{"text": e.describe(), "from": "ai" if e.source == "LLM" else "random",
+                    "p": probs[i] if i < len(probs) else None} for i, e in enumerate(pool)]
         runtime.ui_event("judge", compared=compared, confidence=info.get("confidence"),
-                         chosen=pool.index(chosen), chosen_from="ai" if from_llm else "random",
-                         options=[{"text": e.describe(), "from": "ai" if e.source == "LLM" else "random",
-                                   "p": probs[i] if i < len(probs) else None} for i, e in enumerate(pool)])
+                         chosen=pool.index(chosen), chosen_from="ai" if from_llm else "random", options=options)
+        chosen.judgement = {"options": options, "chosen": pool.index(chosen), "compared": compared,
+                            "confidence": info.get("confidence"), "why": why}
         self.log(f"⚖️  Judge chose {'the LLM' if from_llm else 'a built-in'} idea "
                  f"({', '.join(detail + [f'from {len(proposals)} LLM + {len(builtin)} built-in'])}"
                  + ("" if compared else "; not a comparison") + ")" + (f": {why}" if why else ""))
