@@ -53,7 +53,10 @@ class Block:
 def _melodic(name, role, synth, pattern_slot, variants, fx, octave="", pool=None, rhythm_body=None, **kw):
     body = rhythm_body or (
         f'n (scale "{{mode}}" ("{{{pattern_slot}}}" |+ "<{{roots}}>") {{root}}{octave}) # s "{synth}"')
-    return Block(name, role, body, {pattern_slot: variants}, fx=fx, pool=pool or [0, 1, 2, 3, 4, 5, 7], **kw)
+    # Bass and acid lines play chord tones only (see livecode.harmony_problem);
+    # melodies may pass through other scale notes between the strong steps.
+    default_pool = [0, 2, 4, 6, 7] if role in ("bass", "acid") else [0, 1, 2, 3, 4, 5, 7]
+    return Block(name, role, body, {pattern_slot: variants}, fx=fx, pool=pool or default_pool, **kw)
 
 
 BLOCKS: dict[str, list[Block]] = {
@@ -126,9 +129,9 @@ BLOCKS: dict[str, list[Block]] = {
               fx=[["gain", "1.0"]], drums=True),
         Block("acid", "acid",
               'n (scale "{mode}" ("<{motif}>*16" |+ "<{roots}>") {root} - 12) # s "ys_acid"',
-              {"motif": ["0 4 0 9 7", "0 7 0 3", "0 2 0 4 7", "0 5 0 9 7 12", "0 0 7 3 5"]},
+              {"motif": ["0 4 0 9 7", "0 7 0 2", "0 2 0 4 7", "0 4 0 9 7 11", "0 0 7 2 4"]},
               fx=[["gain", "0.98"], ["legato", "0.6"]], pfs=[["acid", "0.546"]],
-              wrappers=['(|* gain "[0.67 0.91 1 1]*4")'], pool=[0, 2, 3, 4, 5, 7, 9, 12]),
+              wrappers=['(|* gain "[0.67 0.91 1 1]*4")'], pool=[0, 2, 4, 6, 7, 9, 11]),
         _melodic("rolling_bass", "bass", "ys_tbass", "rhythm",
                  ["[~ 0 0 0]*4", "[~ 0 0 0]*3 [~ 0 0 7]", "[~ ~ 0 ~]*4"],
                  [["gain", "1.05"], ["lpf", "1200"], ["legato", "0.5"]], octave=" - 24", pool=[0, 7],
@@ -224,23 +227,23 @@ def _techno_blocks(hard: bool) -> list[Block]:
               wrappers=['(|* gain "[0.8 1]*8")'], drums=True),
         _melodic("rumble", "bass", "ys_tbass", "rhythm",
                  ["[~ 0]*4", "[~ 0 0 0]*4", "[~ 0 ~ 0]*4", "[~ 0 0 ~]*4"],
-                 [["gain", "1.05"], ["lpf", "450"], ["legato", "0.4"]], octave=" - 24", pool=[0, 7, -2],
+                 [["gain", "1.05"], ["lpf", "450"], ["legato", "0.4"]], octave=" - 24", pool=[0, 7, -3],
                  wrappers=[pump]),
         Block("acid", "acid",
               'n (scale "{mode}" ("<{motif}>*16" |+ "<{roots}>") {root} - 12) # s "ys_acid"',
-              {"motif": ["0 0 3 0 7 0 5 0", "0 12 0 10 0 7", "0 3 0 0 7 3", "0 0 12 0 0 10 7 5"]},
+              {"motif": ["0 0 2 0 4 0 2 0", "0 7 0 6 0 4", "0 2 0 0 4 2", "0 0 7 0 0 6 4 2"]},
               fx=[["gain", "0.95"], ["legato", "0.5"]], pfs=[["acid", "0.45" if not hard else "0.6"],
                                                           ["acidres", "0.25"]],
-              wrappers=[pump], pool=[0, 3, 5, 7, 10, 12]),
+              wrappers=[pump], pool=[0, 2, 4, 6, 7]),
         Block("stab", "chords",
               'struct "{stab}" $ n (scale "{mode}" "<{chords}>" {root}) # s "ys_supersaw" # pF "beattime" {beat}',
               {"stab": ["~ ~ t ~ ~ ~ ~ ~", "~ t ~ ~ ~ ~ t ~", "~ ~ ~ t ~ ~ t ~", "[~ t]*4"]},
               fx=[["gain", "0.78"], ["legato", "0.25"], ["lpf", "2200"], ["room", "0.35"]],
               pfs=[["duckdepth", "0.6"]]),
         _melodic("hoover", "lead", "ys_supersaw", "melody",
-                 ["0 ~ ~ 0 ~ ~ 3 ~", "7 ~ 5 ~ 3 ~ 0 ~", "0 ~ 12 ~ 10 ~ 7 ~"],
+                 ["0 ~ ~ 0 ~ ~ 2 ~", "7 ~ 6 ~ 4 ~ 0 ~", "0 ~ 7 ~ 6 ~ 4 ~"],
                  [["gain", "0.9"], ["lpf", "3500"], ["room", "0.3"]], octave="",
-                 pfs=[["duckdepth", "0.7"]], pool=[0, 3, 5, 7, 10, 12]),
+                 pfs=[["duckdepth", "0.7"]], pool=[0, 2, 4, 6, 7]),
         Block("noise", "texture", 'n (scale "{mode}" "<{roots}>" {root} - 12) # s "ys_air"', {},
               fx=[["gain", "0.85"], ["hpf", "500"], ["legato", "1.3"], ["room", "0.8"]]),
     ]
@@ -256,17 +259,17 @@ BLOCKS["darkwave"] = [
            "hats": ["808hc*16", "808hc*8", "[~ 808hc]*8", "[808hc 808hc 808oh 808hc]*4"]},
           fx=[["gain", "0.95"], ["room", "0.2"], ["lpf", "7000"]], drums=True),
     _melodic("sequencer_bass", "bass", "ys_tbass", "rhythm",
-             ["0*16", "[0 0 7 0]*4", "[0 ~ 0 7]*4", "[0 0 0 12]*4"],
-             [["gain", "1.0"], ["lpf", "900"], ["legato", "0.5"]], octave=" - 24", pool=[0, 7, 12, -2, 3]),
+             ["0*16", "[0 0 7 0]*4", "[0 ~ 0 7]*4", "[0 0 0 4]*4"],
+             [["gain", "1.0"], ["lpf", "900"], ["legato", "0.5"]], octave=" - 24", pool=[0, 7, 4, -3]),
     Block("cold_strings", "chords", 'n (scale "{mode}" "<{chords}>" {root}) # s "{synth}"',
           {"synth": ["ys_strings", "ys_choir", "ys_organ"]},
           fx=[["gain", "0.68"], ["legato", "1.05"], ["lpf", "1800"], ["room", "0.5"], ["size", "0.8"]]),
     _melodic("cold_arp", "lead", "ys_pluck", "melody",
-             ["0 2 4 7 4 2 0 2", "[0 4 7 4]*2", "7 4 2 0 ~ 0 2 4", "0 ~ 7 ~ 3 ~ 7 ~"],
+             ["0 2 4 7 4 2 0 2", "[0 4 7 4]*2", "7 4 2 0 ~ 0 2 4", "0 ~ 7 ~ 4 ~ 7 ~"],
              [["gain", "0.9"], ["lpf", "3500"], ["room", "0.4"], ["delay", "0.35"], ["delaytime", "0.375"],
               ["delayfeedback", "0.45"]], octave=" + 12", pool=[0, 2, 3, 4, 5, 7, 12]),
     _melodic("glass_line", "keys", "ys_glass", "melody",
-             ["4 ~ ~ ~ 2 ~ ~ ~", "7 ~ ~ 4 ~ ~ 2 ~", "~ ~ 0 ~ ~ ~ 3 ~"],
+             ["4 ~ ~ ~ 2 ~ ~ ~", "7 ~ ~ 4 ~ ~ 2 ~", "~ ~ 0 ~ ~ ~ 2 ~"],
              [["gain", "0.9"], ["room", "0.6"], ["delay", "0.4"], ["delaytime", "0.5"],
               ["delayfeedback", "0.4"]], octave=" + 12", pool=[0, 2, 3, 4, 7]),
     Block("static", "texture", 'n (scale "{mode}" "<{roots}>" {root} - 12) # s "ys_air"', {},
