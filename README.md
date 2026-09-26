@@ -259,6 +259,26 @@ Three agents take part in the live engine:
 With jevtypesafe (a decision API, no text), the built-in planner plans the
 tracks and the Narrator uses hand-written lines for each moment.
 
+**Generator and judge** (`--judge jevtypesafe`, or `YS_JUDGE=jevtypesafe`):
+the LLM proposes 3 different edits, the built-in performer adds up to 3
+more, and jevtypesafe picks one *blind* (shuffled, sources hidden):
+
+```bash
+./venv/bin/python orchestrator.py --style lofi --llm local --judge jevtypesafe
+```
+
+```
+💬 Performer ← local/qwen-agentworld-35b (4.1s): {"proposals": [...]}
+💬 Judge ← jevtypesafe/decide (0.9s): {"edit": {"choice": "e2"}}
+⚖️  Judge chose the LLM idea (from 3 LLM + 3 built-in)
+✎ [LLM, judged] d5: melody -> 4 ~ 3 ~ 0 ~ ~ ~   -- answer the phrase a step lower
+```
+
+After each track: `the judge preferred the LLM's idea 14/20 times (70%)`,
+a direct measure of whether a model's ideas beat random ones. Needs
+`YS_JEV_API_KEY` and a text model (local, Claude); if the judge is down,
+the LLM's first idea plays.
+
 ## How a piece develops (arranger engine)
 
 A piece is about 10-20 minutes long and moves through intro, verse, build,
