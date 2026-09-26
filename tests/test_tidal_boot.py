@@ -195,3 +195,23 @@ def test_launch_uses_config_and_detects_exit(monkeypatch, tmp_path):
     assert "--ctx-size 8192" in logs[1] and "--port 8099" in logs[1] and logs[1].endswith("-fa on")
     assert "exit code 1" in logs[-1]
     assert "update and rebuild llama.cpp" in logs[-1].lower()
+
+
+def test_superdirt_port_held_by_another_program(monkeypatch):
+    import socket
+
+    holder = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        holder.bind(("127.0.0.1", audio_stack.SUPERDIRT_PORT))
+    except OSError:
+        return          # something on this machine already uses the port; nothing to test
+    try:
+        assert not audio_stack._superdirt_port_free()
+        monkeypatch.setattr(audio_stack, "_stale_superdirt_pids", lambda: [])
+        monkeypatch.setattr(audio_stack, "log", lambda *_: None)
+        result = audio_stack.start_superdirt()
+        assert result.startswith("Error: UDP port 57120 is in use")
+        assert "pkill sclang" in result
+    finally:
+        holder.close()
+    assert audio_stack._superdirt_port_free()

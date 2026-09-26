@@ -41,6 +41,40 @@ _superdirt_process: subprocess.Popen | None = None
 _superdirt_ready = threading.Event()
 
 
+SUPERDIRT_PORT = 57120
+
+
+def _superdirt_port_free() -> bool:
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.bind(("127.0.0.1", SUPERDIRT_PORT))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def _stale_superdirt_pids() -> list[int]:
+    """sclang processes running our superdirt_boot.scd (from an earlier run)."""
+    pids = []
+    boot = os.path.basename(config.SUPERDIRT_BOOT_FILE)
+    for entry in os.listdir("/proc") if os.path.isdir("/proc") else []:
+        if not entry.isdigit() or int(entry) == os.getpid():
+            continue
+        try:
+            with open(f"/proc/{entry}/cmdline", "rb") as f:
+                argv = f.read().split(b"\0")
+        except OSError:
+            continue
+        if argv and os.path.basename(argv[0].decode(errors="replace")) == "sclang" and \
+                any(a.decode(errors="replace").endswith(boot) for a in argv[1:]):
+            pids.append(int(entry))
+    return pids
+
+
 def superdirt_running() -> bool:
     return _superdirt_process is not None and _superdirt_process.poll() is None
 
@@ -54,6 +88,27 @@ def start_superdirt() -> str:
     global _superdirt_process
     if superdirt_running():
         return "SuperDirt is already running"
+    if not _superdirt_port_free():
+        # Usually a SuperCollider left over from an earlier run (or the systemd
+        # engine unit). Stop ours; never touch anyone else's SuperCollider.
+        stale = _stale_superdirt_pids()
+        if stale:
+            log(f"[SuperCollider] port {SUPERDIRT_PORT} is held by a leftover ystreamer SuperCollider "
+                f"(pid {', '.join(map(str, stale))}); stopping it")
+            for pid in stale:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+            subprocess.run(["pkill", "-x", "scsynth"], capture_output=True)
+            for _ in range(20):
+                if _superdirt_port_free():
+                    break
+                time.sleep(0.5)
+        if not _superdirt_port_free():
+            return (f"Error: UDP port {SUPERDIRT_PORT} is in use by another program (another SuperCollider or "
+                    "Tidal session?). Close it, or stop it with: pkill sclang; pkill scsynth "
+                    "(and systemctl --user stop ystreamer-engine if you installed the services)")
 
     _superdirt_ready.clear()
     env = os.environ.copy()

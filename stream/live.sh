@@ -17,6 +17,12 @@ cd "$REPO"
 PY="$REPO/venv/bin/python"; [[ -x "$PY" ]] || PY=python3
 mkdir -p logs
 
+# If the systemd services were installed, they'd fight us for the same ports.
+if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet ystreamer-engine.service 2>/dev/null; then
+    echo "[live] stopping the systemd ystreamer services first (they'd run a second engine)"
+    systemctl --user stop ystreamer-engine ystreamer-stream ystreamer-watchdog ystreamer-quality 2>/dev/null
+fi
+
 "$REPO/stream/setup_audio.sh" || { echo "Couldn't create the audio sink (see above)" >&2; exit 1; }
 
 PIDS=()
