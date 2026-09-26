@@ -84,7 +84,7 @@ WRAPPER_NOTES = {
 
 # What each effect and control sounds like.
 FX_NOTES = {
-    "gain": "loudness (1 = normal); change it only to balance, never as the idea",
+    "gain": "loudness: only for balancing, within about +/-3 dB of where the line entered",
     "room": "reverb amount: 0 dry and close, 0.8 huge and distant",
     "size": "reverb room size: small booth to cathedral",
     "lpf": "low-pass cutoff in Hz: low (400-1200) dark and muffled, high (5000+) bright and open",
@@ -145,6 +145,7 @@ class LineSpec:
     muted: bool = False
     drums: bool = False
     block: str = ""                 # which library block it came from
+    base_gain: str = ""             # the level the line entered at; gain edits stay within +/-3 dB of it
 
     @property
     def channel(self) -> int:
@@ -217,11 +218,20 @@ class Program:
     track: Track
     lines: dict[str, LineSpec] = field(default_factory=dict)   # role -> line
 
+    def expression(self, role: str) -> str:
+        """The line's pattern as played, including the live mix (beds step
+        back when the front is busy, see music/mix.py)."""
+        from .mix import mix_factor
+
+        expr = self.lines[role].render(self.track.harmony())
+        factor = mix_factor(role, self.active_roles())
+        return f"({expr}) |* gain {factor:g}" if factor < 1 else expr
+
     def statement(self, role: str) -> str:
         line = self.lines[role]
         if line.muted:
             return f"d{line.channel} $ silence"
-        return f"d{line.channel} $ {line.render(self.track.harmony())}"
+        return f"d{line.channel} $ {self.expression(role)}"
 
     def tempo_statement(self) -> str:
         return f"setcps ({self.track.bpm:g}/60/4)"
@@ -231,7 +241,7 @@ class Program:
         out = [self.tempo_statement(), ""]
         for role in sorted(self.lines, key=lambda r: ROLE_CHANNELS[r]):
             line = self.lines[role]
-            text = f"d{line.channel} $ {line.render(self.track.harmony())}"
+            text = f"d{line.channel} $ {self.expression(role) if not line.muted else line.render(self.track.harmony())}"
             if line.muted:
                 text = f"-- {text}"
             mark = "▶ " if role == highlight else "  "
@@ -315,6 +325,18 @@ def check_pattern(value: str) -> str:
     return value
 
 
+def gain_range(line: LineSpec) -> tuple[float, float]:
+    """Gain edits balance a line, they don't blow up the mix: at most about
+    +/-3 dB (gain x0.92..x1.09, SuperDirt's curve is amplitude ~ gain^4)
+    around the level the line entered at."""
+    lo, hi = FX_RANGES["gain"]
+    try:
+        base = float(line.base_gain or dict(line.fx).get("gain", ""))
+    except ValueError:
+        return lo, hi
+    return round(max(lo, base * 0.92), 3), round(min(hi, base * 1.09), 3)
+
+
 def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
     """Validate and apply an edit, returning a new Program. Raises EditError."""
     new = copy.deepcopy(program)
@@ -353,7 +375,10 @@ def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
             raise EditError(f"effect {edit.name!r} not allowed on the {role}")
         line.fx = [pair for pair in line.fx if pair[0] != edit.name]
         if op == "set_fx":
-            line.fx.append([edit.name, _check_number(edit.value, *FX_RANGES[edit.name])])
+            lo, hi = gain_range(line) if edit.name == "gain" else FX_RANGES[edit.name]
+            line.fx.append([edit.name, _check_number(edit.value, lo, hi)])
+        elif edit.name == "gain":
+            raise EditError("gain can be adjusted but not removed")
     elif op == "set_pf":
         if edit.name not in PF_RANGES or not any(p[0] == edit.name for p in line.pfs):
             raise EditError(f"control {edit.name!r} not on this line")

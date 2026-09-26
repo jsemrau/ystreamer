@@ -79,6 +79,21 @@ class LiveEngine:
                     return False
         return True
 
+    def _with_fades(self, statements: list[str], program: Program, edit) -> list[str]:
+        """Lines that enter fade in over a few bars and lines that leave
+        fade out (Tidal's xfadeIn), instead of switching on and off."""
+        from .mix import FADE_IN_BARS, FADE_OUT_BARS
+
+        role = edit.role
+        if edit.op not in ("add", "unmute", "remove", "mute") or role not in ROLE_CHANNELS:
+            return statements
+        ch = ROLE_CHANNELS[role]
+        if edit.op in ("add", "unmute") and role in program.lines:
+            faded = f"xfadeIn {ch} {FADE_IN_BARS} $ ({program.expression(role)}) |< orbit {ch - 1}"
+        else:
+            faded = f"xfadeIn {ch} {FADE_OUT_BARS} $ silence"
+        return [faded if stmt.startswith(f"d{ch} $ ") else stmt for stmt in statements]
+
     def _publish(self, program: Program, highlight: str | None, comment: str) -> None:
         track, st = program.track, self.performer.state
         now_playing = f"{track.title}  ·  {track.key}  ·  {track.bpm:g} BPM  ·  {st.phase}"
@@ -178,7 +193,7 @@ class LiveEngine:
                 next_cycle += edit_bars
                 continue
             statements = changed_statements(program, new)
-            if not self._type_ok(statements) or not self._send(statements):
+            if not self._type_ok(statements) or not self._send(self._with_fades(statements, new, edit)):
                 next_cycle += edit_bars
                 continue
             if new.track.bpm != program.track.bpm:

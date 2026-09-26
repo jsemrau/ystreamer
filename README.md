@@ -247,6 +247,14 @@ gated saw and supersaw lead.
 
 Without `--style` the stream rotates between lofi, ambient, downtempo and piano, one style per track.
 
+**Mixing.** Every line enters at a level calibrated from the measured
+loudness of its synth (`music/mix.py`, measured with `eval/synth_levels.sh`):
+melody -21 LUFS, bass -19, keys -25, beds (strings, pads) -29, textures -34.
+New lines fade in over 4 bars and removed lines fade out over 2 (Tidal's
+`xfadeIn`). Beds step back 2.5 dB when two lead parts play, and melodic
+lines give a little more when six or more lines play. Gain edits stay within
+about +/-3 dB of a line's level, so no edit can blow up the mix.
+
 Three agents take part in the live engine:
 
 - **Director:** plans each track (key, tempo, progression, mood, title),

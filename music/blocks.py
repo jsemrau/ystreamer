@@ -14,6 +14,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
+from . import mix
 from .livecode import LineSpec
 
 
@@ -31,11 +32,21 @@ class Block:
     pool: list[int] = field(default_factory=list)
 
     def make(self, rng: random.Random) -> LineSpec:
+        patterns = {slot: rng.choice(options) for slot, options in self.patterns.items()}
+        fx = [list(p) for p in self.fx]
+        # Level from the measured loudness of the synth actually chosen
+        # (a block may offer several), so the line enters at its role's level.
+        synth = mix.synth_of(self.body.replace('"{synth}"', f'"{patterns.get("synth", "")}"'))
+        # Short chord hits (struct rhythms) aren't comparable with a sustained
+        # measurement, so those keep their tuned gain.
+        gain = None if "struct" in self.body else mix.calibrated_gain(synth, self.role, chord="{chords}" in self.body)
+        if gain is not None:
+            fx = [[n, f"{gain:g}"] if n == "gain" else [n, v] for n, v in fx]
         return LineSpec(
-            role=self.role, body=self.body,
-            patterns={slot: rng.choice(options) for slot, options in self.patterns.items()},
-            fx=[list(p) for p in self.fx], pfs=[list(p) for p in self.pfs],
+            role=self.role, body=self.body, patterns=patterns,
+            fx=fx, pfs=[list(p) for p in self.pfs],
             wrappers=list(self.wrappers), drums=self.drums, block=self.name,
+            base_gain=dict((n, v) for n, v in fx).get("gain", ""),
         )
 
 

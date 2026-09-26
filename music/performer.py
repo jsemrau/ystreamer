@@ -710,6 +710,13 @@ class Performer:
                     reason=" ".join(str(data.get("reason", "")).split())[:200],
                     narration=clean_narration(data.get("narration")),
                     listening=" ".join(str(data.get("listening", "")).split())[:200])
+        if op == "set_fx" and name == "gain" and role in program.lines:
+            # Pull a gain edit into the line's +/-3 dB window instead of rejecting it.
+            from .livecode import gain_range
+
+            lo, hi = gain_range(program.lines[role])
+            if _NUM_RE.match(edit.value):
+                edit.value = f"{max(lo, min(hi, float(edit.value))):g}"
         if op == "add":
             block = find_block(self.style, str(data.get("block", "")))
             if block is None:
