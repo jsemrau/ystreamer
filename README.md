@@ -123,8 +123,10 @@ There are two options, and you can combine them:
 
 The choices are `lofi`, `ambient`, `downtempo`, `piano`, `deephouse`, `trance`,
 `techno` (138-150 BPM: pounding kick, offbeat rumble bass, 16th hats, acid,
-short supersaw stabs) and `hardcore` (160-185 BPM: the same kit with a
-distorted gabber kick).
+short supersaw stabs), `hardcore` (160-185 BPM: the same kit with a
+distorted gabber kick) and `darkwave` (110-128 BPM cold electro / coldwave:
+a stiff 808 drum machine, a 16th-note sequencer bass, a cold string-machine,
+choir or organ bed, pluck arpeggios lost in delay and a sparse glass line).
 Each sets a tempo range, the modes it uses (e.g. minor or dorian for lofi),
 the default instruments and which layers come in first. `deephouse` is
 118-124 BPM with a four-on-the-floor kick, off-beat hats, short chord stabs
@@ -179,6 +181,7 @@ used for the whole run, even with the built-in planner:
 | Theme words | Style |
 |---|---|
 | hardcore, gabber, speedcore, frenchcore, terrorcore, rotterdam | `hardcore` |
+| darkwave, dark wave, coldwave, cold wave, cold electro, minimal wave, minimal synth, post-punk, ebm | `darkwave` |
 | techno, hard techno, acid techno, industrial, rave, berghain | `techno` |
 | trance, switch angel, uplifting, psytrance, supersaw | `trance` |
 | deep house, house, garage, club, dance | `deephouse` |
