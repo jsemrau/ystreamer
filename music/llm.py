@@ -126,6 +126,11 @@ def _openai_compatible(model: str, api_base: str, api_key: str, system: str, use
     }
     try:
         resp = requests.post(url, headers=headers, json=body, timeout=timeout)
+    except requests.Timeout as e:
+        raise LLMError(f"timed out: no reply from {url} within {timeout:.0f}s. The model is too slow for this: "
+                       "check the speed shown on its replies (tok/s), whether it is thinking (a local Qwen "
+                       "should reply without <think>), whether all layers are on the GPU (LLAMA_GPU_LAYERS, "
+                       "nvidia-smi), and logs/llama-server.log") from e
     except requests.ConnectionError as e:
         raise LLMError(f"cannot reach {url} (no server running there? for the local model set "
                        f"LLAMA_SERVER_BIN and LLAMA_GGUF_MODEL in .env)") from e
@@ -139,9 +144,24 @@ def _openai_compatible(model: str, api_base: str, api_key: str, system: str, use
                            "--cache-type-k q8_0 --cache-type-v q8_0 if memory is tight)")
         raise LLMError(f"HTTP {resp.status_code} from {url}: {resp.text[:300]}")
     try:
-        return resp.json()["choices"][0]["message"]["content"] or ""
+        data = resp.json()
+        message = data["choices"][0]["message"]
+        text = message.get("content") or ""
     except (ValueError, KeyError, IndexError, TypeError) as e:
         raise LLMError(f"unexpected reply from {url}: {resp.text[:300]}") from e
+    # Speed and length, from llama-server's "timings" (or the OpenAI "usage").
+    timings, usage = data.get("timings") or {}, data.get("usage") or {}
+    stats = {"tokens": timings.get("predicted_n") or usage.get("completion_tokens"),
+             "tok_s": timings.get("predicted_per_second"),
+             "prompt_tokens": timings.get("prompt_n") or usage.get("prompt_tokens")}
+    # A model that "thinks" first spends most of its time there: flag it, and
+    # keep only the answer.
+    thinking = bool(message.get("reasoning_content")) or "<think>" in text
+    if "<think>" in text:
+        text = re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.DOTALL).strip()
+    stats["thinking"] = thinking
+    _call_stats.last = stats
+    return text
 
 
 def _jevtypesafe(model: str, system: str, user: str, timeout: float, max_tokens: int, temperature: float) -> str:
@@ -224,9 +244,16 @@ def complete(model_id: str, system: str, user: str, timeout: float | None = None
         )
         return response.choices[0].message.content or ""
 
-    future = _executor.submit(call)
+    def call_with_stats():
+        _call_stats.last = None
+        text = call()
+        return text, getattr(_call_stats, "last", None)
+
+    future = _executor.submit(call_with_stats)
     try:
-        return future.result(timeout=timeout + 5)
+        text, stats = future.result(timeout=timeout + 5)
+        _call_stats.last = stats
+        return text
     except concurrent.futures.TimeoutError as e:
         raise LLMError(f"{provider} call timed out after {timeout:.0f}s") from e
     except LLMError:
@@ -236,6 +263,12 @@ def complete(model_id: str, system: str, user: str, timeout: float | None = None
     except BaseException as e:  # network, auth, bad model id, even native-extension panics
         raise LLMError(f"{provider} call failed: {type(e).__name__}: {e}") from e
 
+
+# Speed and length of the last reply, per thread (set by _openai_compatible,
+# read by converse for the log line).
+import threading as _threading  # noqa: E402
+
+_call_stats = _threading.local()
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
@@ -320,7 +353,14 @@ def converse(agent: str, model_id: str, system: str, user: str, *, log=print, as
         raise
     seconds = time.monotonic() - started
     runtime.ui_thinking(agent, None)
-    log(f"💬 {agent} ← {who} ({seconds:.1f}s): {_one_line(reply)}")
+    stats = getattr(_call_stats, "last", None) or {}
+    speed = ""
+    if stats.get("tokens"):
+        speed = f", {stats['tokens']} tokens" + (f" at {stats['tok_s']:.0f} tok/s" if stats.get("tok_s") else "")
+    log(f"💬 {agent} ← {who} ({seconds:.1f}s{speed}): {_one_line(reply)}")
+    if stats.get("thinking"):
+        log(f"⚠️  {who} is thinking before it answers (slow, and wasted here): turn it off in its chat "
+            "template, or run llama-server with --reasoning-budget 0")
     if show_full:
         log("   ┌─ raw reply\n" + "\n".join(f"   │ {line}" for line in reply.strip().splitlines()) + "\n   └─")
     runtime.append_llm_call({**record, "seconds": round(seconds, 2), "reply": reply})

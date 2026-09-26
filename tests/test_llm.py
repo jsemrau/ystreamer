@@ -2,6 +2,7 @@ import argparse
 import types
 
 import pytest
+import requests
 
 from music import llm
 
@@ -243,3 +244,30 @@ def test_claude_request_shape_per_model(monkeypatch):
     assert "fallbacks" not in calls[-1] and "betas" not in calls[-1]
     llm._claude("claude-opus-5", "sys", "hi", 30, 500)
     assert calls[-1]["fallbacks"] == "default"
+
+
+class FakeResponse:
+    status_code = 200
+
+    def __init__(self, data):
+        self.data, self.text = data, str(data)
+
+    def json(self):
+        return self.data
+
+
+def test_local_reply_strips_thinking_and_reports_speed(monkeypatch):
+    data = {"choices": [{"message": {"content": "<think>hmm, let me see</think>{\"op\": \"mute\"}"}}],
+            "timings": {"predicted_n": 42, "predicted_per_second": 21.5, "prompt_n": 900}}
+    monkeypatch.setattr(requests, "post", lambda *a, **k: FakeResponse(data))
+    text = llm._openai_compatible("m", "http://x/v1", "", "sys", "user", 10, 100, 0.5)
+    assert text == '{"op": "mute"}'
+    assert llm._call_stats.last == {"tokens": 42, "tok_s": 21.5, "prompt_tokens": 900, "thinking": True}
+
+
+def test_local_timeout_names_the_cause(monkeypatch):
+    def slow(*a, **k):
+        raise requests.Timeout("Read timed out")
+    monkeypatch.setattr(requests, "post", slow)
+    with pytest.raises(llm.LLMError, match="timed out: no reply .* within 10s"):
+        llm._openai_compatible("m", "http://x/v1", "", "sys", "user", 10, 100, 0.5)
