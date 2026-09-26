@@ -500,6 +500,7 @@ ffmpeg-only look. Video is 1920x1080 at 4.5 Mbit/s by default
 ./venv/bin/python -m stream.thumbnail                   # -> runtime/thumbnail.png (1280x720)
 ./venv/bin/python -m stream.thumbnail --style darkwave  # a specific style's look
 ./venv/bin/python -m stream.thumbnail --banner --style trance  # -> runtime/banner.png: channel banner, 2048x1152
+./venv/bin/python -m stream.thumbnail --logo --style trance    # -> runtime/logo.png: channel logo, 800x800
 ```
 
 It renders the page's poster mode ("AI agents live-code music", the style's
