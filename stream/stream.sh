@@ -30,7 +30,7 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Load .env when run by hand (systemd already provides it). Values are read
+# Load .env. Values are read
 # literally (no shell evaluation), and variables already set win.
 if [[ -f "$REPO/.env" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do

@@ -89,8 +89,8 @@ def start_superdirt() -> str:
     if superdirt_running():
         return "SuperDirt is already running"
     if not _superdirt_port_free():
-        # Usually a SuperCollider left over from an earlier run (or the systemd
-        # engine unit). Stop ours; never touch anyone else's SuperCollider.
+        # Usually a SuperCollider left over from an earlier run. Stop ours;
+        # never touch anyone else's SuperCollider.
         stale = _stale_superdirt_pids()
         if stale:
             log(f"[SuperCollider] port {SUPERDIRT_PORT} is held by a leftover ystreamer SuperCollider "
@@ -107,8 +107,7 @@ def start_superdirt() -> str:
                 time.sleep(0.5)
         if not _superdirt_port_free():
             return (f"Error: UDP port {SUPERDIRT_PORT} is in use by another program (another SuperCollider or "
-                    "Tidal session?). Close it, or stop it with: pkill sclang; pkill scsynth "
-                    "(and systemctl --user stop ystreamer-engine if you installed the services)")
+                    "Tidal session?). Close it, or stop it with: pkill sclang; pkill scsynth")
 
     _superdirt_ready.clear()
     env = os.environ.copy()

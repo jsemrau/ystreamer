@@ -14,7 +14,7 @@ Every restart is rate-limited and reported to an optional ntfy.sh topic
 (YS_NTFY_URL), so you get a push notification on your phone.
 
     python -m stream.watchdog                      # uses defaults below
-    YS_RESTART_CMD="systemctl --user restart ystreamer-engine" python -m stream.watchdog
+    YS_ENGINE_PIDFILE=runtime/engine.pid python -m stream.watchdog   # what stream/live.sh runs
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import threading
@@ -42,7 +43,10 @@ class WatchdogConfig:
     silence_db: float = float(os.getenv("YS_SILENCE_DB", "-55"))
     silence_seconds: float = float(os.getenv("YS_SILENCE_SECONDS", "20"))
     heartbeat_limit: float = float(os.getenv("YS_HEARTBEAT_LIMIT", "180"))
-    restart_cmd: str = os.getenv("YS_RESTART_CMD", "systemctl --user restart ystreamer-engine.service")
+    # Empty: stop the engine process from YS_ENGINE_PIDFILE (stream/live.sh
+    # restarts it). Or any command, e.g. for your own process supervisor.
+    restart_cmd: str = os.getenv("YS_RESTART_CMD", "")
+    engine_pidfile: str = os.getenv("YS_ENGINE_PIDFILE", "")
     cooldown: float = float(os.getenv("YS_RESTART_COOLDOWN", "120"))
     ntfy_url: str = os.getenv("YS_NTFY_URL", "")
     startup_grace: float = float(os.getenv("YS_WATCH_GRACE", "120"))
@@ -130,13 +134,27 @@ def main() -> None:
                             now - last_restart, now - started)
             if reason:
                 notify(cfg, f"restarting engine: {reason}")
-                result = subprocess.run(shlex.split(cfg.restart_cmd), capture_output=True, text=True)
-                if result.returncode != 0:
-                    notify(cfg, f"restart command failed ({result.returncode}): {result.stderr.strip()[:300]}")
+                restart_engine(cfg)
                 last_restart = time.monotonic()
                 tracker.reset()
     except KeyboardInterrupt:
         stop.set()
+
+
+def restart_engine(cfg: WatchdogConfig) -> None:
+    """Run YS_RESTART_CMD, or stop the engine from its pid file so the
+    supervisor (stream/live.sh) starts it again with --resume."""
+    if cfg.restart_cmd:
+        result = subprocess.run(shlex.split(cfg.restart_cmd), capture_output=True, text=True)
+        if result.returncode != 0:
+            notify(cfg, f"restart command failed ({result.returncode}): {result.stderr.strip()[:300]}")
+        return
+    try:
+        with open(cfg.engine_pidfile) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, signal.SIGTERM)
+    except (OSError, ValueError) as e:
+        notify(cfg, f"couldn't stop the engine (pid file {cfg.engine_pidfile or 'not set'}): {e}")
 
 
 if __name__ == "__main__":

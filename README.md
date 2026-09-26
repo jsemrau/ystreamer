@@ -207,9 +207,7 @@ YS_STYLE=lofi
 YS_THEME=cozy rainy evening, soft and warm
 ```
 
-Flags on the command line override the `.env` values. Use these two
-settings rather than putting `--theme` into `YS_ENGINE_ARGS`: systemd splits
-that at spaces and ignores quotes, which would break a multi-word theme.
+Flags on the command line override the `.env` values.
 
 ## Live coding
 
@@ -407,39 +405,28 @@ intimate late-night radio voice, and shown as a subtitle on the stream:
 
 ## Going live on YouTube
 
-**Quickest:** put `YT_STREAM_KEY` (and `LLAMA_GGUF_MODEL`, `YS_JEV_API_KEY`) in
-`.env`, then
+1. In YouTube Studio → **Go live** → **Stream**, copy the stream key into
+   `.env` as `YT_STREAM_KEY`. The local model and the judge need
+   `LLAMA_GGUF_MODEL` and `YS_JEV_API_KEY` there too.
+2. Start everything with one command:
 
 ```bash
 stream/live.sh                      # local model performs, jevtypesafe judges; Ctrl-C stops
-stream/live.sh --style darkwave     # extra flags go to orchestrator.py
+stream/live.sh --style darkwave     # extra flags go to orchestrator.py and win over the defaults
+stream/live.sh --judge none         # e.g. without the judge
 ```
 
-It starts the audio sink, the engine and the stream in one terminal, no
-systemd needed. For a 24/7 setup that survives reboots, use the services:
+It runs in that terminal until Ctrl-C:
 
-1. In YouTube Studio → **Go live** → **Stream**, copy the stream key into
-   `.env` as `YT_STREAM_KEY` (see `.env.example`). Optionally set
-   `YS_STREAM_BG` to a background image or looping video.
-2. `stream/install_services.sh` installs and starts these systemd user units:
-
-| Unit | What it does |
+| Part | What it does |
 |---|---|
-| `ystreamer-audio` | creates the `ystream_sink` PipeWire sink the stream captures from |
-| `ystreamer-llm` | local llama.cpp server for the Director (skip with `--no-llm`) |
-| `ystreamer-engine` | SuperDirt + Tidal + engine, `--resume`s the saved piece after any restart |
-| `ystreamer-stream` | the stream page (below) captured at 1080p30, limiter → -14 LUFS → RTMP, reconnects every 11 h |
-| `ystreamer-watchdog` | restarts the engine on sustained silence or a stale heartbeat, sends a push via ntfy |
-| `ystreamer-quality` | every 10 min: loudness, clipping and key-conformance check on a clip; bad harmony → automatic thumbs-down |
+| audio sink | `stream/setup_audio.sh` creates the `ystream_sink` the stream captures from |
+| engine | `orchestrator.py --resume --llm local --judge jevtypesafe`; restarted if it stops, resuming the saved track |
+| stream | `stream/stream.sh`: the stream page (below) captured at 1080p30, limiter → -14 LUFS → RTMP; reconnects by itself (log: `logs/stream.log`) |
+| watchdog | restarts the engine on sustained silence or a stale heartbeat, optional push via ntfy (log: `logs/watchdog.log`) |
 
-The engine unit runs `orchestrator.py --resume --llm local --judge jevtypesafe`: the
-local model performs and jevtypesafe judges its ideas, so the stream needs
-`LLAMA_GGUF_MODEL` and `YS_JEV_API_KEY` in `.env`. Anything in
-`YS_ENGINE_ARGS` comes last and overrides it, e.g.
-`YS_ENGINE_ARGS=--judge none` or `YS_ENGINE_ARGS=--llm claude --model claude-haiku-4-5`.
-
-Run `loginctl enable-linger $USER` so the units keep running after you log out.
-Test the whole thing on an **unlisted** stream for a few days before going public.
+To keep it running after you close the terminal, start it inside `tmux`
+or `screen`. Test on an **unlisted** stream for a while before going public.
 
 ### The stream page
 
@@ -501,8 +488,7 @@ ratio as `YS_VIDEO_SIZE` (16:9) to avoid losing the edges. `YS_BG_DIM`
 (default 0.35) darkens it so the text stays readable, and `YS_BG_BLUR=8`
 gives a soft, out-of-focus look. For videos, a short seamless loop (10-60 s)
 works best, and a long, heavily compressed video costs more CPU. Restart
-the stream to apply changes (`systemctl --user restart ystreamer-stream`,
-or Ctrl+C and `stream/stream.sh`).
+the stream to apply changes (Ctrl+C and `stream/live.sh` again).
 
 ## Steering it
 
@@ -533,7 +519,7 @@ Tunables such as the layer cap, timeouts and paths live in `.env` (see
 | `music/plan.py`, `music/director.py` | piece/section plans, the LLM Director with validation and fallback |
 | `music/engine.py` | cycle clock, phrase-quantised scheduling (`jumpMod`), state/overlay files |
 | `tidal/synthdefs.scd`, `tidal/superdirt_boot.scd` | custom SynthDefs and the master compressor/limiter |
-| `stream/` | audio sink, ffmpeg streaming, watchdog, systemd units |
+| `stream/` | `live.sh` (go live), audio sink, stream page and capture, watchdog, thumbnail |
 | `eval/` | analysis, quality monitor, feedback, preview renderer, dataset export |
 | `tidal_backend.py`, `prompts/composer_prompt.md` | the old free-form agent loop (`orchestrator.py --legacy "..."`) |
 

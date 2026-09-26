@@ -25,3 +25,17 @@ def test_decide():
     assert decide(30, 10, c, since_last_restart=10, uptime=1e9) is None  # cooldown
     assert decide(30, 10, c, 1e9, uptime=10) is None                    # startup grace
     assert decide(0, None, c, 1e9, 1e9) is None
+
+
+def test_restart_stops_the_engine_from_its_pid_file(tmp_path, monkeypatch):
+    import signal
+
+    from stream import watchdog as W
+
+    pidfile = tmp_path / "engine.pid"
+    pidfile.write_text("4242\n")
+    killed = []
+    monkeypatch.setattr(W.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    cfg = W.WatchdogConfig(restart_cmd="", engine_pidfile=str(pidfile))
+    W.restart_engine(cfg)
+    assert killed == [(4242, signal.SIGTERM)]
