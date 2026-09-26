@@ -17,7 +17,7 @@ from typing import Callable
 
 from . import runtime
 from .engine import Clock
-from .livecode import ROLE_CHANNELS, EditError, Program, apply_edit, changed_statements
+from .livecode import ROLE_CHANNELS, EditError, Program, apply_edit, changed_statements, complexity
 from .performer import Performer, SetState
 
 
@@ -37,11 +37,18 @@ class LiveEngine:
         self.max_tracks = max_tracks
         self.program: Program | None = None
         self.edits = 0
+        self.groove_complexity: list[float] = []   # complexity after each groove edit, per track
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="performer")
         # Narration lines are written in the background so the music never waits.
         self._voice_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="narrator")
         self._last_reason = ""
         performer.on_arc = self._on_arc
+
+    def _report_complexity(self) -> None:
+        values, self.groove_complexity = self.groove_complexity, []
+        if values:
+            self.log(f"[Live] complexity in the groove: {sum(values) / len(values):.1f} on average, "
+                     f"{max(values):.1f} at the peak (livecode.complexity)")
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -262,6 +269,8 @@ class LiveEngine:
                              edit=edit.describe(), reason=edit.reason, channel=ROLE_CHANNELS.get(edit.role),
                              role=edit.role, op=edit.op)
             self.performer.applied(edit)
+            if self.performer.state.phase in ("groove", "groove2"):
+                self.groove_complexity.append(complexity(program))
             runtime.append_history({"edit": edit.describe(), "source": edit.source, "listening": edit.listening,
                                     "op": edit.op, "role": edit.role,
                                     "name": edit.name, "value": edit.value, "reason": edit.reason,
@@ -272,6 +281,7 @@ class LiveEngine:
                 self.narrator.say(edit.narration, kind="section")
 
             if self.performer.track_finished(program):
+                self._report_complexity()
                 tracks += 1
                 if self.max_tracks is not None and tracks >= self.max_tracks:
                     self._wait_until(next_cycle + self.performer.edit_bars_now())

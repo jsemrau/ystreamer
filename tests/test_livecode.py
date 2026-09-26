@@ -706,3 +706,14 @@ def test_club_styles_build_to_a_rich_moving_peak(style):
     assert len(peak) >= 6
     assert "*16" in code                          # a 16th-note acid or arp
     assert "sine" in code                         # something sweeps
+
+
+def test_line_complexity_counts_layers_variation_motion_and_density():
+    from music.livecode import line_complexity
+
+    plain = LineSpec(role="lead", body='n (scale "{mode}" ("{melody}" |+ "<{roots}>") {root}) # s "ys_glass"',
+                     patterns={"melody": "0 ~ 2 ~"}, fx=[["lpf", "3000"]])
+    assert line_complexity(plain) == 1.0
+    rich = LineSpec(role="lead", body=plain.body, patterns={"melody": "<[0 ~ 2 ~] [4 ~ 2 ~]>*16"},
+                    fx=[["lpf", "(slow 8 $ range 1500 5000 sine)"]], wrappers=["jux rev", "every 4 (|+ n 12)"])
+    assert line_complexity(rich) == 1.0 + 1.0 + 0.5 + 0.5 + 0.5
