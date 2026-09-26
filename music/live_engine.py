@@ -102,13 +102,49 @@ class LiveEngine:
             lines.append("")
             lines.append(f"-- {comment}")
         runtime.write_overlay(now_playing, lines, width=120, max_lines=26)
+        self._publish_ui(program, highlight, comment)
         runtime.save_state({"mode": "live", "program": program.to_dict(), "performer": st.to_dict(),
                             "style": self.performer.style, "saved_at": time.time()})
+
+    def _publish_ui(self, program: Program, highlight: str | None, comment: str) -> None:
+        """The snapshot the stream page draws (stream/ui)."""
+        from . import llm
+
+        track, perf = program.track, self.performer
+        code = []
+        for role in sorted(program.lines, key=lambda r: ROLE_CHANNELS[r]):
+            line = program.lines[role]
+            code.append({"channel": line.channel, "role": role, "muted": line.muted,
+                         "text": f"d{line.channel} $ " + (program.expression(role) if not line.muted
+                                                         else line.render(track.harmony())),
+                         "edited": role == highlight})
+        stats = dict(perf.stats)
+        judged = stats.get("judge_llm", 0) + stats.get("judge_builtin", 0)
+        models = {}
+        if perf.model_id:
+            models["performer"] = llm.resolve(perf.model_id)[1]
+        if perf.judge:
+            models["judge"] = perf.judge
+        runtime.ui_update(
+            channel="sleepless composer",
+            track={"title": track.title, "style": track.style, "key": track.key, "bpm": track.bpm,
+                   "mood": perf.track_mood},
+            phase=perf.state.phase, phases=["build", "groove", "breakdown", "rebuild", "groove2", "outro"],
+            clock={"ref_time": self.clock.ref_time, "ref_cycle": self.clock.ref_cycle, "cps": self.clock.cps,
+                   "now": self.clock._now()},
+            tempo_line=program.tempo_statement(), code=code, comment=comment,
+            models=models,
+            stats={"edits": sum(v for k, v in stats.items() if k not in ("judge_llm", "judge_builtin")),
+                   "llm": stats.get("llm", 0), "judged": judged, "judge_llm": stats.get("judge_llm", 0),
+                   "judge_mass": (sum(perf.judge_mass) / len(perf.judge_mass)) if perf.judge_mass else None},
+        )
 
     def _announce(self, program: Program) -> None:
         track = program.track
         self.log(f"\n♪ New track: {track.title}  ·  {track.key}  ·  {track.bpm:g} BPM  ·  {track.style}")
         runtime.append_thought(f"♪ {track.title} · {track.key} · {track.bpm:g} BPM · {track.style}")
+        runtime.ui_event("track", title=track.title, style=track.style, key=track.key, bpm=track.bpm,
+                         mood=self.performer.track_mood)
         if self.narrator is not None:
             from .narrator import clean_narration
 
@@ -207,6 +243,9 @@ class LiveEngine:
                 runtime.append_thought(f"👂 hears: {edit.listening}")
             self.log(f"✎ {tag}{edit.describe()}" + (f"   -- {edit.reason}" if edit.reason else ""))
             runtime.append_thought(f"✎ {tag}{edit.describe()}  -- {edit.reason}")
+            runtime.ui_event("performer", source=edit.source or "built-in", listening=edit.listening,
+                             edit=edit.describe(), reason=edit.reason, channel=ROLE_CHANNELS.get(edit.role),
+                             role=edit.role, op=edit.op)
             self.performer.applied(edit)
             runtime.append_history({"edit": edit.describe(), "source": edit.source, "listening": edit.listening,
                                     "op": edit.op, "role": edit.role,

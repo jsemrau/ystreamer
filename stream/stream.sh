@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Stream the music to YouTube (or any RTMP endpoint) with a visual overlay.
 #
-# Video = background (image, looping video, or a plain colour) + live
+# Two looks (YS_STREAM_UI):
+#   browser  (default when Xvfb and Chromium are installed) the stream page in
+#            stream/ui/: the live code, every agent decision, the narration and a
+#            beat-synced visual per style, rendered by Chromium in a virtual
+#            display (Xvfb) and captured with ffmpeg x11grab.
+#   overlay  the classic look below (ffmpeg only).
+#
+# Overlay video = background (image, looping video, or a plain colour) + live
 # waveform + "now playing" + the live Tidal code + the spoken narration as a
 # subtitle, all re-read every frame
 # from runtime/*.txt which the engine rewrites atomically.
@@ -16,6 +23,9 @@
 #             YS_AUDIO_INPUT          ffmpeg audio input args (default: pulse sink monitor)
 #             YS_FONT / YS_MONO_FONT  font files for drawtext
 #             YS_VIDEO_SIZE, YS_FPS, YS_VIDEO_BITRATE
+#             YS_STREAM_UI            browser | overlay (default: browser if available)
+#             YS_CHROMIUM             Chromium/Chrome binary for the browser look
+#             YS_UI_PORT              port of the stream page server (default 8765)
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -45,10 +55,10 @@ else
     exit 1
 fi
 
-SIZE="${YS_VIDEO_SIZE:-1280x720}"
+SIZE="${YS_VIDEO_SIZE:-1920x1080}"
 W="${SIZE%x*}"; H="${SIZE#*x}"
 FPS="${YS_FPS:-30}"
-VBITRATE="${YS_VIDEO_BITRATE:-3000k}"
+VBITRATE="${YS_VIDEO_BITRATE:-4500k}"
 SEGMENT_SECONDS=$(( ${YS_STREAM_SEGMENT_HOURS:-11} * 3600 ))
 FONT="${YS_FONT:-/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf}"
 MONO="${YS_MONO_FONT:-/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf}"
@@ -88,8 +98,60 @@ if [[ -n "$BG" ]]; then
     fi
 fi
 
+# ---------------------------------------------------------------- browser look
+find_chromium() {
+    local c
+    for c in "${YS_CHROMIUM:-}" chromium chromium-browser google-chrome google-chrome-stable; do
+        [[ -n "$c" ]] && command -v "$c" >/dev/null 2>&1 && { command -v "$c"; return 0; }
+    done
+    for c in "$HOME"/.cache/ms-playwright/chromium-*/chrome-linux/chrome /opt/pw-browsers/chromium-*/chrome-linux/chrome; do
+        [[ -x "$c" ]] && { echo "$c"; return 0; }
+    done
+    return 1
+}
+
+UI_MODE="${YS_STREAM_UI:-}"
+CHROMIUM="$(find_chromium || true)"
+if [[ -z "$UI_MODE" ]]; then
+    if [[ -n "$CHROMIUM" ]] && command -v Xvfb >/dev/null 2>&1; then UI_MODE=browser; else UI_MODE=overlay; fi
+fi
+if [[ "$UI_MODE" == "browser" && ( -z "$CHROMIUM" || -z "$(command -v Xvfb)" ) ]]; then
+    echo "YS_STREAM_UI=browser needs Xvfb and Chromium (sudo apt-get install xvfb chromium, or set YS_CHROMIUM);" \
+         "using the overlay look" >&2
+    UI_MODE=overlay
+fi
+
+PIDS=()
+cleanup() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; }
+trap cleanup EXIT INT TERM
+
+if [[ "$UI_MODE" == "browser" ]]; then
+    UI_PORT="${YS_UI_PORT:-8765}"
+    DISPLAY_NUM="${YS_XVFB_DISPLAY:-:99}"
+    PY="$REPO/venv/bin/python"; [[ -x "$PY" ]] || PY=python3
+    (cd "$REPO" && exec "$PY" -m stream.ui_server) & PIDS+=($!)
+    Xvfb "$DISPLAY_NUM" -screen 0 "${W}x${H}x24" -nolisten tcp & PIDS+=($!)
+    sleep 1.5
+    PROFILE="$(mktemp -d)"
+    DISPLAY="$DISPLAY_NUM" "$CHROMIUM" --kiosk --no-first-run --noerrdialogs --disable-infobars \
+        --disable-session-crashed-bubble --disable-features=Translate --password-store=basic \
+        --no-sandbox --user-data-dir="$PROFILE" --window-position=0,0 --window-size="${W},${H}" \
+        --force-device-scale-factor=1 --hide-scrollbars "http://127.0.0.1:${UI_PORT}/" \
+        >/dev/null 2>&1 & PIDS+=($!)
+    sleep 4
+    echo "Streaming the browser look ($CHROMIUM on $DISPLAY_NUM, ${W}x${H})" >&2
+    VIDEO_IN=(-thread_queue_size 512 -f x11grab -draw_mouse 0 -video_size "${W}x${H}" -framerate "$FPS"
+              -i "${DISPLAY_NUM}.0")
+    FILTER="[0:a]alimiter=limit=0.89:level=disabled,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout];\
+[1:v]fps=${FPS},format=yuv420p[vout]"
+    TUNE=(-tune zerolatency)
+else
+    VIDEO_IN=("${BG_IN[@]}")
+    TUNE=(-tune stillimage)
+fi
+
 WAVE_H=$(( H / 5 ))
-FILTER="\
+[[ "$UI_MODE" == "browser" ]] || FILTER="\
 [0:a]alimiter=limit=0.89:level=disabled,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,asplit=2[aout][awave];\
 [awave]showwaves=s=${W}x${WAVE_H}:mode=cline:rate=${FPS}:colors=0xE8DCC8@0.55[wave];\
 [1:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${FPS}${BG_LOOK},format=yuv420p[bg];\
@@ -104,9 +166,9 @@ shadowcolor=black@0.7:shadowx=2:shadowy=2[vout]"
 
 run_once() {
     ffmpeg -hide_banner -loglevel warning -nostats \
-        "${AUDIO_IN[@]}" "${BG_IN[@]}" \
+        "${AUDIO_IN[@]}" "${VIDEO_IN[@]}" \
         -filter_complex "$FILTER" -map "[vout]" -map "[aout]" \
-        -c:v libx264 -preset veryfast -tune stillimage -b:v "$VBITRATE" -maxrate "$VBITRATE" \
+        -c:v libx264 -preset veryfast "${TUNE[@]}" -b:v "$VBITRATE" -maxrate "$VBITRATE" \
         -bufsize "$VBITRATE" -g $(( FPS * 2 )) -keyint_min $(( FPS * 2 )) -pix_fmt yuv420p \
         -c:a aac -b:a 160k -ar 48000 -ac 2 \
         -t "$SEGMENT_SECONDS" -f "${YS_STREAM_FORMAT:-flv}" "$TARGET"

@@ -100,6 +100,9 @@ class Director:
         line += f"  ({data.get('_seconds', 0):.1f}s)"
         self.log(line)
         runtime.append_thought(line.replace("\n   ", "  | "))
+        model = llm.resolve(self.model_id)[1] if self.model_id else "built-in"
+        runtime.ui_event("director", what=what, decision=decision, reason=reason, model=model,
+                         seconds=round(float(data.get("_seconds", 0) or 0), 1))
 
     def _planner_note(self, piece: Piece, index: int, arrangement: Arrangement) -> None:
         section = piece.sections[index]
@@ -155,6 +158,11 @@ class Director:
                 self._think("Next piece", f"'{piece.title}', {piece.style}, {piece.key}, {piece.bpm:.0f} BPM, "
                                           f"{piece.progression}, {piece.mood}", data)
         self.recent_progressions.append(piece.progression)
+        if piece is fallback:
+            runtime.ui_event("director", what="Next piece", model="built-in",
+                             decision=f"'{piece.title}', {piece.style}, {piece.key}, {piece.bpm:.0f} BPM, "
+                                      f"{piece.progression}, {piece.mood}",
+                             reason="planned by the built-in planner", seconds=0)
         return piece
 
     def arrange_section(self, piece: Piece, index: int, current: Arrangement | None) -> Arrangement:

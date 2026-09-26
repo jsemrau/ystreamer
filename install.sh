@@ -7,7 +7,12 @@ set -euo pipefail
 # fail even though the Ubuntu repositories are fine, so don't stop on it.
 sudo apt-get update || echo "WARNING: apt-get update reported errors (often a broken PPA); continuing"
 sudo apt-get install -y ghc cabal-install supercollider sc3-plugins ffmpeg \
-    pipewire-jack pipewire-bin pulseaudio-utils fonts-dejavu-core python3-venv
+    pipewire-jack pipewire-bin pulseaudio-utils fonts-dejavu-core python3-venv xvfb
+# The stream page (stream/ui) is rendered by Chromium in a virtual display (Xvfb).
+# Debian ships "chromium"; on Ubuntu "chromium-browser" is a snap, so fall back to
+# Playwright's Chromium (installed with the Python packages below) if neither works.
+sudo apt-get install -y chromium 2>/dev/null || sudo apt-get install -y chromium-browser 2>/dev/null \
+    || echo "NOTE: no Chromium package; the Playwright Chromium below is used for the stream page"
 
 tidal_importable() {
     ! echo 'import Sound.Tidal.Context' | ghci -v0 2>&1 | grep -qi "error"
@@ -30,6 +35,11 @@ echo 'Quarks.install("SuperDirt"); thisProcess.shutdown;' | sclang -D
 # 2. Python environment
 python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
+# A Chromium for the stream page when the system has none (stream.sh finds it).
+if ! command -v chromium >/dev/null && ! command -v chromium-browser >/dev/null && ! command -v google-chrome >/dev/null; then
+    ./venv/bin/pip install playwright && ./venv/bin/python -m playwright install chromium \
+        || echo "NOTE: couldn't install Chromium; the stream falls back to the plain overlay look"
+fi
 
 # Voice for the spoken narration (warm British female; see README to change it)
 [[ -f voices/en_GB-jenny_dioco-medium.onnx ]] || \

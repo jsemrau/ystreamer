@@ -133,6 +133,7 @@ class Narrator:
             # speak=False is a dry run: just print the line.
             self.log(f'🗣  (voice off) "{text}"' if self._speak else f'🗣  "{text}"')
             runtime.append_thought(f"🗣  {text}")
+            runtime.ui_event("narrator", text=text)
             return
         since = time.monotonic() - self._last_spoken
         if since < self.min_gap and kind != "piece":
@@ -211,6 +212,8 @@ class Narrator:
                         continue
                     clip = self._soften(raw, os.path.join(tmp, "voice.wav"))
                     runtime.atomic_write(os.path.join(config.RUNTIME_DIR, "narration.txt"), text + "\n")
+                    runtime.ui_update(narration=text)
+                    runtime.ui_event("narrator", text=text)
                     if self.duck:
                         self.duck(True)
                     try:
@@ -220,6 +223,7 @@ class Narrator:
                             self.duck(False)
                         time.sleep(2)
                         runtime.atomic_write(os.path.join(config.RUNTIME_DIR, "narration.txt"), "\n")
+                        runtime.ui_update(narration="")
                 self._last_spoken = time.monotonic()
             except Exception as e:  # never let narration take anything else down
                 self.log(f"[Narrator] error: {e}")

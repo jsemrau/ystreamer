@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sleepless composer · live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div id="stage">
+  <header id="top">
+    <div class="brand">
+      <span class="live"><i></i>LIVE</span>
+      <div>
+        <div class="name">sleepless composer</div>
+        <div class="tag">AI agents live-coding music, 24/7</div>
+      </div>
+    </div>
+    <div class="now">
+      <div class="label">now playing</div>
+      <div id="title">…</div>
+    </div>
+    <div class="chips" id="chips"></div>
+  </header>
+
+  <nav id="arc"></nav>
+
+  <main>
+    <section id="code-panel" class="panel">
+      <div class="panel-head">
+        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span class="file">live.tidal</span>
+        <span class="hint">the program the agents are writing, right now</span>
+      </div>
+      <pre id="tempo"></pre>
+      <div id="code"></div>
+      <div id="comment"></div>
+    </section>
+
+    <section id="agents-panel" class="panel">
+      <div class="panel-head">
+        <span class="file">agents</span>
+        <span class="hint">every decision, as it happens</span>
+      </div>
+      <div id="thinking"></div>
+      <div id="feed"></div>
+    </section>
+  </main>
+
+  <footer>
+    <div id="narration"></div>
+    <div id="stats"></div>
+  </footer>
+</div>
+<div id="poster">
+  <div class="p-live"><span class="live"><i></i>LIVE</span><span class="p-channel">sleepless composer</span></div>
+  <h1>AI agents<br>live-code music</h1>
+  <p class="p-sub">you can watch every decision · 24/7</p>
+  <div class="p-track" id="p-track"></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
