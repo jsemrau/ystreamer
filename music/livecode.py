@@ -342,6 +342,30 @@ _DEGREE_RE = re.compile(r"(?<![*!/@%\d.:])-?\d+")
 _STRICT_ROLES = ("bass", "acid", "arp")
 
 
+_MOVING_RE = re.compile(r"\b(sine|cosine|saw|isaw|tri|square|rand|perlin)\b")
+
+
+def line_complexity(line: "LineSpec") -> float:
+    """How much a line contributes to the music's complexity: 1 for the
+    layer itself, plus half a point each for every wrapper (a variation
+    or transformation), every control that moves on its own (a slow sine
+    on the filter or acid knob), a phrase that changes bar to bar
+    (`<[...] [...]>`), and a 16th-note stream."""
+    score = 1.0 + 0.5 * len(line.wrappers)
+    score += 0.5 * sum(bool(_MOVING_RE.search(v)) for _, v in line.fx + line.pfs)
+    values = list(line.patterns.values())
+    if any("<" in v for v in values) or re.search(r'"<\{(?!roots|chords)\w+\}>', line.body):
+        score += 0.5
+    if any(re.search(r"\*(16|8)\b", v) for v in values) or re.search(r"\*(16|8)\b", line.body):
+        score += 0.5
+    return score
+
+
+def complexity(program: "Program") -> float:
+    """The complexity of what plays now: the sum over active lines."""
+    return sum(line_complexity(program.lines[r]) for r in program.active_roles())
+
+
 def harmony_problem(role: str, value: str) -> str | None:
     """Why a melodic pattern would clash with the chords, or None if it fits."""
     degrees = [int(d) for d in _DEGREE_RE.findall(value)]

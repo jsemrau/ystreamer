@@ -32,12 +32,12 @@ from .plan import plan_piece
 
 # Which roles come in first, per style (after the opener).
 ROLE_ORDER = {
-    "lofi": ["beat", "keys", "bass", "lead", "texture", "perc", "acid"],
+    "lofi": ["beat", "keys", "bass", "lead", "texture", "perc", "acid", "arp"],
     "deephouse": ["beat", "bass", "keys", "perc", "lead", "chords", "arp", "texture"],
     "trance": ["acid", "beat", "bass", "chords", "lead", "arp", "texture"],
-    "ambient": ["chords", "texture", "keys", "lead", "bass", "beat"],
-    "piano": ["keys", "lead", "bass", "chords", "texture"],
-    "downtempo": ["beat", "keys", "bass", "lead", "texture"],
+    "ambient": ["chords", "texture", "keys", "lead", "arp", "bass", "beat"],
+    "piano": ["keys", "lead", "bass", "chords", "arp", "texture"],
+    "downtempo": ["beat", "keys", "bass", "lead", "arp", "texture"],
     "darkwave": ["bass", "beat", "chords", "lead", "arp", "keys", "texture"],
     "techno": ["beat", "perc", "bass", "acid", "chords", "arp", "texture", "lead"],
     "hardcore": ["beat", "perc", "acid", "lead", "arp", "chords", "texture"],
@@ -271,7 +271,7 @@ class Performer:
             return self._tweak(program, calm=True)
         # groove / groove2
         missing = self._missing_roles(program)
-        if missing and len(active) < self.settings["max_lines"] and rng.random() < 0.25:
+        if missing and len(active) < self.settings["max_lines"] and rng.random() < 0.35:
             return self._add(program, missing[0])
         if rng.random() < 0.05:
             delta = rng.choice([-2, -1, 1, 2])
@@ -287,7 +287,7 @@ class Performer:
             line = program.lines[role]
             # Moves a listener hears (new notes, rhythms, variations) over
             # small effect nudges.
-            kind = rng.choice(["pattern", "pattern", "pattern", "wrap", "wrap", "fx", "pf"])
+            kind = rng.choice(["pattern", "pattern", "pattern", "wrap", "wrap", "wrap", "fx", "pf"])
             edit = None
             if kind == "pattern" and line.patterns:
                 edit = self._pattern_edit(role, line)
@@ -378,7 +378,8 @@ class Performer:
 
     def _wrap_edit(self, role: str, line) -> Edit | None:
         own = [w for w in line.wrappers if w in ALL_WRAPPERS]
-        if own and self.rng.random() < 0.5:
+        # Keep variations: take one off mostly when a line already carries two.
+        if own and self.rng.random() < (0.6 if len(own) >= 2 else 0.2):
             w = self.rng.choice(own)
             return Edit("unwrap", role=role, name=w, reason=f"take off `{w}`")
         options = [w for w in allowed_wrappers(line) if w not in line.wrappers]
