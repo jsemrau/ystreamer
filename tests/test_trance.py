@@ -93,3 +93,66 @@ def test_synthdef_gate_patterns_are_16_steps():
     assert patterns[0] == "1011010110110101"
     assert len(patterns) == 3 and all(len(p) == 16 for p in patterns)
     assert "PulseDPW" in text and "LFPulse" in text  # clean chopper with a fallback
+
+
+def test_acid_motif_shape():
+    from music.templates import acid_motif
+
+    for seed in range(30):
+        motif = acid_motif(seed)
+        assert len(motif) in (3, 5, 7)
+        assert motif[0] == 0
+        if len(motif) >= 5:
+            assert motif[2] == 0  # returns to the root like <0 4 0 9 7>
+
+
+def test_acid_line_is_polymetric_follows_chords_and_stays_in_key():
+    c = ctx(section="verse", bars=16)
+    line = render_layer("bass", c, P.PRESETS["bass"]["acid_line"], 0.6)
+    entries = sequence(line)
+    assert all(len(e.strip("[]").split()) == 16 for e in entries)
+    assert entries[0] != entries[1] or len(set(entries)) == 1  # the motif drifts across bars
+    assert all(c.key.contains(n) for n in note_numbers(line))
+    assert '# pF "acid" (slow 16 $ range 0.4 0.65 sine)' in line   # the knob drifts
+    build = render_layer("bass", ctx(section="build", next_section="chorus", bars=16), P.PRESETS["bass"]["acid_line"], 0.65)
+    assert "range 0.3 0.9 saw" in build                            # and opens across a build
+
+
+def test_sidechain_pumps_everything_on_the_kick():
+    c = ctx(section="chorus", bars=16, sidechain=True, cps=136 / 240)
+    acid = render_layer("bass", c, P.PRESETS["bass"]["acid_line"], 0.9)
+    assert acid.endswith('|* gain "[0.67 0.91 1 1]*4"')
+    pad = render_layer("pad", c, P.PRESETS["pad"]["gated_saw"], 0.9)
+    assert '# pF "duckdepth" 0.8' in pad and '# pF "beattime" 0.4412' in pad
+    quiet = render_layer("pad", ctx(section="breakdown"), P.PRESETS["pad"]["gated_saw"], 0.3)
+    assert "duckdepth" not in quiet
+
+
+def test_engine_sidechains_trance_only_while_drums_play():
+    from music.director import Director
+    from music.engine import MusicEngine
+    from music.plan import Arrangement
+
+    piece = plan_piece(random.Random(2), style="trance")
+    engine = MusicEngine(lambda l: None, Director(None, random.Random(0), log=lambda m: None), log=lambda m: None)
+    with_drums = engine.harmony_for(piece, 1, arrangement=Arrangement(layers={"drums": "trance_kit", "bass": "acid_line"}))
+    without = engine.harmony_for(piece, 2, arrangement=Arrangement(layers={"pad": "gated_saw"}))
+    assert with_drums.sidechain and not without.sidechain
+    lofi = plan_piece(random.Random(2), style="lofi")
+    assert not engine.harmony_for(lofi, 1, arrangement=Arrangement(layers={"drums": "lofi_kit"})).sidechain
+
+
+def test_synthdefs_have_acid_env_and_duck():
+    import os
+
+    with open(os.path.join(os.path.dirname(__file__), "..", "tidal", "synthdefs.scd")) as f:
+        text = f.read()
+    acid = text[text.index("SynthDef(\\ys_acid"):]
+    assert "100 * (2 ** (acid.clip(0, 1) * 9 * fenv))" in acid          # lpf(100).lpenv(x * 9)
+    assert "Env([0, 1, 0.2], [0.001, 0.12]" in acid                     # lps(.2).lpd(.12)
+    assert text.count("Impulse.ar(beattime.reciprocal)") == 2           # duck on every beat
+
+
+def test_every_trance_piece_is_built_on_the_acid_line():
+    for seed in range(10):
+        assert plan_piece(random.Random(seed), style="trance").instruments["bass"] == "acid_line"

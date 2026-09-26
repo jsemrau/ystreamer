@@ -149,14 +149,21 @@ SynthDef(\ys_choir, { |out, sustain = 4, pan, freq = 440, speed = 1|
 
 // Supersaw: 7 detuned saws with random phases, plus a sub. Filtering (lpf,
 // resonance) comes from SuperDirt so Tidal can sweep it and gate it.
-SynthDef(\ys_supersaw, { |out, sustain = 1, pan, freq = 440, speed = 1|
+SynthDef(\ys_supersaw, { |out, sustain = 1, pan, freq = 440, speed = 1,
+                          duckdepth = 0, duckattack = 0.16, beattime = 0.44|
     var f = freq * speed;
+    // Sidechain: duck on every beat (kick) and recover over duckattack seconds.
+    // A new note always starts on a beat, so Impulse's first trigger is the kick.
+    // (A retriggered EnvGen moves from its current level, so the first stage
+    // is a 1 ms drop to the ducked level, then it recovers.)
+    var duck = EnvGen.ar(Env([1 - duckdepth.clip(0, 1), 1 - duckdepth.clip(0, 1), 1],
+        [0.001, duckattack.max(0.01)], \sin), Impulse.ar(beattime.reciprocal));
     var len = sustain.max(0.05);
     var env = EnvGen.ar(Env([0, 1, 0.8, 0], [0.005, len * 0.85, 0.08 + (len * 0.15)], [0, -1, -3]), doneAction: 2);
     var detune = [0.98, 0.99, 0.995, 1.0, 1.005, 1.01, 1.02];
     var sig = Mix(LFSaw.ar(f * detune, { Rand(0, 2) } ! 7)) / 7;
     sig = sig + (SinOsc.ar(f * 0.5) * 0.12);
-    sig = HPF.ar(sig, 70) * 0.5;
+    sig = HPF.ar(sig, 70) * 0.5 * duck;
     OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
 }).add;
 
@@ -204,8 +211,15 @@ SynthDef(\ys_tbass, { |out, sustain = 0.2, pan, freq = 55, speed = 1|
     Env(levels, times)
 };
 SynthDef(\ys_gatesaw, { |out, sustain = 4, pan, freq = 440, speed = 1,
-                         gatetime = 1.74, gatepat = 1, gatedepth = 0.9|
+                         gatetime = 1.74, gatepat = 1, gatedepth = 0.9,
+                         duckdepth = 0, duckattack = 0.16, beattime = 0.44|
     var f = freq * speed;
+    // Sidechain: duck on every beat (kick) and recover over duckattack seconds.
+    // A new note always starts on a beat, so Impulse's first trigger is the kick.
+    // (A retriggered EnvGen moves from its current level, so the first stage
+    // is a 1 ms drop to the ducked level, then it recovers.)
+    var duck = EnvGen.ar(Env([1 - duckdepth.clip(0, 1), 1 - duckdepth.clip(0, 1), 1],
+        [0.001, duckattack.max(0.01)], \sin), Impulse.ar(beattime.reciprocal));
     var len = sustain.max(0.1);
     var env = EnvGen.ar(Env([0, 1, 1, 0], [0.01, len, 0.08]), doneAction: 2);
     var detune = [0.98, 0.99, 0.995, 1.0, 1.005, 1.01, 1.02];
@@ -221,7 +235,23 @@ SynthDef(\ys_gatesaw, { |out, sustain = 4, pan, freq = 440, speed = 1,
     var stutters = ~ysGatePatterns.collect { |p| EnvGen.ar(~ysGateEnv.(p), trig, timeScale: gatetime) };
     var gate = Select.ar(gatepat.clip(0, ~ysGatePatterns.size), [chopper] ++ stutters);
     sig = sig + (SinOsc.ar(f * 0.5) * 0.1);
-    sig = HPF.ar(sig, 90) * 0.5 * (1 - (gatedepth.clip(0, 1) * (1 - gate)));
+    sig = HPF.ar(sig, 90) * 0.5 * (1 - (gatedepth.clip(0, 1) * (1 - gate))) * duck;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
+// Acid line, after Switch Angel's Strudel `acidenv`:
+//   pat.lpf(100).lpenv(x * 9).lps(.2).lpd(.12)
+// A raw saw through a resonant low-pass sitting at 100 Hz; every note sweeps
+// the cutoff up by acid * 9 octaves and decays in 0.12 s to a sustain of 0.2.
+// `acid` is the slider (0..1): Tidal automates it like a hand on the knob.
+SynthDef(\ys_acid, { |out, sustain = 0.1, pan, freq = 110, speed = 1, acid = 0.5, acidres = 0.18|
+    var f = freq * speed;
+    var len = sustain.max(0.04);
+    var env = EnvGen.ar(Env([0, 1, 0.9, 0], [0.002, len, 0.03]), doneAction: 2);
+    var fenv = EnvGen.ar(Env([0, 1, 0.2], [0.001, 0.12], -4));
+    var cutoff = (100 * (2 ** (acid.clip(0, 1) * 9 * fenv))).clip(40, 16000);
+    var sig = RLPF.ar(Saw.ar(f), cutoff, acidres.clip(0.05, 1));
+    sig = (sig * 1.8).tanh * 0.3;
     OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
 }).add;
 )

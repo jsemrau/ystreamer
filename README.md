@@ -62,23 +62,37 @@ Each sets a tempo range, the modes it uses (e.g. minor or dorian for lofi),
 the default instruments and which layers come in first. `deephouse` is
 118-124 BPM with a four-on-the-floor kick, off-beat hats, short chord stabs
 and a syncopated sub bass, and it opens with the groove rather than a pad.
-`trance`, after Switch Angel's live-coded SuperCollider trance, is
-134-140 BPM with a pitch-swept synth kick, off-beat open hats, a rolling
-16th bass between the kicks, and a supersaw arpeggio through the classic
-trance gate (`1 0 1 1 0 1 0 1`) with a sidechain-style pump and filter
-sweeps. Pieces go groove → breakdown (supersaw pad and lead) → build (roll,
-filter rise, kick drop) → drop, twice.
+`trance` is modelled on Switch Angel's live-coded acid trance (Strudel):
 
-The trance pad is a real trance gate: sustained supersaw chords chopped by
-an amplitude gate inside the synth (`ys_gatesaw`), not separate notes. The
-gate is remapped to 0…1 so "closed" really is silent, and `gatetime` (one
-bar in seconds) locks it to the tempo. It uses either a straight 16th
-chopper (`PulseDPW(freq, mul: 2).range(0, 1)`, or a smoothed `LFPulse`
-without sc3-plugins), or a stutter envelope built from a 16-step pattern and
-retriggered every bar with `Impulse`. Per section: classic `1011 0101` in
-the groove, the straight chopper in builds, a stutter pattern in the drop,
-and wide open in the breakdown. In Tidal it's
-`# pF "gatetime" 1.739 # pI "gatepat" 1 # pF "gatedepth" 1`.
+```js
+n("<0 4 0 9 7>*16").scale("g:minor").trans(-12)
+  .s("sawtooth").acidenv(slider(0.546))   // lpf(100).lpenv(x*9).lps(.2).lpd(.12)
+s("tbd:2!4").duck("3:4:5:6").duckdepth(.8).duckattack(.16)
+```
+
+- **The acid line** (`ys_acid`) is the heart of it: a raw saw through a
+  resonant low-pass at 100 Hz, swept up by `acid × 9` octaves on every note
+  (decay 0.12 s to a sustain of 0.2). It plays 16ths of a short motif in
+  that `0 4 0 9 7` shape, 3, 5 or 7 steps long, so it drifts against the
+  bar, relative to each chord's root so it follows the harmony. The `acid`
+  knob is automated like a hand on the slider: drifting in the groove,
+  opening across builds, turned down in breakdowns (where the line keeps
+  going under the pad).
+- **Sidechain:** while the kick plays, everything pumps. Sustained supersaws
+  duck inside the synth on every beat (depth 0.8, recovering over 0.16 s),
+  and 16th-note layers get the same shape per step.
+- **Around it:** a 136-140 BPM pitch-swept synth kick with off-beat hats and
+  claps, a second higher acid line or a gated arp, and supersaw chords
+  through a real trance gate. Pieces go groove → breakdown → build (roll,
+  filter rise, kick drop) → drop, twice.
+
+The supersaw pad's trance gate chops sustained chords inside the synth
+(`ys_gatesaw`). The gate is remapped to 0…1 so "closed" is silent, and
+`gatetime` (one bar in seconds) locks it to the tempo. It's either a
+straight 16th chopper (`PulseDPW(freq, mul: 2).range(0, 1)`, or a smoothed
+`LFPulse` without sc3-plugins) or a stutter envelope built from a 16-step
+pattern, retriggered every bar.
+
 With `--style`, every piece stays in that style, including the LLM's
 choices. Without it, the style rotates between the chill styles (deep house
 only plays when asked for).
