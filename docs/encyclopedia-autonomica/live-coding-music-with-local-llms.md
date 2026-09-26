@@ -32,8 +32,8 @@ starts with a single line:
 d1 $ s "bd ~ ~ bd ~ ~ bd ~"
 ```
 
-and grows into a small program of eight or so lines, one per channel
-(`d1`...`d8`). Each line is a pattern: rhythms and melodies in compact
+and grows into a small program of up to nine lines, one per channel
+(`d1`...`d9`). Each line is a pattern: rhythms and melodies in compact
 *mini-notation* (`"0 ~ 2 4"`, `"<a b>"`, `"hh*8"`), piped through
 effects (`# lpf 800`, `# room 0.4`) and transformations (`jux rev`,
 `every 4 (fast 2)`, `off 0.25 (|+ n 12)`). Re-evaluating a line replaces
@@ -360,14 +360,18 @@ measures none of them cleanly.
 
 ### 5.1 Lines and roles
 
-A program is a **track** (key, tempo, progression) plus up to eight
+A program is a **track** (key, tempo, progression) plus up to nine
 lines, one per musical role. Roles are pinned to Tidal channels so the
 screen always reads like a hand-written set:
 
 ```python
 ROLE_CHANNELS = {"beat": 1, "bass": 2, "chords": 3, "keys": 4,
-                 "lead": 5, "acid": 6, "texture": 7, "perc": 8}
+                 "lead": 5, "acid": 6, "texture": 7, "perc": 8, "arp": 9}
 ```
+
+The `arp` role came last (section 13.1): a second 16th-note layer, such
+as an acid line an octave up or a pluck sequence, that gives club styles
+the interlocking density of a real set.
 
 Each line is a `LineSpec`: a **template body with named slots**, plus
 effects, custom synth controls and wrappers. Keeping the parts separate
@@ -509,8 +513,8 @@ at once, and which roles may open a track:
 ```python
 STYLE_SETTINGS = {
     "lofi":     {"edit_bars": 8,  "max_lines": 6, "openers": [["beat"], ["keys"], ["bass", "beat"]]},
-    "trance":   {"edit_bars": 16, "max_lines": 6, "openers": [["acid"], ["beat"], ["acid", "beat"]]},
-    "darkwave": {"edit_bars": 12, "max_lines": 6, "openers": [["bass"], ["beat"], ["bass", "beat"]]},
+    "trance":   {"edit_bars": 16, "max_lines": 7, "openers": [["acid"], ["beat"], ["acid", "beat"]]},
+    "darkwave": {"edit_bars": 12, "max_lines": 7, "openers": [["bass"], ["beat"], ["bass", "beat"]]},
     ...
 }
 ```
@@ -765,8 +769,12 @@ and its edits felt random. The prompt now teaches as it asks:
    explained, which keeps the prompt small.
 6. **Editable parts as compact JSON**: per line its slots and values, its
    effects, which effects it accepts and which wrapper group it takes.
-7. **Addable blocks, operations, taste guidance** ("something a listener
-   will notice, but not a jolt; prefer revising over adding").
+7. **Addable blocks, operations, taste guidance**: aim for the richness
+   of a real live-coded set (up to `max_lines` interlocking lines, things
+   always moving), harmony first, and make each edit something a
+   listener will notice (new notes, a rhythm, a layer, a sweep) rather
+   than a reverb nudge. An earlier version said "prefer revising over
+   adding"; section 13.1 explains why that went.
 8. **Reply contract**: `listening`, `reason`, the operation, optional
    `narration`; or, in judge mode, three genuinely different proposals.
 
@@ -812,8 +820,12 @@ causes rather than the symptoms:
 3. **One corrected retry.** If an edit still breaks a rule, the model is
    shown its reply and the reason it was rejected and answers again, if
    there is time before the bar.
-4. **A deadline.** Each call must finish within 85% of the edit window
-   at the current tempo; a late reply counts as `late`, not as an error.
+4. **A deadline.** Each call should finish within 85% of the edit
+   window at the current tempo. A local model gets at least 60 seconds
+   (`YS_LOCAL_PERFORMER_WAIT`); if it needs longer than the window, the
+   music keeps playing and its edit lands on the bar after the reply
+   (section 9.2). A reply past the deadline counts as `late`, not as an
+   error.
 
 After each track the Performer reports how it went:
 
@@ -837,15 +849,17 @@ built-in performer chooses edits with simple, phase-aware randomness:
 
 - **build**: start with one of the style's openers, then add missing
   roles in the style's order (lofi: beat, keys, bass, lead, texture,
-  percussion), sometimes tweaking in between.
+  percussion): always until three lines play, then 85% of the time, so
+  a club track reaches its full groove in two to four minutes.
 - **breakdown**: mute beat, then bass, then make calm tweaks (darker
   filters, lower acid).
 - **rebuild**: unmute bass, then beat.
 - **outro**: remove lines one by one, keeping the texture for last.
-- **groove**: occasionally add a missing role (12%) or nudge the tempo
+- **groove**: sometimes add a missing role (25%) or nudge the tempo
   (5%); otherwise *tweak*.
 
-A tweak picks a random line and a random kind of change: a pattern edit
+A tweak picks a random line and a kind of change, weighted toward moves a
+listener hears (three in seven are pattern edits, two in seven wrappers): a pattern edit
 (most often changing one number to another from the block's degree
 pool, a small motivic mutation), an effect edit (filter scaled by a
 random factor, sometimes turned into a slow sine sweep, bitcrush toggled
@@ -939,9 +953,12 @@ The next edit is requested *as soon as* the previous one has been
 applied, so the model has the full `edit_bars` window to answer: eight
 bars at 80 BPM is 24 seconds, sixteen bars at 138 BPM about 28 seconds.
 That is enough for a 35B mixture-of-experts model on a single consumer
-GPU when thinking mode is off, and for the two calls of judge mode. Edits always land on a bar boundary
-(Tidal re-evaluates at the next cycle anyway), so even a late edit
-sounds intentional. While waiting, the engine writes a heartbeat file
+GPU when thinking mode is off, and for the two calls of judge mode. A
+slower local model may take longer: then the engine logs "the performer
+is still deciding; the music plays on", waits for the reply, and applies
+the edit on the next bar. Edits always land on a bar boundary (Tidal
+re-evaluates at the next cycle anyway), so even a late edit sounds
+intentional. While waiting, the engine writes a heartbeat file
 every few seconds for the watchdog.
 
 ### 9.3 Defence in depth
@@ -1061,7 +1078,8 @@ models for an experiment is a command-line flag.
 ### 10.2 Failure containment
 
 `complete` runs every call in a worker thread with a hard timeout (60
-seconds by default). It turns *every* failure (connection refused, HTTP
+seconds by default, 180 for the local model, which can take minutes on a
+long planning prompt). It turns *every* failure (connection refused, HTTP
 503 while a model loads, bad JSON envelope, authentication, even crashes
 inside native extensions) into a single `LLMError`. Callers only need to
 handle one exception type, and nothing an LLM backend does can take
@@ -1244,7 +1262,189 @@ choices are diverse) and proves nothing.
 
 ---
 
-## 13. Design lessons
+## 13. What went wrong, and how it was fixed
+
+The architecture above was not designed in one go. Most of it is the
+residue of problems that surfaced while the system was playing, usually
+first noticed by ear. They are worth recording because they share one
+pattern, which is the main result of the project so far:
+
+> **Every step that handed more of the music to the model made the music
+> worse, and most fixes restored quality by moving a decision back into
+> code.**
+
+That is a tension with both goals of the project: music that is not "all
+precoded", and decisions whose reasons can be seen. The fixes below keep
+the model in charge of *judgement* (what to change, when, and why) while
+code keeps the *vocabulary* musical. Whether that is the right split is
+exactly what the protocol in section 12 measures.
+
+### 13.1 The artefact made the music simpler
+
+**Symptom.** Before the live engine, a Director planned whole
+arrangements and the engine rendered them at once. When the program
+itself became the artefact, grown and revised one edit at a time, the
+music got noticeably thinner. Set against a reference like Switch
+Angel's layered acid trance (two 16th-note acid lines, a sidechained
+kick, a filter knob that never stops moving), it sounded like a sketch.
+
+**Diagnosis.** A simulated trance set on the old code showed why:
+
+- It took about 18 edits (roughly eight minutes) to reach five lines, and
+  the full mix barely lasted before the outro.
+- Most edits were nudges nobody hears: `room 0.1 → 0 → 0.1`,
+  `delayfeedback 0.35 → 0.2`.
+- Patterns stood still. The lead played `0 ~ ~ 2 ~ ~ 0 ~`, the same three
+  notes every bar; the acid knob sat at `0.546` for the whole track.
+- There was one line per role, so no layering.
+- The prompt itself asked for caution: "prefer revising over adding",
+  "never make the track busier".
+
+**Fix.**
+
+- **A ninth role, `arp` (`d9`)**, for club styles: a second acid an
+  octave up, or a 16th-note pluck or glass sequence, pumping with the
+  kick.
+- **Lines that move by themselves.** The acid knob and arp filters ride
+  slow sines by default (`pF "acid" (slow 16 $ range 0.35 0.75 sine)`),
+  and leads get phrases that change from bar to bar
+  (`"<[0 ~ 4 ~ 7 ~ 4 ~] [9 ~ 7 ~ 4 ~ 2 ~] ...>"`). Two new wrappers,
+  `every 4 (|+ n 12)` and `chunk 4 (fast 2)`, add phrase-level
+  variation.
+- **A faster build to a fuller peak.** Club styles peak at seven lines;
+  during the build a line is added almost every edit; built-in tweaks
+  favour notes, rhythms and wrappers over effect nudges.
+- **A prompt that asks for density**, per style, instead of caution.
+
+**Result.** In simulation, club styles reach their groove in two to four
+minutes, with seven interlocking lines including a 16th-note layer and
+at least one sweep. A test pins this down. The stream page had to follow:
+seven long lines no longer fit the code panel, so the code now shrinks
+until every line shows.
+
+### 13.2 Harmony
+
+**Symptom.** "The agents introduced a completely unmatched clap sound.
+It's extremely annoying." The first diagnosis blamed the sample and
+removed the clap. The listener corrected it: *the problem is not the
+clap, but that it's not in harmony.*
+
+**Diagnosis.** Melodic patterns are scale degrees, so every note was in
+the key, but in key is not in harmony. Degrees 1, 3 and 5 (the second,
+fourth and sixth of the chord) clash with the chord under them when they
+repeat or sit on a strong beat. One bug made it worse: the techno acid
+motifs had been written as semitones, not degrees.
+
+**Fix.** A rule, enforced by the validator (`harmony_problem`) and
+explained in the prompt:
+
+- bass, acid and arp lines, and any repeating pattern (`*`, `<>`,
+  `[]`), use chord tones only (0, 2, 4, 6 and their octaves);
+- melodies put chord tones on the strong steps and other notes only in
+  between;
+- drum lines may only use the samples of their kit, so a track keeps one
+  coherent sound.
+
+Each block's degree pool follows the same rule, so the built-in
+performer cannot break it either. The clap came back.
+
+### 13.3 The mix
+
+**Symptom.** "Strings were added but the volume was too loud."
+
+**Fix.** Levels are measured, not guessed (section 6.3): every synth's
+loudness was measured offline, each role has a target level, a line
+enters at the gain that meets its target, edits may only move gain by
+±3 dB, lines fade in over four bars, and beds step back when the front is
+busy.
+
+### 13.4 Local models on one GPU
+
+Most operational trouble came from running a 27–35B model on a single
+consumer GPU next to SuperCollider.
+
+| Problem | What it looked like | Fix |
+|---|---|---|
+| Out of memory at load | The model loaded to 100%, then the server died with `cudaMalloc failed` | The context default went down to 16,384 tokens; the orchestrator reads llama-server's log when it stops and prints the likely fix (smaller context, quantised KV cache, fewer GPU layers) |
+| Context overflow | `4105 tokens > 4096` | The prompt explains only the wrappers and effects that apply now; if it still doesn't fit, the performer switches to a compact prompt for the rest of the run |
+| Hidden "thinking" | Replies that took ages and began with `<think>` | Thinking is turned off in the chat template; if a model thinks anyway, the reply is cleaned and the log warns, with the fix (`--reasoning-budget 0`) |
+| Slow replies | `Director ← local (60.1s): ✗ Read timed out`; the Performer gave up after 11 s | Every reply logs its speed (`210 tokens at 22 tok/s`); a timeout says the model was too slow and what to check; the local model alone gets longer (180 s per call, 60 s per edit), and a late edit lands on the next bar instead of being dropped |
+| Unusable edits | Wrong names, numbers slightly out of range | Output forced into a JSON schema of the legal moves, numbers clamped into range, one corrected retry (section 8.3) |
+
+The slow-reply fix has a cost the logs make visible: a slow model still
+plays, but makes fewer edits. The faster fix was a model choice: a
+mixture-of-experts model runs only part of its weights per token and
+answered comfortably inside the edit window where a dense 27B model did
+not.
+
+### 13.5 Style
+
+**Symptoms.** "I asked for hardcore techno but it started slow." A
+darkwave track was planned at 76 BPM. A model opened a darkwave track
+with "cold sustained pads" when the genre lives on the sequencer bass and
+drum machine.
+
+**Fixes.** Techno, hardcore and darkwave became styles with their own
+blocks and tempo ranges. The theme's keywords choose the style, and the
+Director's tempo and key are checked again after the style is fixed. The
+deeper problem, that the models have little feel for what makes a style
+itself, is still open (section 15).
+
+### 13.6 Keeping the agents in the room
+
+**Symptoms.** Moving to the live engine silently dropped the Director
+and the Narrator. With a judge, the performer was consulted so often
+that the music never settled. Later the Narrator was too loud, and then
+lost altogether.
+
+**Fixes.** The Director plans each live track again, and the Narrator
+speaks at arc moments (build to groove, the breakdown, the second
+peak). Edits come every 8 to 16 bars instead of every 4. The narrator's
+voice is normalised to the stream's loudness (-14 LUFS) with an
+adjustable offset (`YS_NARRATION_VOLUME_DB`), the music ducks while it
+speaks, and a skipped line is logged with its reason.
+
+### 13.7 Trust: "so I know this is not all precoded"
+
+**Symptom.** The first runs printed only the result of each decision.
+The listener could not tell the model's choices from the code's.
+
+**Fix.** Every exchange with every agent is logged as it happens
+(`💬 Performer → local/...` and the reply, with its time and speed), and
+also written to `runtime/llm_calls.jsonl`. Every edit is tagged with who
+chose it (`LLM`, `LLM, judged`, `built-in`, `built-in, judged`), and the
+stream page shows what each agent heard, did and why. That turned an
+objection into the project's second goal: understanding *why* each agent
+decided matters as much as pleasant music.
+
+### 13.8 Running it 24/7
+
+Smaller problems, each of which stopped a stream:
+
+- An API key in `.env` was not picked up: an empty leftover entry from
+  `.env.example` overrode it. The loader now skips empty entries and
+  warns on lines it cannot read, instead of failing silently.
+- A leftover SuperCollider process from a crashed run held UDP port
+  57120, so SuperDirt could not start; it is now found and stopped
+  automatically.
+- A set of systemd units was more than one person needed; `stream/live.sh`
+  now starts the audio sink, engine, stream and watchdog with one
+  command, and restarts the engine, which resumes the saved track.
+
+### 13.9 What the problems add up to
+
+Read together, the fixes draw the boundary of the model's creativity in
+this system. Code decides what is *possible*: the blocks, the harmony
+rule, the kit, the level window, the fallbacks. The model decides what
+*happens*: which line, which notes, when, and why. Each problem above
+moved that boundary, almost always toward code. The honest measure of
+the result is the share of edits the model actually makes and the share
+of blind comparisons it wins against random ideas (section 12.4), which
+the Performer prints after every track. If that share holds up as the
+vocabulary grows richer, the model is doing more of the music; if it
+falls, the richness is coming from the code.
+
+## 14. Design lessons
 
 - **Constrain the vocabulary, not the imagination.** Scale-degree slots,
   curated blocks and ranged effects remove whole classes of errors while
@@ -1283,12 +1483,21 @@ choices are diverse) and proves nothing.
 - **A judge needs a generator.** A decision model alone can only pick
   the best of random ideas; paired with a generator it becomes both a
   source of taste and a blind measure of the generator's ideas.
+- **Listen, then measure.** Every major fix here started with a listener
+  saying what was wrong ("too loud", "not in harmony", "much simpler"),
+  and every one ended with a number that pins it down (a level target, a
+  chord-tone rule, lines at the peak). The first diagnosis was often
+  wrong; the ear was not.
+- **Scaffolding is a trade.** Each guard-rail that made the music better
+  took a choice away from the model. Track the model's share of the
+  decisions alongside the quality of the music, or the code quietly
+  becomes the composer.
 - **Budget the context.** A prompt that grows with every useful addition
   eventually overflows a small local context window; describing only what
   applies now, and degrading gracefully to a compact prompt, keeps the
   performer playing.
 
-## 14. Limitations and extensions
+## 15. Limitations and extensions
 
 - **Curated palette.** The test measures compositional and performative
   creativity within a given sound world, not sound design. An extension
