@@ -1118,7 +1118,8 @@ it is. The stream never waits on the model.
   restarted with backoff if it exits.
 - **Watchdog.** A separate process watches for sustained silence on the
   stream sink and for a stale engine heartbeat. When either happens, it
-  restarts the engine service, which resumes from `state.json`. Restarts
+  stops the engine, and `stream/live.sh` starts it again, resuming from
+  `state.json`. Restarts
   are rate-limited and can send a phone notification.
 
 ---

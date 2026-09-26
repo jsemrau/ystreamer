@@ -50,4 +50,4 @@ fi
 echo "Edit .env (stream key, model), then:"
 echo "  ./venv/bin/python orchestrator.py --selftest   # type-check the generated Tidal code"
 echo "  stream/setup_audio.sh --monitor && ./venv/bin/python orchestrator.py   # listen locally"
-echo "  stream/install_services.sh                     # go live 24/7"
+echo "  stream/live.sh                                 # go live (Ctrl-C stops)"
