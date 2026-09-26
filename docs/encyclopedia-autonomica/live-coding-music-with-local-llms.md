@@ -1,4 +1,4 @@
-# Live Coding Music with Local LLMs: Testing Creativity
+# Jamming with Jef and Tidal
 
 *Encyclopedia Autonomica · Agents in creative domains · Technical deep dive*
 
