@@ -180,6 +180,12 @@ class Track:
     bpm: float
     degrees: list[int]              # chord progression as scale degrees (0 = tonic)
     bars_per_chord: int = 1
+    # The progression the track starts its harmony from, per part of the arc
+    # ("main", "breakdown", "peak": name and degrees), and the cycle the
+    # current progression started on, so a change always begins on its first
+    # chord (Tidal's <...> otherwise picks the chord by cycle number).
+    progressions: dict = field(default_factory=dict)
+    start_cycle: int = 0
 
     @property
     def cps(self) -> float:
@@ -188,20 +194,32 @@ class Track:
     def harmony(self) -> dict[str, str]:
         """Placeholders for line templates, all in scale-degree space."""
         key = Key.parse(self.key)
-        rep = f"!{self.bars_per_chord}" if self.bars_per_chord > 1 else ""
-        # Chord stacks kept near the tonic (degrees above 3 drop an octave).
-        stacks = []
-        for d in self.degrees:
-            base = d - 7 if d > 3 else d
-            stacks.append("[" + ",".join(str(base + i) for i in (0, 2, 4, 6)) + "]" + rep)
-        roots = " ".join(f"{d - 7 if d > 3 else d}{rep}" for d in self.degrees)
+        def stack(d: int) -> str:
+            base = d - 7 if d > 3 else d        # chord stacks kept near the tonic
+            return "[" + ",".join(str(base + i) for i in (0, 2, 4, 6)) + "]"
+
+        def root_of(d: int) -> str:
+            return str(d - 7 if d > 3 else d)
+
+        steps = len(self.degrees) * self.bars_per_chord
+        shift = self.start_cycle % steps if steps else 0
+        if shift == 0:
+            rep = f"!{self.bars_per_chord}" if self.bars_per_chord > 1 else ""
+            chords = " ".join(stack(d) + rep for d in self.degrees)
+            roots = " ".join(root_of(d) + rep for d in self.degrees)
+        else:
+            # One entry per cycle, rotated so the first chord falls on start_cycle.
+            per_cycle = [d for d in self.degrees for _ in range(self.bars_per_chord)]
+            order = [per_cycle[(j - shift) % steps] for j in range(steps)]
+            chords = " ".join(stack(d) for d in order)
+            roots = " ".join(root_of(d) for d in order)
         root = key.root if key.root <= 5 else key.root - 12
         root_text = f" + {root}" if root > 0 else (f" - {-root}" if root < 0 else "")
         bar = 1.0 / self.cps
         return {
             "mode": key.mode,
             "root": root_text,          # e.g. " + 2", " - 3" or "" (C)
-            "chords": " ".join(stacks),
+            "chords": chords,
             "roots": roots,
             "bar": f"{bar:.4f}",          # seconds per bar (trance gate locks to it)
             "beat": f"{bar / 4:.4f}",     # seconds per beat (sidechain duck)

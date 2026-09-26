@@ -20,6 +20,10 @@ def test_parse_and_events():
 @pytest.mark.parametrize("style", ["lofi", "ambient", "downtempo", "piano"])
 def test_rendered_pieces_are_in_key_end_to_end(tmp_path, style):
     piece, sections = preview_piece(style, seed=11)
+    # A lifted last chorus (key_shift) is legitimately in another key: measure
+    # the sections that play in the piece's key.
+    assert len(sections) == len(piece.sections)
+    sections = [s for s, sec in zip(sections, piece.sections) if not sec.key_shift]
     path = tmp_path / "p.wav"
     write_wav(str(path), render(sections))
     metrics = analyze(str(path), piece.key)
