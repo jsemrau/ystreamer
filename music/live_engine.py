@@ -217,8 +217,7 @@ class LiveEngine:
         self._publish(program, None, "")
 
         tracks = 0
-        edit_bars = self.performer.settings["edit_bars"]
-        next_cycle = 1 if not program.lines else edit_bars
+        next_cycle = 1 if not program.lines else self.performer.edit_bars_now()
         while not self.stop_event.is_set():
             future = self._pool.submit(self.performer.next_edit, program)
             self._wait_until(next_cycle)
@@ -235,18 +234,18 @@ class LiveEngine:
                 edit = future.result()
             except Exception as e:  # never let the performer stop the music
                 self.log(f"[Live] performer failed ({e}); skipping this edit")
-                next_cycle += edit_bars
+                next_cycle += self.performer.edit_bars_now()
                 continue
 
             try:
                 new = apply_edit(program, edit, self.performer.settings["max_lines"])
             except EditError as e:
                 self.log(f"[Live] skipped invalid edit ({edit.describe()}): {e}")
-                next_cycle += edit_bars
+                next_cycle += self.performer.edit_bars_now()
                 continue
             statements = changed_statements(program, new)
             if not self._type_ok(statements) or not self._send(self._with_fades(statements, new, edit)):
-                next_cycle += edit_bars
+                next_cycle += self.performer.edit_bars_now()
                 continue
             if new.track.bpm != program.track.bpm:
                 self.clock.set_cps(new.track.cps)
@@ -275,7 +274,7 @@ class LiveEngine:
             if self.performer.track_finished(program):
                 tracks += 1
                 if self.max_tracks is not None and tracks >= self.max_tracks:
-                    self._wait_until(next_cycle + edit_bars)
+                    self._wait_until(next_cycle + self.performer.edit_bars_now())
                     break
                 previous = program.track
                 track = self.performer.new_track(previous)
@@ -283,10 +282,9 @@ class LiveEngine:
                 program = self.program = Program(track)
                 self._send(silence + [program.tempo_statement()])
                 self.clock.set_cps(track.cps)
-                edit_bars = self.performer.settings["edit_bars"]
                 self._announce(program)
                 self._publish(program, None, "")
-            next_cycle += edit_bars
+            next_cycle += self.performer.edit_bars_now()
         self.performer.report_stats()
         self._pool.shutdown(wait=False, cancel_futures=True)
         self._voice_pool.shutdown(wait=False, cancel_futures=True)

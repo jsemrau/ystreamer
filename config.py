@@ -83,6 +83,9 @@ LLM_TIMEOUT_SECONDS = _env_float("YS_LLM_TIMEOUT", 60.0)
 # edit comes in late, on the next bar, instead of being dropped.
 LOCAL_LLM_TIMEOUT_SECONDS = _env_float("YS_LOCAL_LLM_TIMEOUT", 180.0)
 LOCAL_PERFORMER_WAIT_SECONDS = _env_float("YS_LOCAL_PERFORMER_WAIT", 60.0)
+# Bars between edits while a track builds up (a new line every few bars, so
+# it gets interesting fast); after that, the style's own edit interval.
+BUILD_BARS = _env_int("YS_BUILD_BARS", 4)
 # How long to wait at startup for the local model to finish loading.
 LLM_LOAD_TIMEOUT = _env_float("YS_LLM_LOAD_TIMEOUT", 300.0)
 
