@@ -75,10 +75,15 @@ Operations (exactly one per reply):
 - `{{"op": "wrap" | "unwrap", "role": "<role>", "name": "<wrapper>"}}`
 - `{{"op": "tempo", "value": "<bpm>"}}`, at most +/-12 BPM from now
 
-Harmony and a coherent sound come first: everything must sit together and
-stay consonant. Never make the track harsher or busier just to change
-something.
-Make each edit count: something a listener will notice, but not a jolt.
-Prefer revising what's there over adding more. Vary what you touch.
+Aim for the richness of a real live-coded set (Switch Angel): at the peak,
+up to {max_lines} interlocking lines - in club styles a beat, a rolling bass,
+a 16th-note acid or arp, chords, a lead whose phrase changes from bar to bar,
+an octave layer - with things always moving (filter and acid sweeps, the
+kick pumping). Calm styles stay sparser, but still move.
+Harmony and a coherent sound come first: every line plays chord tones where
+it matters, and the kit stays the same.
+Make each edit count: something a listener will notice (new notes, a new
+rhythm, a layer, a sweep), not a small reverb or delay nudge. Vary what you
+touch.
 
 {reply}

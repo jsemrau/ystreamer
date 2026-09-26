@@ -27,7 +27,7 @@ from .theory import Key
 
 # Channel per role (d1..d8): fixed so the code reads the same way every time.
 ROLE_CHANNELS = {
-    "beat": 1, "bass": 2, "chords": 3, "keys": 4, "lead": 5, "acid": 6, "texture": 7, "perc": 8,
+    "beat": 1, "bass": 2, "chords": 3, "keys": 4, "lead": 5, "acid": 6, "texture": 7, "perc": 8, "arp": 9,
 }
 ROLES = list(ROLE_CHANNELS)
 
@@ -47,7 +47,7 @@ PF_RANGES: dict[str, tuple[float, float]] = {
 MELODIC_WRAPPERS = [
     "every 4 (fast 2)", "every 3 (0.25 <~)", "every 4 (0.125 ~>)", "sometimesBy 0.2 (degradeBy 0.5)",
     "off 0.125 (|+ n 12)", "off 0.25 (|+ n 12)", "jux rev", "every 4 rev", "degradeBy 0.1",
-    "whenmod 8 6 (# lpf 800)", "every 2 (# room 0.5)",
+    "whenmod 8 6 (# lpf 800)", "every 2 (# room 0.5)", "every 4 (|+ n 12)", "chunk 4 (fast 2)",
 ]
 DRUM_WRAPPERS = [
     "every 4 (fast 2)", "degradeBy 0.1", "every 8 (0.25 <~)",
@@ -70,6 +70,8 @@ WRAPPER_NOTES = {
     "jux rev": "a reversed copy in the other ear: wide, dreamy, a little blurred",
     "every 4 rev": "every 4th bar plays backwards: a twist at the phrase end",
     "degradeBy 0.1": "randomly drops 1 in 10 notes: human, less mechanical",
+    "every 4 (|+ n 12)": "every 4th bar jumps an octave up: a lift at the end of the phrase",
+    "chunk 4 (fast 2)": "each bar a different quarter plays double time: a roll that walks through the bar",
     "whenmod 8 6 (# lpf 800)": "last 2 bars of every 8 go muffled: a dip before the next phrase",
     "every 2 (# room 0.5)": "every other bar gets more reverb: the space pulses",
     "every 8 (0.25 <~)": "every 8th bar shifts early: a turnaround",
@@ -111,6 +113,7 @@ ROLE_FX = {
     "chords": ["lpf", "room", "size", "gain"], "keys": ["lpf", "room", "delay", "legato", "gain"],
     "lead": ["lpf", "room", "delay", "delayfeedback", "legato", "gain"],
     "acid": ["lpf", "room", "delay", "legato", "gain", "resonance"],
+    "arp": ["lpf", "room", "delay", "delayfeedback", "legato", "gain", "pan"],
 }
 
 
@@ -336,7 +339,7 @@ _SOUND_RE = re.compile(r"[a-z][a-z0-9]*(?::\d+)?")
 #   other scale notes only on the weak steps in between.
 CHORD_TONES = {0, 2, 4, 6}
 _DEGREE_RE = re.compile(r"(?<![*!/@%\d.:])-?\d+")
-_STRICT_ROLES = ("bass", "acid")
+_STRICT_ROLES = ("bass", "acid", "arp")
 
 
 def harmony_problem(role: str, value: str) -> str | None:
