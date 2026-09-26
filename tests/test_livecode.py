@@ -251,6 +251,8 @@ def test_edit_schema_allows_legal_edits_and_rejects_made_up_names():
         {"op": "mute", "role": "beat"},                                                # no reason
         {"reason": "x", "op": "explode"},
     ]
+    ok = [{"listening": "the groove is bare", **e} for e in ok]
+    bad = [{"listening": "x", **e} for e in bad] + [{"reason": "no ear", "op": "mute", "role": "beat"}]
     for edit in ok:
         jsonschema.validate(edit, schema)
     for edit in bad:
@@ -322,3 +324,80 @@ def test_local_request_carries_schema_and_survives_servers_without_it(monkeypatc
     assert bodies[0]["response_format"]["json_schema"]["schema"] == {"type": "object"}
     assert "response_format" not in bodies[1]
     assert L._local_schema_ok is False
+
+
+def test_prompt_teaches_tidal_and_remembers_recent_edits():
+    performer = Performer(random.Random(0), style="lofi", model_id="local", log=lambda *_: None)
+    program = _program_with("lofi", "dusty_beat", "sub_walk")
+    performer.applied(Edit("set_fx", role="beat", name="lpf", value="2400", reason="darker drums", source="LLM"))
+    prompt = performer._prompt(program)
+    assert "`jux rev`: a reversed copy in the other ear" in prompt       # wrapper glossary
+    assert "`lpf` [200-9000]: low-pass cutoff" in prompt                  # effect glossary
+    assert "`<a b>` alternates bar by bar" in prompt                       # mini-notation
+    assert "- d1: # lpf -> 2400 (you, build): darker drums" in prompt      # its own recent edits
+    assert "Good moves in this phase" in prompt and "{" not in prompt.split("## Reply")[0].split("```json")[0][-50:]
+
+
+def test_every_wrapper_and_effect_is_explained():
+    from music.livecode import ALL_WRAPPERS, FX_NOTES, FX_RANGES, PF_RANGES, WRAPPER_NOTES
+
+    assert set(ALL_WRAPPERS) <= set(WRAPPER_NOTES)
+    assert set(FX_RANGES) | set(PF_RANGES) <= set(FX_NOTES)
+
+
+def test_listening_is_logged_before_the_edit(monkeypatch):
+    reply = ('{"listening": "The beat is alone and bare.", "reason": "Give it a bass to lean on.", '
+             '"op": "add", "block": "sub_walk"}')
+    monkeypatch.setattr(llm, "converse", lambda *a, **k: reply)
+    clock = _SimClock()
+    logs = []
+    performer = Performer(random.Random(0), style="lofi", model_id="local", log=logs.append)
+    engine = LiveEngine(lambda lines: None, performer, log=logs.append, now=clock.now, sleep=clock.sleep,
+                        max_tracks=1)
+    program = _program_with("lofi", "dusty_beat")
+    engine.clock.reset(program.track.cps)
+    edit = performer.next_edit(program)
+    assert edit.listening == "The beat is alone and bare."
+
+
+def test_jevtypesafe_chooses_among_legal_candidates(monkeypatch):
+    import types
+
+    import requests
+
+    sent = {}
+
+    def fake_post(url, headers, json, timeout):
+        sent.update(url=url, headers=headers, body=json)
+        options = json["questions"]["edit"]["criteria"]
+        pick = sorted(options)[1]
+        return types.SimpleNamespace(status_code=200, text="{}",
+                                     json=lambda: {"answers": {"edit": {"choice": pick,
+                                                                        "reason": "the groove needs weight"}}})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setenv("YS_JEV_API_KEY", "test-key")
+    monkeypatch.delenv("YS_JEV_API_BASE", raising=False)
+    monkeypatch.delenv("YS_JEV_API_STYLE", raising=False)
+    logs = []
+    performer = Performer(random.Random(0), style="lofi", model_id="jevtypesafe", log=logs.append)
+    program = _program_with("lofi", "dusty_beat")
+    edit = performer.next_edit(program)
+    assert sent["url"] == "https://jevtypesafeai.com/api/v1/decide"
+    assert sent["headers"]["Authorization"] == "Bearer test-key"
+    options = sent["body"]["questions"]["edit"]["criteria"]
+    assert len(options) >= 3 and "The program playing now:" in sent["body"]["state"]
+    assert edit.source == "jevtypesafe" and edit.listening == "the groove needs weight"
+    apply_edit(program, edit)                      # every candidate is legal
+    assert any("jevtypesafe/decide" in line and "←" in line for line in logs)
+
+
+def test_jevtypesafe_without_key_falls_back(monkeypatch):
+    monkeypatch.delenv("YS_JEV_API_KEY", raising=False)
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+    monkeypatch.delenv("YS_JEV_API_STYLE", raising=False)
+    logs = []
+    performer = Performer(random.Random(0), style="lofi", model_id="jevtypesafe", log=logs.append)
+    edit = performer.next_edit(_program_with("lofi", "dusty_beat"))
+    assert edit.source == "built-in"
+    assert any("YS_JEV_API_KEY" in line for line in logs)

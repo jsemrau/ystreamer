@@ -49,7 +49,7 @@ stream/setup_audio.sh --monitor               # create the stream sink and liste
 |---|---|---|
 | `claude` | Claude via the official Anthropic SDK (default `claude-opus-5`) | `ANTHROPIC_API_KEY` in `.env`, or `ant auth login` |
 | `local` (default) | local llama.cpp server (default `qwen-agentworld-35b`) | `LLAMA_SERVER_BIN`, `LLAMA_GGUF_MODEL`; started automatically |
-| `jevtypesafe` | [jevtypesafeai.com](https://jevtypesafeai.com/how-to-use) | `YS_JEV_API_BASE`, `YS_JEV_API_KEY`, `YS_JEV_API_STYLE` (`openai` or `json`) |
+| `jevtypesafe` | [jevtypesafeai.com](https://jevtypesafeai.com/how-to-use) decision API: picks each live edit from a list of legal candidates | `YS_JEV_API_KEY` (live engine only) |
 | `none` | deterministic director, no LLM | nothing |
 
 ```bash
@@ -296,6 +296,13 @@ built-in performer, so you can see that the model is really playing:
 ✎ [built-in] d2: rhythm -> 0 ~ ~ 0 ~ ~ 4 ~   -- new rhythm pattern on the bass   <- model too slow or unusable
 ```
 
+- Every LLM edit explains itself twice: `👂 hears:` is what the model
+  noticed in the program, and the `-- ...` comment is why it made the move.
+  Its own arc decisions appear as `🧭 Arc: groove → breakdown (...)`.
+- The prompt teaches the model Tidal as it plays: a mini-notation cheat
+  sheet, what each wrapper and effect sounds like, example moves for the
+  current phase, and its own last six edits (so it builds on its ideas
+  instead of undoing them).
 - `--show-llm` also prints the full prompt and the raw reply of every call.
 - `runtime/llm_calls.jsonl` keeps the full prompt and reply of every call
   (agent, model, seconds, reply or error), so you can audit a whole session.

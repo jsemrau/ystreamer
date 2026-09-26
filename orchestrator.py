@@ -170,6 +170,11 @@ def _style_and_model(args, role: str) -> str | None:
     if model_id:
         provider, model = llm.resolve(model_id)
         print(f"[orchestrator] {role} LLM: {provider} / {model}")
+        if provider == "jevtypesafe" and not (os.getenv("YS_JEV_API_KEY") or os.getenv("JEV_API_KEY")):
+            print("[orchestrator] WARNING: YS_JEV_API_KEY is not set. Add a line YS_JEV_API_KEY=... "
+                  f"to {os.path.join(config.REPO_DIR, '.env')}; until then the built-in performer plays.")
+        if provider == "jevtypesafe" and role == "Performer" and llm.jev_style() == "decide":
+            print("[orchestrator] jevtypesafe chooses each edit from legal candidates (decision API)")
         if provider == "claude" and not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
             print("[orchestrator] WARNING: ANTHROPIC_API_KEY is not set. Add a line ANTHROPIC_API_KEY=sk-ant-... "
                   f"to {os.path.join(config.REPO_DIR, '.env')}; until then the built-in performer plays.")

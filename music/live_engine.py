@@ -142,9 +142,14 @@ class LiveEngine:
             self.edits += 1
             highlight = edit.role if edit.role in program.lines else None
             tag = f"[{edit.source}] " if edit.source else ""
+            if edit.listening:
+                self.log(f"👂 hears: {edit.listening}")
+                runtime.append_thought(f"👂 hears: {edit.listening}")
             self.log(f"✎ {tag}{edit.describe()}" + (f"   -- {edit.reason}" if edit.reason else ""))
             runtime.append_thought(f"✎ {tag}{edit.describe()}  -- {edit.reason}")
-            runtime.append_history({"edit": edit.describe(), "source": edit.source, "op": edit.op, "role": edit.role,
+            self.performer.applied(edit)
+            runtime.append_history({"edit": edit.describe(), "source": edit.source, "listening": edit.listening,
+                                    "op": edit.op, "role": edit.role,
                                     "name": edit.name, "value": edit.value, "reason": edit.reason,
                                     "program": program.to_dict()})
             self._publish(program, highlight, edit.reason)

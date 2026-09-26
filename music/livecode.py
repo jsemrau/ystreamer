@@ -58,6 +58,52 @@ BASS_WRAPPERS = ["every 3 (0.25 <~)", "every 4 (0.125 ~>)", "degradeBy 0.1", "so
                  "whenmod 8 6 (# lpf 300)"]
 ALL_WRAPPERS = set(MELODIC_WRAPPERS) | set(DRUM_WRAPPERS) | set(BASS_WRAPPERS)
 
+# What each wrapper does to the sound, for the performer's prompt (a model
+# that only sees "off 0.25 (|+ n 12)" has to guess).
+WRAPPER_NOTES = {
+    "every 4 (fast 2)": "every 4th bar plays twice as fast: a fill or roll at the phrase end",
+    "every 3 (0.25 <~)": "every 3rd bar shifts a quarter bar earlier: syncopated, off-balance",
+    "every 4 (0.125 ~>)": "every 4th bar lands an 8th late: lazy, behind the beat",
+    "sometimesBy 0.2 (degradeBy 0.5)": "now and then drops half the notes: the line breathes",
+    "off 0.125 (|+ n 12)": "adds an octave-up echo an 8th later: brighter and busier",
+    "off 0.25 (|+ n 12)": "adds an octave-up echo a quarter later: call and answer",
+    "jux rev": "a reversed copy in the other ear: wide, dreamy, a little blurred",
+    "every 4 rev": "every 4th bar plays backwards: a twist at the phrase end",
+    "degradeBy 0.1": "randomly drops 1 in 10 notes: human, less mechanical",
+    "whenmod 8 6 (# lpf 800)": "last 2 bars of every 8 go muffled: a dip before the next phrase",
+    "every 2 (# room 0.5)": "every other bar gets more reverb: the space pulses",
+    "sometimesBy 0.15 (# speed 2)": "occasional hits an octave up: sparkle",
+    "every 8 (0.25 <~)": "every 8th bar shifts early: a turnaround",
+    "whenmod 8 7 (# crush 6)": "last bar of every 8 is bitcrushed: a gritty fill",
+    "swingBy (1/8) 4": "strong swing: laid-back hip-hop feel",
+    "swingBy (1/12) 4": "light swing: loosens a stiff groove",
+    "every 3 (# lpf 1500)": "every 3rd bar darker: subtle variation",
+    "sometimesBy 0.1 (echo 3 0.125 0.5)": "occasional stuttered echo: a glitchy fill",
+    "whenmod 8 6 (# lpf 300)": "last 2 bars of every 8 the bass goes subby: tension before the turn",
+}
+
+# What each effect and control sounds like.
+FX_NOTES = {
+    "gain": "loudness (1 = normal); change it only to balance, never as the idea",
+    "room": "reverb amount: 0 dry and close, 0.8 huge and distant",
+    "size": "reverb room size: small booth to cathedral",
+    "lpf": "low-pass cutoff in Hz: low (400-1200) dark and muffled, high (5000+) bright and open",
+    "hpf": "high-pass cutoff in Hz: removes low end, thinner and airier",
+    "resonance": "filter peak: 0 smooth, 0.4 squelchy and vocal",
+    "delay": "echo amount: 0 none, 0.5 strong echoes",
+    "delaytime": "echo spacing in seconds",
+    "delayfeedback": "how long the echoes keep repeating",
+    "pan": "stereo position: 0 left, 0.5 centre, 1 right",
+    "legato": "note length: 1 full, 0.3 short and plucked, 1.5 notes overlap",
+    "crush": "bit depth: 16 clean, 4 very gritty and lo-fi",
+    "shape": "distortion/saturation: 0 clean, 0.5 heavily driven",
+    "speed": "sample playback speed: 2 = an octave up and shorter",
+    "acid": "the acid squelch knob: 0.2 closed and muffled, 0.9 screaming open",
+    "acidres": "resonance of the acid filter: higher is more whistling",
+    "gatedepth": "how hard the trance gate chops the chords",
+    "duckdepth": "sidechain pump from the kick: 0 none, 0.8 strong pumping",
+}
+
 # Effects that make sense per role (bass stays dry and dark; textures only
 # get space and tone).
 ROLE_FX = {
@@ -222,6 +268,7 @@ class Edit:
     reason: str = ""
     narration: str = ""
     source: str = ""        # who chose it: "LLM" or "built-in"
+    listening: str = ""     # what the performer heard that led to it (LLM only)
 
     def describe(self) -> str:
         if self.op == "add":
