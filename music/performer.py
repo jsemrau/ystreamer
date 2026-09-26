@@ -33,14 +33,14 @@ from .plan import plan_piece
 # Which roles come in first, per style (after the opener).
 ROLE_ORDER = {
     "lofi": ["beat", "keys", "bass", "lead", "texture", "perc", "acid"],
-    "deephouse": ["beat", "bass", "keys", "perc", "lead", "chords", "texture"],
-    "trance": ["acid", "beat", "bass", "chords", "lead", "texture"],
+    "deephouse": ["beat", "bass", "keys", "perc", "lead", "chords", "arp", "texture"],
+    "trance": ["acid", "beat", "bass", "chords", "lead", "arp", "texture"],
     "ambient": ["chords", "texture", "keys", "lead", "bass", "beat"],
     "piano": ["keys", "lead", "bass", "chords", "texture"],
     "downtempo": ["beat", "keys", "bass", "lead", "texture"],
-    "darkwave": ["bass", "beat", "chords", "lead", "keys", "texture"],
-    "techno": ["beat", "perc", "bass", "acid", "chords", "texture", "lead"],
-    "hardcore": ["beat", "perc", "acid", "lead", "chords", "texture"],
+    "darkwave": ["bass", "beat", "chords", "lead", "arp", "keys", "texture"],
+    "techno": ["beat", "perc", "bass", "acid", "chords", "arp", "texture", "lead"],
+    "hardcore": ["beat", "perc", "acid", "lead", "arp", "chords", "texture"],
 }
 
 PHASES = ("build", "groove", "breakdown", "rebuild", "groove2", "outro")
@@ -166,7 +166,7 @@ class Performer:
 
         degrees = list(PROGRESSIONS_BY_NAME[piece.progression].degrees)
         self.state = SetState(tracks_played=self.state.tracks_played + (1 if previous else 0),
-                              target_lines=self.rng.randint(max(3, self.settings["max_lines"] - 2),
+                              target_lines=self.rng.randint(max(3, self.settings["max_lines"] - 1),
                                                             self.settings["max_lines"]),
                               groove_edits=self.rng.randint(6, 10))
         return Track(title=piece.title, style=self.style, key=piece.key, bpm=piece.bpm,
@@ -248,7 +248,9 @@ class Performer:
                 opener = rng.choice(self.settings["openers"])
                 return self._add(program, opener[0])
             missing = self._missing_roles(program)
-            if missing and (len(active) < 2 or rng.random() < 0.6):
+            # Build up briskly: the track should reach its full, layered
+            # groove within a few edits, not after ten minutes of tweaks.
+            if missing and (len(active) < 3 or rng.random() < 0.85):
                 return self._add(program, missing[0])
             return self._tweak(program)
         if st.phase == "breakdown":
@@ -269,7 +271,7 @@ class Performer:
             return self._tweak(program, calm=True)
         # groove / groove2
         missing = self._missing_roles(program)
-        if missing and len(active) < self.settings["max_lines"] and rng.random() < 0.12:
+        if missing and len(active) < self.settings["max_lines"] and rng.random() < 0.25:
             return self._add(program, missing[0])
         if rng.random() < 0.05:
             delta = rng.choice([-2, -1, 1, 2])
@@ -283,7 +285,9 @@ class Performer:
         for _ in range(12):
             role = rng.choice(roles)
             line = program.lines[role]
-            kind = rng.choice(["pattern", "pattern", "fx", "fx", "pf", "wrap"])
+            # Moves a listener hears (new notes, rhythms, variations) over
+            # small effect nudges.
+            kind = rng.choice(["pattern", "pattern", "pattern", "wrap", "wrap", "fx", "pf"])
             edit = None
             if kind == "pattern" and line.patterns:
                 edit = self._pattern_edit(role, line)
@@ -840,12 +844,15 @@ def _clamp_value(op: str, name: str, value: str, program: Program) -> str:
 
 
 PHASE_HELP = {
-    "build": "Build the track up: add a line (or tweak one) - one idea at a time.",
-    "groove": "The track is up. Revise it: change a pattern or a note, ride a filter or the acid knob, "
-              "add or remove a wrapper. Keep it evolving, don't add everything.",
+    "build": "Build the track up: add the next line almost every edit, until the full groove plays.",
+    "groove": "The track is up: a full, layered groove. Make it move: give a melody a second bar "
+              "(`<[...] [...]>`), turn a line into a 16th-note arp (`\"<0 4 7 9>*16\"`), layer an "
+              "octave (`off 0.125 (|+ n 12)`), ride a filter or the acid knob with a slow sine, "
+              "add a variation wrapper. Keep every line in harmony.",
     "breakdown": "Breakdown: mute the beat and/or bass, and make what's left more spacious.",
     "rebuild": "Bring the muted lines back (unmute), building tension.",
-    "groove2": "Second peak: revise and intensify, then start easing off.",
+    "groove2": "Second peak: the richest part of the track. Bring in what was missing, intensify, "
+               "then start easing off.",
     "outro": "Outro: remove or mute lines one by one; the track is ending.",
 }
 

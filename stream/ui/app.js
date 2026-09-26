@@ -130,6 +130,20 @@ function renderCode() {
   }).join("");
   $("code").innerHTML = html || `<div class="line"><span class="no"></span><span class="src" style="color:var(--muted)">-- an empty room. the first line is on its way…</span></div>`;
   $("comment").textContent = ui.comment ? `-- ${ui.comment}` : "";
+  fitCode();
+}
+
+// A full peak (7+ lines) doesn't fit at the normal size: shrink the code
+// until every line shows.
+function fitCode() {
+  const box = $("code");
+  let size = 20;
+  box.style.fontSize = "";
+  box.querySelectorAll(".line").forEach((el) => { el.style.fontSize = ""; });
+  while (box.scrollHeight > box.clientHeight + 1 && size > 13) {
+    size -= 1;
+    box.querySelectorAll(".line").forEach((el) => { el.style.fontSize = `${size}px`; el.style.paddingTop = el.style.paddingBottom = `${Math.round(size / 4)}px`; });
+  }
 }
 
 // Typewriter for freshly edited lines (runs every frame for ~1.5 s).

@@ -66,7 +66,7 @@ def calibrated_gain(synth: str | None, role: str, chord: bool) -> float | None:
 
 
 # Live density: beds step back when the front is busy; a full mix gives a little.
-FRONT_ROLES = ("lead", "keys", "acid")
+FRONT_ROLES = ("lead", "keys", "acid", "arp")
 BED_ROLES = ("chords", "texture")
 UNDUCKED_ROLES = ("beat", "bass", "perc")
 

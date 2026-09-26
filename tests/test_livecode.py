@@ -670,3 +670,26 @@ def test_only_the_local_model_gets_a_longer_wait(monkeypatch):
     claude = Performer(random.Random(0), style="techno", model_id="claude", log=lambda *_: None)
     assert local._wait_seconds(program) == max(60.0, window)
     assert claude._wait_seconds(program) == pytest.approx(max(4.0, window))
+
+
+@pytest.mark.parametrize("style", ["trance", "techno", "darkwave"])
+def test_club_styles_build_to_a_rich_moving_peak(style):
+    peak = []
+    performer = Performer(random.Random(1), style=style, log=lambda *_: None)
+    original = performer.applied
+
+    def applied(edit):
+        original(edit)
+        roles = engine.program.active_roles()
+        if len(roles) > len(peak):
+            peak[:] = [engine.program.statement(r) for r in roles]
+
+    performer.applied = applied
+    clock = _SimClock()
+    engine = LiveEngine(lambda lines: None, performer, log=lambda *_: None,
+                        now=clock.now, sleep=clock.sleep, max_tracks=1)
+    engine.run()
+    code = "\n".join(peak)
+    assert len(peak) >= 6
+    assert "*16" in code                          # a 16th-note acid or arp
+    assert "sine" in code                         # something sweeps
