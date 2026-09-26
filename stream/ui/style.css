@@ -197,6 +197,8 @@ body.banner #banner {
              text-shadow: 0 0 60px color-mix(in srgb, var(--accent) 55%, transparent); }
 #banner p { margin: 0; font-size: 38px; color: var(--accent); font-weight: 500; text-shadow: 0 2px 16px rgba(0,0,0,0.9); }
 
+body.logo #banner { display: none; }
+
 /* --------------------------------------------------- poster (thumbnail) */
 #poster { display: none; }
 body.poster #stage { display: none; }

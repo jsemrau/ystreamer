@@ -717,3 +717,23 @@ def test_line_complexity_counts_layers_variation_motion_and_density():
     rich = LineSpec(role="lead", body=plain.body, patterns={"melody": "<[0 ~ 2 ~] [4 ~ 2 ~]>*16"},
                     fx=[["lpf", "(slow 8 $ range 1500 5000 sine)"]], wrappers=["jux rev", "every 4 (|+ n 12)"])
     assert line_complexity(rich) == 1.0 + 1.0 + 0.5 + 0.5 + 0.5
+
+
+def test_the_build_gives_a_slow_model_enough_bars_to_make_the_moves(monkeypatch):
+    monkeypatch.setattr(config, "BUILD_BARS", 4)
+    performer = Performer(random.Random(0), style="trance", model_id="claude", judge="jevtypesafe",
+                          log=lambda *_: None)
+    performer.state.phase = "build"
+    performer._bar_seconds = 240 / 136                   # one bar at 136 BPM, ~1.76 s
+    assert performer.edit_bars_now() == 4                # nothing measured yet: the quick pace
+    performer._note_latency(8.0, late=False, answered=True)
+    assert performer.edit_bars_now() == 8                # 8 s with a judge needs ~14 s: 8 bars
+    performer._note_latency(2.0, late=False, answered=True)
+    assert 4 <= performer.edit_bars_now() < 8            # it got faster: the build speeds up again
+    performer._note_latency(6.0, late=True, answered=False)
+    assert performer.latency >= 9.0                      # late: assume longer than the time it had
+    performer.state.phase = "groove"
+    assert performer.edit_bars_now() == STYLE_SETTINGS["trance"]["edit_bars"]
+    fast = Performer(random.Random(0), style="trance", log=lambda *_: None)    # built-in only
+    fast.state.phase, fast._bar_seconds, fast.latency = "build", 1.76, 30.0
+    assert fast.edit_bars_now() == 4

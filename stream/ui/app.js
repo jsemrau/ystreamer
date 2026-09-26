@@ -45,9 +45,10 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 
 const POSTER = new URLSearchParams(location.search).get("poster");
 const BANNER = new URLSearchParams(location.search).get("banner");
+const LOGO = new URLSearchParams(location.search).get("logo");
 function fit() {
-  if (POSTER || BANNER) {           // thumbnail 1280x720, channel banner 2048x1152, exactly
-    const [w, h] = BANNER ? [2048, 1152] : [1280, 720];
+  if (POSTER || BANNER || LOGO) {   // thumbnail 1280x720, banner 2048x1152, logo 800x800, exactly
+    const [w, h] = LOGO ? [800, 800] : BANNER ? [2048, 1152] : [1280, 720];
     const c = $("bg");
     c.style.width = `${w}px`; c.style.height = `${h}px`; c.width = w; c.height = h;
     return;
@@ -235,7 +236,10 @@ function renderFooter() {
   if (ui.models && ui.models.performer) chips.push(`<span class="chip">performer <b>${esc(ui.models.performer)}</b></span>`);
   if (ui.models && ui.models.judge) chips.push(`<span class="chip">judge <b>${esc(ui.models.judge)}</b></span>`);
   if (s.edits) chips.push(`<span class="chip">AI edits <b>${s.llm}/${s.edits}</b></span>`);
-  if (s.judged) chips.push(`<span class="chip">judge prefers AI <b>${Math.round(100 * s.judge_llm / s.judged)}%</b></span>`);
+  // A percentage of one or two comparisons says nothing: show the count
+  // until there are a few, then both.
+  if (s.judged) chips.push(`<span class="chip">judge prefers AI <b>${s.judge_llm}/${s.judged}` +
+                           (s.judged >= 5 ? ` · ${Math.round(100 * s.judge_llm / s.judged)}%` : "") + `</b></span>`);
   $("stats").innerHTML = chips.join("");
 }
 
@@ -363,8 +367,49 @@ function drawWaves(g, W, H, st, beat, bar, kick, t) {
   }
 }
 
+// The channel logo (?logo=1, 800x800, shown by YouTube as a small circle):
+// a crescent moon rising over a few bold sound waves. Few, thick shapes, so
+// it still reads at 36-98 px.
+function drawLogo(g, W, st) {
+  const bg = g.createRadialGradient(W / 2, W * 0.42, 0, W / 2, W / 2, W * 0.72);
+  bg.addColorStop(0, "#1b1440"); bg.addColorStop(1, st.base[0]);
+  g.fillStyle = bg; g.fillRect(0, 0, W, W);
+  // Moon: a disc with an offset disc cut out, drawn apart and then placed.
+  const m = document.createElement("canvas"); m.width = m.height = W;
+  const mg = m.getContext("2d"), cx = W * 0.5, cy = W * 0.34, r = W * 0.17;
+  const moon = mg.createLinearGradient(cx - r, cy - r, cx + r, cy + r);
+  moon.addColorStop(0, "#ffffff"); moon.addColorStop(1, st.accent);
+  mg.fillStyle = moon; mg.beginPath(); mg.arc(cx, cy, r, 0, Math.PI * 2); mg.fill();
+  mg.globalCompositeOperation = "destination-out";
+  mg.beginPath(); mg.arc(cx + r * 0.52, cy - r * 0.3, r * 0.86, 0, Math.PI * 2); mg.fill();
+  g.save(); g.shadowColor = st.accent; g.shadowBlur = W * 0.06; g.drawImage(m, 0, 0); g.restore();
+  // Waves: five bold lines in perspective, nearer ones lower, wider and brighter.
+  for (let k = 0; k < 5; k++) {
+    const y0 = W * (0.56 + k * 0.075 + k * k * 0.006), amp = W * (0.018 + k * 0.012);
+    const freq = 2.2 - k * 0.18, phase = k * 0.9;
+    g.beginPath();
+    for (let x = -10; x <= W + 10; x += 4) {
+      const u = x / W;
+      const y = y0 - amp * Math.sin(u * Math.PI * 2 * freq + phase) * Math.sin(Math.PI * u);
+      x === -10 ? g.moveTo(x, y) : g.lineTo(x, y);
+    }
+    const line = g.createLinearGradient(0, 0, W, 0);
+    line.addColorStop(0, st.accent2); line.addColorStop(0.5, st.accent); line.addColorStop(1, st.accent2);
+    g.strokeStyle = line; g.lineCap = "round";
+    g.lineWidth = W * (0.012 + k * 0.006);
+    g.globalAlpha = 0.55 + k * 0.1;
+    g.shadowColor = st.accent; g.shadowBlur = W * 0.03;
+    g.stroke();
+  }
+  g.globalAlpha = 1; g.shadowBlur = 0;
+}
+
 function draw() {
   const c = $("bg"), g = c.getContext("2d"), W = c.width, H = c.height;
+  if (LOGO) {
+    drawLogo(g, W, STYLES[params.get("style") || (ui && ui.track && ui.track.style) || "trance"] || STYLES.trance);
+    return;                         // a still image: draw once
+  }
   const style = (ui && ui.track && ui.track.style) || params.get("style") || "trance";
   const st = STYLES[style] || STYLES.techno;
   intensity += (targetIntensity - intensity) * 0.02;
@@ -393,6 +438,8 @@ const params = new URLSearchParams(location.search);
 if (params.get("poster")) document.body.classList.add("poster");
 // ?banner=1: YouTube channel art, 2048x1152 (stream/thumbnail.py --banner).
 if (params.get("banner")) document.body.classList.add("poster", "banner");
+// ?logo=1: the channel logo, 800x800 (stream/thumbnail.py --logo).
+if (params.get("logo")) document.body.classList.add("poster", "banner", "logo");
 
 function renderPoster() {
   const t = (ui && ui.track) || {};
