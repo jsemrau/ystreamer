@@ -312,8 +312,7 @@ def _default_sections(piece: Piece, target_minutes: float) -> list[Section]:
 
 
 def arrange(piece: Piece, section: Section, rng: random.Random, max_layers: int = 6) -> Arrangement:
-    """Energy decides how many layers play; the style decides which presets."""
-    cfg = STYLES[piece.style]
+    """Energy decides how many layers play; the piece's instruments decide which presets."""
     energy = section.energy
     order = piece.energy_order()
     count = 1 + int(round(energy * (len(order) - 1)))
