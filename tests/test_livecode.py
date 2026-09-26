@@ -566,3 +566,19 @@ def test_director_tempo_follows_the_locked_style():
     assert piece.style == "darkwave"
     assert 110 <= piece.bpm <= 128
     assert piece.title == "Paper Lanterns"
+
+
+def test_gain_edits_stay_near_the_lines_level():
+    program = _program_with("piano", "strings")
+    line = program.lines["chords"]
+    base = float(line.base_gain)
+    ok = apply_edit(program, Edit("set_fx", role="chords", name="gain", value=f"{base * 1.05:.3f}"))
+    assert ok.lines["chords"].fx
+    with pytest.raises(EditError):
+        apply_edit(program, Edit("set_fx", role="chords", name="gain", value="1.0"))   # +13 dB
+    with pytest.raises(EditError):
+        apply_edit(program, Edit("remove_fx", role="chords", name="gain"))
+    performer = Performer(random.Random(0), style="piano", log=lambda *_: None)
+    edit = performer._edit_from_json({"op": "set_fx", "role": "chords", "name": "gain", "value": "1.0"}, program)
+    apply_edit(program, edit)                                                     # clamped, playable
+    assert float(edit.value) <= base * 1.09 + 1e-3

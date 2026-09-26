@@ -11,10 +11,8 @@ from music.templates import HarmonyContext, render_layer
 from music.theory import PROGRESSIONS_BY_NAME, Key, progression_chords
 
 # Single-voice loudness of each synth, measured by rendering the SynthDefs
-# offline with scsynth (LUFS). Update these if tidal/synthdefs.scd changes.
-MEASURED_LUFS = {"ys_pad": -22.9, "ys_strings": -22.6, "ys_organ": -21.1, "ys_choir": -21.9,
-                 "ys_air": -29.9, "ys_epiano": -21.9, "ys_keys": -22.2, "ys_sub": -17.1,
-                 "ys_glass": -21.7, "ys_pluck": -25.8}
+# offline with scsynth (LUFS): one table, in music/mix.py (eval/synth_levels.sh).
+from music.mix import SYNTH_LUFS as MEASURED_LUFS  # noqa: E402
 
 
 def in_mix(preset):
@@ -88,3 +86,68 @@ def test_llm_can_choose_instruments_and_opening():
     assert piece.instruments["pad"] == "choir_pad"
     assert piece.opening == ["melody", "texture"]
     assert any("keys" in n for n in notes)
+
+
+# --------------------------------------------------------------- live mix
+
+def test_live_blocks_enter_at_their_roles_level():
+    from music import mix
+    from music.blocks import BLOCKS
+
+    for style, blocks in BLOCKS.items():
+        for block in blocks:
+            if "struct" in block.body:
+                continue
+            for seed in range(3):
+                line = block.make(random.Random(seed))
+                synth = mix.synth_of(block.body.replace('"{synth}"', f'"{line.patterns.get("synth", "")}"'))
+                gain = float(dict(line.fx).get("gain", 1))
+                level = mix.level_db(synth, "{chords}" in block.body, gain) if synth else None
+                target = mix.ROLE_TARGET_LUFS.get(block.role)
+                if level is None or target is None or synth in mix.UNCALIBRATED or gain >= 1.2:
+                    continue
+                assert abs(level - target) < 0.5, (style, block.name, synth, level, target)
+
+
+def test_beds_make_room_when_the_front_is_busy():
+    from music.blocks import find_block
+    from music.livecode import Edit, Program, Track, apply_edit, changed_statements
+
+    program = Program(Track("t", "piano", "C major", 70, [0, 5, 3, 4], 2))
+    for name in ("strings", "piano_chords"):
+        b = find_block("piano", name)
+        program = apply_edit(program, Edit("add", role=b.role, line=b.make(random.Random(0))))
+    assert "|* gain" not in program.statement("chords")
+    lead = find_block("piano", "piano_melody")
+    fuller = apply_edit(program, Edit("add", role="lead", line=lead.make(random.Random(0))))
+    assert fuller.statement("chords").endswith("|* gain 0.93")
+    # adding the lead re-sends the strings at their new level
+    assert fuller.statement("chords") in changed_statements(program, fuller)
+
+
+def test_lines_fade_in_and_out():
+    from music.live_engine import LiveEngine
+    from music.performer import Performer
+
+    class Clock:
+        t = 0.0
+
+        def now(self):
+            return self.t
+
+        def sleep(self, s):
+            self.t += s
+
+    sent = []
+    clock = Clock()
+    engine = LiveEngine(lambda lines: sent.extend(lines), Performer(random.Random(3), style="lofi",
+                                                                    log=lambda *_: None),
+                        log=lambda *_: None, now=clock.now, sleep=clock.sleep, max_tracks=1)
+    engine.run()
+    fades_in = [s for s in sent if s.startswith("xfadeIn") and not s.endswith("silence")]
+    fades_out = [s for s in sent if s.startswith("xfadeIn") and s.endswith("silence")]
+    assert fades_in and fades_out
+    assert all(re.match(r"xfadeIn (\d) 4 \$ \(.*\) \|< orbit (\d)$", s) for s in fades_in)
+    for s in fades_in:
+        ch, orbit = re.match(r"xfadeIn (\d) .* orbit (\d)$", s).groups()
+        assert int(orbit) == int(ch) - 1
