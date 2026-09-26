@@ -200,6 +200,16 @@ def render_bass(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custom
         idx = i // ctx.cycles_per_chord
         chord = ctx.chords[idx]
         root = bass_note(chord, low, high)
+        if preset.name == "rolling_bass":
+            # Rolling 16ths that leave room for the kick on every beat.
+            r, o = str(root), str(root + 12)
+            beat = (["~", "~", r, "~"] if intensity == 0 else
+                    ["~", r, r, r])
+            cell = beat * 4
+            if intensity == 2:
+                cell[15] = o  # octave pop at the end of the bar
+            cycles.append("[" + " ".join(cell) + "]")
+            continue
         fifth = root + 7 if root + 7 <= high + 5 else root - 5
         last_of_chord = (i % ctx.cycles_per_chord) == ctx.cycles_per_chord - 1
         next_root = bass_note(ctx.chords[(idx + 1) % n_chords], low, high)
@@ -257,10 +267,41 @@ def render_melody(ctx: HarmonyContext, preset: P.Preset, energy: float, use_cust
             f'{_fx(preset, energy)} # pan 0.58')
 
 
+# Trance gate (1 = open, 0 = closed) per 8 sixteenths, by intensity; the
+# middle one is the classic 1 0 1 1 0 1 0 1.
+_TRANCE_GATES = ["10010010", "10110101", "10111011"]
+# Order in which the arp walks the chord tones (after Switch Angel's
+# 57 60 64 67 64 60 69 64): up, back down, reach for the top, return.
+_TRANCE_WALK = [0, 1, 2, 3, 2, 1, 4, 2]
+
+
+def _render_trance_gate(ctx: HarmonyContext, preset: P.Preset, energy: float, synth: str) -> str:
+    low, high = preset.register
+    gate = _TRANCE_GATES[_intensity(energy)]
+    cycles = []
+    for i in range(ctx.period):
+        voicing = ctx.pad_voicings[i // ctx.cycles_per_chord]
+        tones = sorted({n for n in voicing} | {n + 12 for n in voicing})
+        tones = [n for n in tones if low <= n <= high] or sorted(voicing)
+        steps = []
+        for step in range(16):
+            if gate[step % 8] == "1":
+                steps.append(str(tones[_TRANCE_WALK[step % 8] % len(tones)]))
+            else:
+                steps.append("~")
+        cycles.append("[" + " ".join(steps) + "]")
+    # A sidechain-style pump: each beat's first 16th ducks under the kick.
+    return (f'(note "<{" ".join(cycles)}>" # s "{synth}" # legato {_fmt(preset.legato)} '
+            f'{_fx(preset, energy, ctx=ctx, move=True)} # pan (slow 8 $ range 0.35 0.65 sine)) '
+            f'|* gain "[0.82 1 0.94 1]*4"')
+
+
 def render_arp(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custom: bool) -> str | None:
     synth = _synth(preset, use_custom)
     if not synth:
         return None
+    if preset.name == "trance_gate":
+        return _render_trance_gate(ctx, preset, energy, synth)
     rng = random.Random(ctx.seed * 17 + 3)
     style = rng.choice(["up", "updown", "down"])
     low, high = preset.register
@@ -292,16 +333,27 @@ def render_drums(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custo
     if not kit:
         return None
     loose = preset.name in P.LOOSE_KITS
-    expr = _drum_stack(kit[_intensity(energy)], energy, loose)
+
+    def voices(items):
+        if use_custom:
+            return items
+        out = []
+        for sample, pattern, gain in items:
+            for synth, fallback in P.DRUM_SYNTH_FALLBACK.items():
+                pattern = pattern.replace(synth, fallback)
+            out.append((P.DRUM_SYNTH_FALLBACK.get(sample, sample), pattern, gain))
+        return out
+
+    expr = _drum_stack(voices(kit[_intensity(energy)]), energy, loose)
 
     if ctx.fills and ctx.bars >= PHRASE:
         variation = P.DRUM_VARIATIONS.get(preset.name)
         if variation:
-            expr = section_relative(ctx, 4, f"whenmod 4 3 (overlay ({_drum_stack(variation, energy, loose)}))",
+            expr = section_relative(ctx, 4, f"whenmod 4 3 (overlay ({_drum_stack(voices(variation), energy, loose)}))",
                                     f"({expr})")
         fill = P.DRUM_FILLS.get(preset.name)
         if fill:
-            expr = section_relative(ctx, PHRASE, f"whenmod {PHRASE} {PHRASE - 1} (const ({_drum_stack(fill, energy, loose)}))",
+            expr = section_relative(ctx, PHRASE, f"whenmod {PHRASE} {PHRASE - 1} (const ({_drum_stack(voices(fill), energy, loose)}))",
                                     f"({expr})")
 
     if ctx.is_build:

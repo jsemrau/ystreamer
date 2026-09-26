@@ -144,4 +144,37 @@ SynthDef(\ys_choir, { |out, sustain = 4, pan, freq = 440, speed = 1|
     sig = sig * 1.9;
     OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
 }).add;
+
+// --- Trance (after Switch Angel's SuperCollider trance) --------------------
+
+// Supersaw: 7 detuned saws with random phases, plus a sub. Filtering (lpf,
+// resonance) comes from SuperDirt so Tidal can sweep it and gate it.
+SynthDef(\ys_supersaw, { |out, sustain = 1, pan, freq = 440, speed = 1|
+    var f = freq * speed;
+    var len = sustain.max(0.05);
+    var env = EnvGen.ar(Env([0, 1, 0.8, 0], [0.005, len * 0.85, 0.08 + (len * 0.15)], [0, -1, -3]), doneAction: 2);
+    var detune = [0.98, 0.99, 0.995, 1.0, 1.005, 1.01, 1.02];
+    var sig = Mix(LFSaw.ar(f * detune, { Rand(0, 2) } ! 7)) / 7;
+    sig = sig + (SinOsc.ar(f * 0.5) * 0.12);
+    sig = HPF.ar(sig, 70) * 0.5;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
+// Trance kick: fast downward pitch sweep (800 -> 130 -> 50 Hz) with a little clipping.
+SynthDef(\ys_kick, { |out, pan, sustain = 0.3|
+    var env = EnvGen.ar(Env.perc(0.001, 0.28, 1, -4), doneAction: 2);
+    var pitch = EnvGen.ar(Env([800, 130, 50], [0.005, 0.05], \exp));
+    var sig = (SinOsc.ar(pitch) * 1.2).clip2(0.8) * 0.9;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
+// Rolling trance bass: saw + square an octave down, a plucky filter envelope, and a sine body.
+SynthDef(\ys_tbass, { |out, sustain = 0.2, pan, freq = 55, speed = 1|
+    var f = freq * speed;
+    var env = EnvGen.ar(Env.perc(0.003, sustain.max(0.08) * 1.2, 1, -4), doneAction: 2);
+    var cut = EnvGen.ar(Env.perc(0.001, 0.12)).linlin(0, 1, f * 2, f * 8).clip(60, 5000);
+    var sig = RLPF.ar(Saw.ar(f) + Pulse.ar(f * 0.5, 0.5, 0.5), cut, 0.4) + SinOsc.ar(f, 0, 0.4);
+    sig = (sig * 1.5).tanh * 0.8;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
 )

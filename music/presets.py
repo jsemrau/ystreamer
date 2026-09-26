@@ -79,6 +79,10 @@ PRESETS: dict[str, dict[str, Preset]] = {
                         {"hpf": 180, "lpf": 3200, "room": 0.6, "size": 0.9},
                         legato=1.05, register=(-8, 14), description="airy 'aah' choir",
                         fallback_synth="superpiano"),
+        "saw_pad": _p("saw_pad", "pad", "ys_supersaw", 0.79,
+                      {"hpf": 200, "lpf": 2400, "resonance": 0.1, "room": 0.55, "size": 0.9},
+                      legato=1.02, register=(-8, 14), description="wide supersaw chords (trance)",
+                      fallback_synth="superpiano"),
         "piano_pad": _p("piano_pad", "pad", "superpiano", 0.78,
                         {"hpf": 120, "lpf": 2600, "room": 0.5, "size": 0.9},
                         legato=1.0, register=(-8, 10), description="soft sustained piano chords"),
@@ -113,6 +117,9 @@ PRESETS: dict[str, dict[str, Preset]] = {
         "deep_bass": _p("deep_bass", "bass", "ys_sub", 0.96, {"lpf": 420},
                         legato=0.75, register=(-24, -13), description="syncopated deep-house sub bass",
                         fallback_synth="superfm"),
+        "rolling_bass": _p("rolling_bass", "bass", "ys_tbass", 1.07, {"lpf": 1200},
+                           legato=0.5, register=(-24, -13), description="rolling 16th trance bass",
+                           fallback_synth="superfm"),
         "pluck_bass": _p("pluck_bass", "bass", "ys_pluck", 1.1, {"lpf": 900, "hpf": 35},
                          legato=0.8, register=(-24, -13), description="warm plucked bass",
                          fallback_synth="supermandolin"),
@@ -133,6 +140,11 @@ PRESETS: dict[str, dict[str, Preset]] = {
                            "delay": 0.2, "delaytime": 0.25, "delayfeedback": 0.25},
                           legato=1.0, register=(0, 17), description="electric piano lead",
                           fallback_synth="superfm"),
+        "saw_lead": _p("saw_lead", "melody", "ys_supersaw", 1.1,
+                       {"hpf": 300, "lpf": 4500, "resonance": 0.15, "room": 0.4, "size": 0.8,
+                        "delay": 0.3, "delaytime": 0.326, "delayfeedback": 0.35},
+                       legato=1.0, register=(0, 19), description="soaring supersaw lead (trance)",
+                       fallback_synth="superpiano"),
         "mandolin": _p("mandolin", "melody", "supermandolin", 0.8,
                        {"hpf": 250, "room": 0.35, "size": 0.7},
                        legato=1.0, register=(0, 17), description="gentle mandolin"),
@@ -143,6 +155,11 @@ PRESETS: dict[str, dict[str, Preset]] = {
                          "delay": 0.3, "delaytime": 0.375, "delayfeedback": 0.4},
                         legato=1.0, register=(-2, 19), description="plucked arpeggio",
                         fallback_synth="supermandolin"),
+        "trance_gate": _p("trance_gate", "arp", "ys_supersaw", 1.13,
+                          {"hpf": 250, "lpf": 3200, "resonance": 0.3, "room": 0.3, "size": 0.7,
+                           "delay": 0.25, "delaytime": 0.326, "delayfeedback": 0.35},
+                          legato=0.8, register=(-5, 19), description="16th supersaw arp through a trance gate",
+                          fallback_synth="supersaw"),
         "glass_arp": _p("glass_arp", "arp", "ys_glass", 0.94,
                         {"hpf": 350, "room": 0.5, "size": 0.85,
                          "delay": 0.35, "delaytime": 0.25, "delayfeedback": 0.35},
@@ -158,6 +175,8 @@ PRESETS: dict[str, dict[str, Preset]] = {
                             description="round downtempo groove"),
         "house_kit": _p("house_kit", "drums", "", 0.92, {"lpf": 9000, "room": 0.1, "size": 0.3},
                         description="four-on-the-floor deep house groove"),
+        "trance_kit": _p("trance_kit", "drums", "", 0.95, {"room": 0.1, "size": 0.3},
+                         description="pumping trance kick, off-beat open hats, claps"),
     },
     "texture": {
         "vinyl": _p("vinyl", "texture", "ys_vinyl", 1.1, {"hpf": 300},
@@ -190,6 +209,12 @@ DRUM_PATTERNS: dict[str, list[list[tuple[str, str, float]]]] = {
         [("bd", "bd ~ ~ ~", 0.88), ("hh", "~ hh ~ hh", 0.62)],
         [("bd", "bd ~ [~ bd] ~", 0.9), ("hh", "hh*4", 0.62), ("cp", "~ ~ cp ~", 0.7)],
     ],
+    "trance_kit": [
+        [("ys_kick", "ys_kick*4", 1.05), ("808oh", "[~ 808oh]*4", 0.66)],
+        [("ys_kick", "ys_kick*4", 1.05), ("808oh", "[~ 808oh]*4", 0.68), ("cp", "~ cp ~ cp", 0.78)],
+        [("ys_kick", "ys_kick*4", 1.08), ("808oh", "[~ 808oh]*4", 0.7), ("cp", "~ cp ~ cp", 0.8),
+         ("hh", "hh*16", 0.52)],
+    ],
     "downtempo_kit": [
         [("808bd", "808bd ~ ~ ~ ~ ~ ~ ~", 0.95), ("808hc", "~ 808hc ~ 808hc ~ 808hc ~ 808hc", 0.66)],
         [("808bd", "808bd ~ ~ 808bd ~ ~ ~ ~", 0.95), ("808sd", "~ ~ 808sd ~", 0.78),
@@ -208,6 +233,8 @@ DRUM_PATTERNS: dict[str, list[list[tuple[str, str, float]]]] = {
 
 # Played on the last bar of every 8-bar phrase (replaces the groove).
 DRUM_FILLS: dict[str, list[tuple[str, str, float]]] = {
+    "trance_kit": [("ys_kick", "ys_kick*4", 1.05), ("808oh", "[~ 808oh]*4", 0.66),
+                   ("sn:1", "~ ~ ~ [sn:1 sn:1 sn:1 sn:1]", 0.72)],
     "lofi_kit": [("bd", "bd ~ ~ ~ ~ ~ ~ ~ bd ~ ~ ~ ~ ~ ~ ~", 0.95),
                  ("sn", "~ ~ ~ ~ sn ~ ~ ~ ~ ~ sn ~ [sn sn] ~ sn sn", 0.78), ("hh27", "hh27*8", 0.66)],
     "soft_pulse": [("bd", "bd ~ ~ ~", 0.85), ("hh", "~ hh [hh hh] hh", 0.6)],
@@ -219,6 +246,7 @@ DRUM_FILLS: dict[str, list[tuple[str, str, float]]] = {
 
 # Added on the 4th bar of every 4 (a small turnaround, not a full fill).
 DRUM_VARIATIONS: dict[str, list[tuple[str, str, float]]] = {
+    "trance_kit": [("cp", "~ ~ ~ [~ cp]", 0.6)],
     "lofi_kit": [("hh27:3", "~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ hh27:3", 0.62)],
     "soft_pulse": [("hh", "~ ~ ~ [~ hh]", 0.55)],
     "downtempo_kit": [("808oh", "~ ~ ~ ~ ~ ~ ~ 808oh", 0.55)],
@@ -226,7 +254,12 @@ DRUM_VARIATIONS: dict[str, list[tuple[str, str, float]]] = {
 }
 
 # Snare/clap used for the roll at the end of a build.
-DRUM_ROLL_SAMPLE = {"lofi_kit": "sn", "soft_pulse": "hh", "downtempo_kit": "808sd", "house_kit": "cp"}
+DRUM_ROLL_SAMPLE = {"lofi_kit": "sn", "soft_pulse": "hh", "downtempo_kit": "808sd", "house_kit": "cp",
+                    "trance_kit": "sn:1"}
+
+# Drum voices that are ystreamer synths, with a sample to use when the custom
+# SynthDefs aren't loaded.
+DRUM_SYNTH_FALLBACK = {"ys_kick": "bd"}
 
 # Kits that get small random timing offsets (a laid-back, human feel).
 LOOSE_KITS = {"lofi_kit", "downtempo_kit"}

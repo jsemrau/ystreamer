@@ -57,11 +57,17 @@ There are two options, and you can combine them.
 ./venv/bin/python orchestrator.py --style lofi
 ```
 
-The choices are `lofi`, `ambient`, `downtempo`, `piano` and `deephouse`.
+The choices are `lofi`, `ambient`, `downtempo`, `piano`, `deephouse` and `trance`.
 Each sets a tempo range, the modes it uses (e.g. minor or dorian for lofi),
 the default instruments and which layers come in first. `deephouse` is
 118-124 BPM with a four-on-the-floor kick, off-beat hats, short chord stabs
 and a syncopated sub bass, and it opens with the groove rather than a pad.
+`trance`, after Switch Angel's live-coded SuperCollider trance, is
+134-140 BPM with a pitch-swept synth kick, off-beat open hats, a rolling
+16th bass between the kicks, and a supersaw arpeggio through the classic
+trance gate (`1 0 1 1 0 1 0 1`) with a sidechain-style pump and filter
+sweeps. Pieces go groove → breakdown (supersaw pad and lead) → build (roll,
+filter rise, kick drop) → drop, twice.
 With `--style`, every piece stays in that style, including the LLM's
 choices. Without it, the style rotates between the chill styles (deep house
 only plays when asked for).
@@ -80,6 +86,7 @@ used for the whole run, even with the built-in planner:
 
 | Theme words | Style |
 |---|---|
+| trance, switch angel, uplifting, psytrance, supersaw | `trance` |
 | deep house, house, garage, club, dance | `deephouse` |
 | lofi, lo-fi, hip hop, study, beats | `lofi` |
 | ambient, sleep, drone, meditation, space | `ambient` |
