@@ -6,11 +6,16 @@
 > language model performs a live-coded [TidalCycles](https://tidalcycles.org)
 > set that streams without end. The model does not generate a song. It
 > *performs* one: it grows a short program line by line and keeps revising
-> it, one small, audible edit every few bars, and states a reason for each
-> edit. Every move is guaranteed to be legal and musically safe, so the
-> only thing left to the model is judgement: what to change, when, and why.
-> That makes each performance a controlled experiment in machine
-> creativity, scored against a random baseline performer. The reference
+> it, one small, audible edit every few bars, and explains each edit:
+> what it heard and why it made the move. Every move is guaranteed to be
+> legal and musically safe, and every line is mixed in at a measured
+> level, so the only thing left to the model is judgement: what to
+> change, when, and why. Four agents share the work (a Director plans each
+> track, a Performer live-codes it, a Narrator speaks at its turning
+> points, and optionally a Judge chooses blind between the Performer's
+> ideas and random ones), and every exchange between them is visible.
+> That makes each performance a controlled, explainable experiment in
+> machine creativity, scored against a random baseline performer. The reference
 > implementation is [`jsemrau/ystreamer`](https://github.com/jsemrau/ystreamer),
 > which streams 24/7 on YouTube as **@sleeplesscomposer**.
 
@@ -64,7 +69,7 @@ The architecture below separates the two questions.
 
 ## 2. Design principles
 
-Five principles shape every component.
+Six principles shape every component.
 
 **P1. Separate the space of legal moves from the choice among them.**
 The system, not the model, guarantees that a move is syntactically valid,
@@ -90,11 +95,21 @@ design, gain staging, timing, syntax and streaming are solved once, by
 hand, and kept out of the model's reach. The model gets the part that
 can't be solved once and for all: what to play next.
 
+**P6. Every decision explains itself.** Understanding *why* each agent
+decided is as important as the music. Every LLM exchange is shown as it
+happens (who asked which model what, and what came back), every edit is
+tagged with who chose it, the model states what it hears before it
+states its move, and the system's own structural decisions (the track's
+arc) are logged with their reasons.
+
 ---
 
 ## 3. Architecture overview
 
 ```
+   ┌──────────────┐  plans each track (key, tempo, progression, mood, title, intro line)
+   │   Director   │──────────────────────────────────────────────┐
+   └──────────────┘                                              ▼
                       ┌─────────────────────────────────────────────┐
                       │                 Performer                    │
                       │                                              │
@@ -104,11 +119,18 @@ can't be solved once and for all: what to play next.
                       │                     moves)          │        │
                       │                                     ▼        │
                       │              built-in performer ◀─ JSON edit │
-                      │              (fallback)          {op, role,  │
-                      │                                  value,      │
-                      └──────────────────────┬───────────  reason}   │
+                      │              (fallback)       {listening,    │
+                      │                                reason, op,   │
+                      └──────────────────────┬──────── role, value}  │
                                              │  Edit       ──────────┘
+                     optional:  LLM proposes 3 ─┐
+                                built-in adds 3 ─┼─▶ Judge (jevtypesafe) picks one, blind
                                              ▼
+┌──────────────┐    ┌─────────────────────────────────────┐
+│    Mixer     │───▶│  measured levels, fades, room for    │
+│ (music/mix)  │    │  the front, gain window              │
+└──────────────┘    └──────────────────┬──────────────────┘
+                                       ▼
 ┌──────────────┐    ┌─────────────────────────────────────┐
 │ Block library│───▶│        Program model + validator     │
 │ (per style)  │    │  LineSpec per role, apply_edit():    │
@@ -123,32 +145,41 @@ can't be solved once and for all: what to play next.
                     └──────────────────┬──────────────────┘            │ audio
                                        │                               ▼
                                on-screen code (▶ edited line,     ffmpeg → RTMP
-                               -- reason) + spoken narration      (YouTube live)
+                               -- reason) + Narrator at the       (YouTube live)
+                               arc's turning points
 ```
 
-The system has six layers:
+The system has seven layers:
 
 | Layer | Module(s) | Responsibility |
 |---|---|---|
 | Program model | `music/livecode.py` | The live program as data; rendering to Tidal; the edit language and its validator |
-| Block library | `music/blocks.py`, `tidal/synthdefs.scd` | Curated, level-matched instruments and starting lines per style |
-| Performer | `music/performer.py`, `prompts/performer.md` | Phase machine, LLM prompt and parsing, built-in fallback performer |
+| Block library | `music/blocks.py`, `tidal/synthdefs.scd` | Curated instruments and starting lines per style (nine styles) |
+| Mixer | `music/mix.py` | Levels calibrated from measured loudness, fades, density ducking, the gain window |
+| Agents | `music/performer.py`, `music/director.py`, `music/live_engine.py`, `prompts/` | Director, Performer (phase machine, prompt, schema, built-in fallback), Judge, Narrator |
 | Live engine | `music/live_engine.py`, `music/engine.py` (`Clock`) | Timing, applying edits on the bar, sending changed lines, publishing state |
-| LLM gateway | `music/llm.py`, `audio_stack.py` | Provider routing, local server lifecycle, timeouts, JSON extraction |
+| LLM gateway | `music/llm.py`, `audio_stack.py` | Provider routing (local, Claude, jevtypesafe), schema-constrained decoding, local server lifecycle, timeouts, logging every exchange |
 | Audio and stream | `audio_stack.py`, `tidal/`, `stream/`, `music/narrator.py` | GHCi session, SuperCollider boot, master bus, TTS narration, ffmpeg, watchdog |
 
-**One edit cycle** looks like this. While bars *n* to *n+3* play, a
-worker thread builds a prompt from the current program and asks the
-model for its next move. At the start of bar *n+4* the engine collects
-the reply, validates it, and on success sends only the changed Tidal
-statements. It then updates the on-screen code, logs the edit and the
-reason, saves state, and possibly speaks a line of narration. If the
-reply is late, invalid or missing, the built-in performer's edit is used
-instead. The loop then starts over.
+**One edit cycle** looks like this. While the current bars play (8 bars
+in slow styles, 16 in club styles, about 20 to 30 seconds), a worker
+thread builds a prompt from the current program and asks the model for
+its next move, under a JSON schema of the moves that are legal right
+now. In judge mode, the model proposes three moves, the built-in
+performer adds three, and the Judge picks one without knowing who
+proposed what. On the bar line the engine validates the chosen edit and
+sends only the changed Tidal statements: a new line fades in, a removed
+one fades out, and lines whose level changes because the mix got fuller
+are re-sent. It then updates the on-screen code, logs what the model
+heard, what it did and why, saves state, and, if the track's arc moved
+on, asks the Narrator for a line. If the reply is late, invalid or
+missing, the built-in performer's edit is used instead, tagged as such.
+The loop then starts over.
 
-**Threads.** There are three concurrent actors: the engine thread (the
+**Threads.** There are four concurrent actors: the engine thread (the
 clock and sending), one performer worker (LLM calls, so thinking never
-blocks the beat), and one narrator worker (text-to-speech). Tidal itself
+blocks the beat), one worker that writes Narrator lines, and one that
+speaks them (text-to-speech). Tidal itself
 runs in a child GHCi process and SuperCollider in a child `sclang`
 process.
 
@@ -157,25 +188,27 @@ process.
 ## 4. The roles of the LLM
 
 "The LLM makes music" is too vague to design or evaluate, so the
-architecture assigns the model explicit **roles**. Each role has a
-defined input, a JSON output contract, a validator and a fallback. The
-live-coding engine uses the first two roles together on every edit; the
-other roles belong to the older arranger engine or are auxiliary. They
-are described here because contrasting them is instructive.
+architecture assigns explicit **roles**. Each role has a defined input,
+an output contract, a validator and a fallback. The live engine uses the
+first five; the last two belong to the older arranger engine and are
+described because contrasting them is instructive.
 
 | Role | Engine | Called | Input | Output | Validated by | Fallback |
 |---|---|---|---|---|---|---|
-| **Performer** | live | every 4 to 8 bars | program as code, phase, legal moves | one edit as JSON | `apply_edit` (+ GHCi type check) | built-in performer |
-| **Commentator** | live | with every edit | same call | `reason` (on screen), `narration` (spoken) | length and "no technical words" filter | template reason, no narration |
-| **Director** | arranger | per piece and per section | theme, previous piece, preset catalogue | key, tempo, progressions, instrumentation | schema and catalogue checks | deterministic planner |
+| **Performer** | live | every 8 to 16 bars | program as code, phase, legal moves, its recent edits | one edit (or three proposals) as JSON, under a schema | schema, `apply_edit` (+ GHCi type check) | built-in performer |
+| **Commentator** | live | with every edit | same call | `listening`, `reason` (on screen), `narration` (spoken) | length and "no technical words" filter | template reason |
+| **Director** | live and arranger | per track (arranger: also per section) | theme, style, previous track | title, key, tempo, progression, mood, intro line | schema, style's tempo and key range | built-in planner |
+| **Narrator** | live | at each turn of the arc | track, mood, the moment and why, last move | one spoken sentence | "no numbers or jargon" filter, one-minute gap | hand-written line per moment |
+| **Judge** | live, opt-in | every edit | situation, 2-6 shuffled unlabelled options | a choice with probabilities | option id must exist | the Performer's first idea |
 | **Composer** (free layer) | arranger | per section, opt-in | key, progression, mood | counter-melody as pentatonic degrees | token grammar, 8 steps per bar | layer omitted |
 | **Free-form composer** (legacy) | legacy | continuously | natural-language goal | raw Tidal code | GHCi only | none |
 
 ### 4.1 Performer
 
-The Performer is the central role. The model sees the program exactly as
+The Performer is the central role, and the only one that touches the program. The model sees the program exactly as
 the audience does, plus a machine-readable view of what it may change,
-and returns **exactly one** operation. It never writes a Tidal statement
+and returns **exactly one** operation (three alternative proposals in
+judge mode, section 8.5). It never writes a Tidal statement
 itself. It writes *edits*, which the system turns into statements. This
 is what lets a 35B local model play for hours without a single syntax
 error reaching the audio engine.
@@ -197,15 +230,23 @@ per track), sound design, levels, timing and the overall arc of a track
 
 ### 4.2 Commentator
 
-Every Performer reply carries a `reason`, a few words shown on screen as
-a Tidal comment (`-- let the melody echo into the space`), and
-optionally a `narration`, one warm sentence spoken over the music by a
-text-to-speech voice at big moments. This role costs almost nothing
-because it shares the Performer's call. It does three jobs:
+Every Performer reply carries, in this order, `listening` (what it hears
+in the program that matters now), `reason` (why this move, and what the
+listener should hear change), the operation, and optionally a
+`narration` for big moments. The schema enforces the order, so the model
+describes before it decides:
 
-1. **It makes the model state an intention before committing to a
-   move**, which is a light form of chain-of-thought constrained to a
-   single line.
+```
+👂 hears: Kick, hats, bass and pad all lock to a perfectly straight grid; the groove is accurate but stiff.
+✎ [LLM, judged] wrap d1 with `swingBy (1/12) 4`   -- A light swing on the beat loosens the 16ths ...
+```
+
+This role costs almost nothing because it shares the Performer's call.
+It does three jobs:
+
+1. **It makes the model state an observation and an intention before
+   committing to a move**, a light form of chain-of-thought constrained
+   to two sentences.
 2. **It makes the performance legible to viewers**, who can read *why*
    the hi-hats just doubled.
 3. **It gives evaluators ground truth about intent.** "Darken the keys"
@@ -217,9 +258,17 @@ underscores or engineering words ("layer", "energy", "orbit", "cps") is
 dropped. Listeners should hear "the melody leans down, like it's getting
 sleepy", not "lpf to 1800".
 
-### 4.3 Director (arranger engine)
+### 4.3 Director
 
-Before the live engine existed, the model worked as a **Director**. Per
+In the live engine, the Director plans each track before the Performer
+starts: title, key, tempo, chord progression, mood, and a spoken intro,
+with its reasoning shown (`🧠 Next piece: 'Neon Rain', lofi, D minor,
+84 BPM, i-VI-III-VII, late-night`). Its plan is checked against the
+style that will actually play: a tempo or key outside the style's range
+is replaced (a darkwave track once started at 76 BPM because the model
+had planned it as lofi).
+
+Before the live engine existed, the Director was the main role. Per
 piece it chose a title, key, tempo, chord progression, mood, extra
 progressions for the chorus and breakdown, chord colour (sevenths or
 ninths) and an optional key lift. Per section it chose which preset
@@ -233,9 +282,44 @@ came every one to three minutes and were coarse, and the result was
 correct but static music. The same sustained pad sat under every
 section, and listeners called it boring. That experience motivated
 principle P2: the model's creative surface must be *the code*, and
-changes must be frequent and small.
+changes must be frequent and small. The Director now does what it is good
+at, a coarse plan per track, and the Performer does the rest.
 
-### 4.4 Composer (free layer)
+### 4.4 Narrator
+
+When the track's arc moves on (the groove settles, the breakdown, the
+rebuild, the second peak, the outro), the Narrator writes one warm
+sentence about the moment for the text-to-speech voice. It runs on a
+separate worker, so the music never waits for it, and it sees why the
+arc moved and what the last edit was. Lines with numbers or technical
+words are not spoken, lines closer than a minute apart are skipped (the
+track intro always plays), and each skipped line says why in the log.
+Without a text model the Narrator uses a hand-written line per moment.
+
+### 4.5 Judge
+
+With `--judge jevtypesafe`, the Performer becomes a **generator**: it
+proposes three different moves in one call, the built-in performer adds
+up to three of its random-but-legal moves, and a decision model
+(jevtypesafe's typed decision API) picks one from the shuffled,
+unlabelled pool. The Judge returns a probability per option, which the
+log shows:
+
+```
+💬 Judge ← jevtypesafe/decide (0.9s): {"edit": {"choice": "e2", "confidence": 0.26,
+                                        "probabilities": {"e2": 0.38, "e6": 0.34, "e5": 0.21, ...}}}
+⚖️  Judge chose the LLM idea (p 0.38, confidence 0.26, from 3 LLM + 3 built-in)
+```
+
+Because the Judge is blind, how often it prefers the model's ideas over
+random ones, and how much probability it gives them, is a direct
+measure of the model's creative contribution (section 12). A decision
+API cannot write text, so it cannot perform alone in any interesting
+way: given only built-in candidates it can only pick the best of random
+ideas. The pairing is the point: a generator for ideas, a judge for
+taste.
+
+### 4.6 Composer (free layer)
 
 The arranger engine could optionally ask the model for one
 **counter-melody** per section, written as degrees of a pentatonic scale
@@ -245,7 +329,7 @@ was the first use of the technique that the live engine generalises:
 string is in key*. The same idea reappears as scale-degree pattern slots
 (section 5.2).
 
-### 4.5 Free-form composer (legacy)
+### 4.7 Free-form composer (legacy)
 
 The project's original design asked the model to write raw Tidal code
 from a natural-language goal. It is kept (`--legacy`) as a negative
@@ -254,18 +338,21 @@ that did were rarely harmonic. Unconstrained generation mixes three
 separate skills (syntax, music theory, taste) in one sample, so it
 measures none of them cleanly.
 
-### 4.6 Division of labour, summarised
+### 4.8 Division of labour, summarised
 
 | Concern | Owner |
 |---|---|
 | Syntax and types | system (templates + validator + GHCi) |
 | Harmony (key, chords) | system (track plan; degrees relative to chord roots) |
-| Sound design, mix levels | human (curated SynthDefs and blocks, measured offline) |
+| Sound design | human (curated SynthDefs and blocks) |
+| Mix levels, fades | system (measured loudness per synth, `music/mix.py`) |
 | Timing and synchronisation | system (bar-aligned clock) |
+| Track plan (key, tempo, progression, mood) | model (Director), checked against the style |
 | Track arc (phases) | system proposes, model fills in |
+| Choosing between ideas | model (Performer) or a separate Judge |
 | **What changes next, and why** | **model** |
 | **Melodic and rhythmic material** | **model** (within the degree representation) |
-| **Commentary** | **model** |
+| **Commentary, narration** | **model** |
 
 ---
 
@@ -392,8 +479,15 @@ Ctrl-Enter.
 
 A **block** is a curated starting line: body, a few variants for each
 slot, default effects and optional starting wrappers. `Block.make(rng)`
-picks slot variants and returns a fresh `LineSpec`. Styles (lofi, deep
-house, trance, ambient, piano, downtempo) each have their own library:
+picks slot variants, sets the line's calibrated level (section 6.3) and
+returns a fresh `LineSpec`. Nine styles each have their own library:
+lofi, ambient, downtempo and piano (the chill rotation), deep house,
+trance (after Switch Angel's acid setup), techno (138-150 BPM), hardcore
+(160-185 BPM, a distorted gabber kick) and darkwave (110-128 BPM cold
+electro: a stiff 808 drum machine, a 16th-note sequencer bass, a cold
+string-machine bed, a pluck arpeggio in long delay). A theme like
+"hardcore techno" or "cold electro dark wave" selects the style by
+keyword; without one, the stream rotates between the chill styles.
 
 ```python
 Block("acid", "acid",
@@ -414,12 +508,16 @@ at once, and which roles may open a track:
 
 ```python
 STYLE_SETTINGS = {
-    "lofi":   {"edit_bars": 4, "max_lines": 6, "openers": [["beat"], ["keys"], ["bass", "beat"]]},
-    "trance": {"edit_bars": 8, "max_lines": 6, "openers": [["acid"], ["beat"], ["acid", "beat"]]},
-    "piano":  {"edit_bars": 4, "max_lines": 4, "openers": [["keys"]]},
+    "lofi":     {"edit_bars": 8,  "max_lines": 6, "openers": [["beat"], ["keys"], ["bass", "beat"]]},
+    "trance":   {"edit_bars": 16, "max_lines": 6, "openers": [["acid"], ["beat"], ["acid", "beat"]]},
+    "darkwave": {"edit_bars": 12, "max_lines": 6, "openers": [["bass"], ["beat"], ["bass", "beat"]]},
     ...
 }
 ```
+
+Edits every 4 bars (about 11 seconds) turned out to be too busy to
+listen to; 8 to 16 bars (20 to 30 seconds) gives each change time to be
+heard. `--edit-bars` overrides it.
 
 The library is where **taste is encoded by humans**. For example, the
 lofi palette has no sustained pad at all. Its harmony comes from Rhodes
@@ -452,15 +550,45 @@ screams. A single number the model can ride, even as
 `(slow 8 $ range 0.4 0.75 sine)`, carries the whole tension arc of an
 acid track.
 
-### 6.3 Gain staging
+### 6.3 Mixing: measured levels, fades and room for the front
 
-Every SynthDef was rendered offline (sclang plus scsynth in non-realtime
-mode) and measured with an EBU R128 loudness meter. Block gains were set
-so that a melody sits in front, keys and bass behind it, and textures in
-the background. A master chain (a gentle 2:1 compressor, make-up gain
-and a limiter at -1 dBFS) runs after all channels, so no combination of
-edits can clip the stream. The model can change `gain` only within 0.5
-to 1.15, and the built-in performer does not touch gain at all.
+The first live version had no mixer: every line entered at a hand-picked
+gain, instantly, however full the mix already was. When strings came in
+noticeably too loud, measuring showed why. Rendering every SynthDef
+offline (sclang plus scsynth in non-realtime mode, EBU R128 integrated
+loudness, `eval/synth_levels.sh`) found the sustained beds 4 to 8 dB too
+loud: ambient strings +6.4 dB, the trance gated saw +7.8 dB. One block
+had used a single gain for three alternative synths whose loudness
+differed by 8 dB. The mixer (`music/mix.py`) now works in four layers:
+
+1. **Calibrated levels.** Each sustained block's gain is computed from its
+   synth's measured loudness so that its role lands at a target level:
+   melody -21 LUFS, bass -19, keys -25, beds -29, textures -34. SuperDirt's
+   gain curve is amplitude ∝ gain⁴, so a gain `g` changes the level by
+   `80·log10(g)` dB, and four-note chords add about 5.6 dB. Drums, short
+   chord hits and fast 16th-note streams keep hand-tuned gains, because a
+   single test note says little about their loudness.
+
+   ```python
+   def calibrated_gain(synth, role, chord):
+       level = level_db(synth, chord, gain=1.0)          # measured LUFS (+5.6 dB for chords)
+       return clamp(10 ** ((ROLE_TARGET_LUFS[role] - level) / 80), 0.3, 1.2)
+   ```
+
+2. **Fades.** New and unmuted lines fade in over 4 bars, removed and
+   muted lines fade out over 2, using Tidal's transitions:
+   `xfadeIn 3 4 $ (<pattern>) |< orbit 2` instead of `d3 $ <pattern>`.
+3. **Room for the front.** Beds step back 2.5 dB when two of lead, keys
+   and acid are playing, and melodic lines give 1.4 dB when six or more
+   lines play. This is rendered as `(<pattern>) |* gain 0.93`, and lines
+   whose level changes are re-sent with the edit that caused it.
+4. **A gain window.** The model may balance a line by about ±3 dB around
+   the level it entered at (gain ×0.92 to ×1.09), no more. Before, a
+   single `gain 1.0` on a calibrated string bed would have been +13 dB.
+
+A master chain (a gentle 2:1 compressor, make-up gain and a limiter at
+-1 dBFS) runs after all channels, so no combination of edits can clip
+the stream.
 
 ---
 
@@ -491,8 +619,8 @@ something a human live coder actually does.
 `apply_edit(program, edit, max_lines)` enforces:
 
 - **Value ranges.** Numbers must fall within per-effect ranges
-  (`lpf` 200 to 9000, `room` 0 to 0.8, `delay` 0 to 0.6, `gain` 0.5 to
-  1.15, `acid` 0.1 to 0.95, ...). The only non-numeric value allowed is
+  (`lpf` 200 to 9000, `room` 0 to 0.8, `delay` 0 to 0.6, `acid` 0.1 to
+  0.95, ...), and `gain` within about ±3 dB of the line's entry level. The only non-numeric value allowed is
   one modulation form, `(slow N $ range a b sine|saw|tri)`, with
   N from 1 to 64 and both bounds in range.
 - **Pattern hygiene.** Mini-notation must match a restricted character
@@ -507,7 +635,7 @@ something a human live coder actually does.
   drum, bass), and textures take none.
 - **Structural limits.** At most three wrappers per line, a per-style
   cap on simultaneous lines, no adding a role that is already playing,
-  and tempo moves of at most ±12 BPM within 50 to 150.
+  and tempo moves of at most ±12 BPM within 50 to 200.
 - **Locked and choice slots.** Some slots are locked (the synth name).
   Others take a value from a fixed list, for example the trance gate
   pattern `gate` ∈ {0, 1, 2, 3}.
@@ -593,87 +721,114 @@ def _advance_phase(self, program):
 ```
 
 Each phase comes with a one-sentence brief in the prompt ("Breakdown:
-mute the beat and/or bass, and make what's left more spacious."). The
+mute the beat and/or bass, and make what's left more spacious."). Each
+change of phase is logged with its reason, because the arc is a
+decision too:
+
+```
+🧭 Arc: groove → breakdown (9 edits of groove, time for contrast)
+```
+
+The
 target number of lines and the length of the groove phases are drawn at
 random per track, so tracks differ in shape. When the outro leaves at
-most one line, the track ends. The performer plans a new track (new
+most one line, the track ends. The Director plans a new track (new
 key, tempo and progression, related to the previous one), the old lines
 are silenced, and the build starts again. With no fixed style, the
 stream rotates between lofi, ambient, downtempo and piano from track to
 track.
 
-### 8.2 The prompt
+### 8.2 The prompt: teaching Tidal while playing
 
-The prompt (`prompts/performer.md`) is built fresh for every edit.
-Section by section, it contains:
+The prompt (`prompts/performer.md`) is built fresh for every edit. Early
+versions gave the model names and ranges only: it saw
+`off 0.25 (|+ n 12)` and `lpf 200-9000` but not what they sound like,
+and its edits felt random. The prompt now teaches as it asks:
 
 1. **Framing**: "You are performing a live-coding set in TidalCycles,
    like Switch Angel ... The audience sees the code and hears every
-   change," plus the stream theme and style.
-2. **The program as code**: exactly what viewers see, including
-   commented-out muted lines.
-3. **Phase and brief**, with the number of edits made so far in this
-   phase.
-4. **Editable parts as JSON**: for each line, its channel, mute state,
-   pattern slots and current values, effects, controls and wrappers.
-5. **Addable blocks** (`name -> role`) and the line limit.
-6. **The operation list**, with the degree convention spelled out ("0 =
-   root, 2 = third, 4 = fifth, 7 = octave; ~ = rest").
-7. **Ranges and whitelists**: effect ranges, effects allowed per role,
-   control ranges, and the melodic, drum and bass wrappers.
-8. **Taste guidance**: "Make each edit count: something a listener will
-   notice, but not a jolt. Prefer revising what's there over adding
-   more. Vary what you touch."
-9. **Reply contract**: one JSON object with the operation plus `reason`
-   and optional `narration`, with an example.
-
-A typical reply:
-
-```json
-{"op": "set_pattern", "role": "lead", "name": "melody",
- "value": "4 ~ 3 ~ 0 ~ ~ ~",
- "reason": "answer the phrase a step lower",
- "narration": "The melody leans down, like it's getting sleepy."}
-```
+   change, and they read your notes to understand why," plus the stream
+   theme and style.
+2. **The program as code**: exactly what viewers see.
+3. **Phase, brief and example moves for this phase**: local models copy
+   good examples far more faithfully than they follow rules ("in a
+   breakdown: mute the beat first; the space it leaves is the point").
+4. **Its own recent edits**, the last six that actually played, with
+   reasons: "build on these; don't undo a move you just made, and don't
+   make the same kind of move three times in a row". Without this memory
+   the model only sees the present and tends to loop or undo itself.
+5. **A Tidal cheat sheet**: mini-notation (`~ [ ] < > * ! ? ,`), what
+   scale degrees mean, and one line per wrapper and effect *on what it
+   sounds like* (`jux rev`: a reversed copy in the other ear, wide and
+   dreamy; `lpf`: low is dark and muffled, high is bright and open).
+   Only the wrappers and effects that apply to the lines playing now are
+   explained, which keeps the prompt small.
+6. **Editable parts as compact JSON**: per line its slots and values, its
+   effects, which effects it accepts and which wrapper group it takes.
+7. **Addable blocks, operations, taste guidance** ("something a listener
+   will notice, but not a jolt; prefer revising over adding").
+8. **Reply contract**: `listening`, `reason`, the operation, optional
+   `narration`; or, in judge mode, three genuinely different proposals.
 
 The system prompt is one sentence: *"You are a live coder performing
-TidalCycles. Reply with JSON only."* The performer asks for at most 500
-tokens at temperature 0.8. For Qwen-family models, the local provider
-turns off "thinking" mode in the chat template; otherwise the model can
-spend thousands of tokens reasoning and miss its bar.
+TidalCycles. Reply with JSON only."* For Qwen-family models, the local
+provider turns off "thinking" mode in the chat template; otherwise the
+model can spend thousands of tokens reasoning and miss its bar.
 
-### 8.3 From reply to edit
+**Small context windows.** llama-server shares its context between
+parallel slots, so `--ctx-size 8192` with two slots gives each request
+4,096 tokens, and the full prompt with a busy program is about 4,000. If
+the server reports an overflow, the performer switches to a compact
+prompt for the rest of the run (wrapper names and ranges only, no
+example moves; about 25% smaller) and retries at once. The style's
+character is the last thing to be cut; the glossary is the first.
 
-```python
-def _llm_edit(self, program):
-    try:
-        reply = llm.complete(self.model_id,
-                             "You are a live coder performing TidalCycles. Reply with JSON only.",
-                             self._prompt(program), max_tokens=500)
-        edit = self._edit_from_json(llm.extract_json(reply), program)
-        apply_edit(program, edit, self.settings["max_lines"])   # validate before returning
-        self._llm_failures = 0
-        return edit
-    except (llm.LLMError, EditError, ValueError, TypeError, KeyError) as e:
-        self._llm_failures += 1
-        self.log(f"[Performer] LLM edit unusable ({e}); built-in performer takes this one")
-        if self._llm_failures >= 3:                    # back off a struggling model
-            self._skip_llm, self._llm_failures = 5, 0
-        return None
+### 8.3 From reply to edit: keeping a local model on track
+
+A 35B local model produced unusable edits often enough that the
+built-in performer played much of the set. Four mechanisms fixed the
+causes rather than the symptoms:
+
+1. **Constrained decoding.** Every request to llama-server carries a
+   JSON schema of the edits that are legal *right now*: the addable
+   blocks, playing and muted roles, each line's pattern slots, the
+   effects allowed on each role, controls, and wrappers not yet applied.
+   llama.cpp compiles it into a grammar and decodes under it, so the
+   model cannot produce broken JSON or a made-up name.
+
+   ```python
+   def variant(op, **props):     # one alternative of the schema's anyOf
+       properties = {"listening": note, "reason": note, "op": {"const": op}, **props,
+                     "narration": {"type": "string", "maxLength": 160}}
+       return {"type": "object", "properties": properties,
+               "required": ["listening", "reason", "op", *props], "additionalProperties": False}
+   # e.g. variant("set_fx", role={"const": "keys"}, name={"enum": ["lpf", "room", "delay", ...]}, value=text)
+   ```
+
+   Each schema was checked with llama.cpp's own `json-schema-to-grammar`
+   converter for 66 program states across all styles.
+2. **Clamping instead of rejecting.** A number slightly out of range
+   (`lpf 12000`, a tempo jump of +20) is pulled into range.
+3. **One corrected retry.** If an edit still breaks a rule, the model is
+   shown its reply and the reason it was rejected and answers again, if
+   there is time before the bar.
+4. **A deadline.** Each call must finish within 85% of the edit window
+   at the current tempo; a late reply counts as `late`, not as an error.
+
+After each track the Performer reports how it went:
+
+```
+[Performer] last track: 27/31 edits by the LLM (built-in: 3 late, 1 invalid)
 ```
 
-`extract_json` finds the first balanced JSON object in the reply, fenced
-or not, while tracking strings and escapes. This tolerates the chatty
-preambles local models like to add. `_edit_from_json` checks that the
-op is known, trims `reason` to 160 characters, passes `narration`
-through the speakability filter and, for `add`, looks the block up in
-the current style's library and creates the line. The edit is then
-validated against the *current* program before it is returned, so the
-engine gets either a valid edit or `None`.
+Mostly `late` means the model is too slow at this tempo; mostly
+`invalid` means it struggles with the task. After three failures in a
+row the built-in performer plays the next five edits, so a model that is
+still loading never delays every bar.
 
-After three failures in a row, the performer skips the model for the
-next five edits. This keeps a model that is still loading, or one that
-has fallen into a bad output pattern, from delaying every bar.
+For Claude and other hosted models (no grammar), `extract_json` finds
+the first balanced JSON object in the reply, fenced or not, and the same
+validation, clamping and retry apply.
 
 ### 8.4 The built-in performer
 
@@ -701,6 +856,34 @@ until one is valid.
 
 The result sounds acceptable, structured and in key, but it has no
 intention behind it. That is exactly what a null model should be.
+
+### 8.5 Generator and judge
+
+In judge mode, one edit takes two calls. The Performer proposes up to
+three different legal edits in one reply (the schema allows an array of
+one to three), the built-in performer contributes up to three candidates
+of its own, duplicates are dropped, the pool is shuffled, and every
+option is described the same way, with no hint of its source:
+
+```
+e1: d2: rhythm -> 0 ~ 4 ~ 7 ~ 4 ~: walk the bass
+e2: wrap d1 with `swingBy (1/12) 4`: loosen the drums (light swing: loosens a stiff groove)
+e3: d4: # lpf -> 1800: darken the keys (low-pass cutoff in Hz)
+...
+```
+
+The Judge, jevtypesafe's decision API, gets the situation (style, theme,
+track, phase, the program, the recent edits) and a single `choice`
+question with these options. It returns the choice, a confidence and a
+probability per option. The chosen edit keeps the Performer's
+`listening` and `reason` if it was the Performer's idea. If the Performer
+fails, the Judge chooses among built-in ideas and that counts as the
+Performer's failure, not as a judgement; if the Judge fails, the
+Performer's first idea plays. A choice without a built-in alternative
+(at the start of a track all ideas may be the same three `add` moves) is
+marked "not a comparison" and left out of the statistics.
+
+
 
 ---
 
@@ -744,19 +927,19 @@ while not self.stop_event.is_set():
         self.log(f"[Live] skipped invalid edit ({edit.describe()}): {e}")
         next_cycle += edit_bars
         continue
-    statements = changed_statements(program, new)
-    if self._type_ok(statements) and self._send(statements):
+    statements = changed_statements(program, new)          # the edited line + any re-levelled beds
+    if self._type_ok(statements) and self._send(self._with_fades(statements, new, edit)):
         program = new
-        self.log(f"✎ {edit.describe()}   -- {edit.reason}")
+        self.log(f"✎ [{edit.source}] {edit.describe()}   -- {edit.reason}")
         self._publish(program, highlight=edit.role, comment=edit.reason)
     next_cycle += edit_bars
 ```
 
 The next edit is requested *as soon as* the previous one has been
-applied, so the model has the full `edit_bars` window to answer: four
-bars at 80 BPM is 12 seconds, eight bars at 138 BPM is about 14 seconds.
+applied, so the model has the full `edit_bars` window to answer: eight
+bars at 80 BPM is 24 seconds, sixteen bars at 138 BPM about 28 seconds.
 That is enough for a 35B mixture-of-experts model on a single consumer
-GPU when thinking mode is off. Edits always land on a bar boundary
+GPU when thinking mode is off, and for the two calls of judge mode. Edits always land on a bar boundary
 (Tidal re-evaluates at the next cycle anyway), so even a late edit
 sounds intentional. While waiting, the engine writes a heartbeat file
 every few seconds for the watchdog.
@@ -765,9 +948,11 @@ every few seconds for the watchdog.
 
 An edit passes up to four gates before it is heard:
 
-1. **Parse**: JSON extraction and op and block lookup (in the performer).
-2. **Validate**: `apply_edit` ranges and rules (in the performer, and
-   again in the engine against the program at apply time).
+1. **Decode**: for a local model, the JSON schema makes illegal names
+   impossible; for others, JSON extraction and op and block lookup.
+2. **Validate**: `apply_edit` ranges and rules, after clamping numbers
+   into range (in the performer, and again in the engine against the
+   program at apply time).
 3. **Type check (optional)**: each changed statement is compiled in a
    separate GHCi process running Tidal, as
    `:t ((<expr>) # orbit N :: ControlPattern)`, before it is sent. This
@@ -778,21 +963,49 @@ An edit passes up to four gates before it is heard:
 
 At every gate a failure costs one edit slot and nothing else.
 
-### 9.4 Publishing
+### 9.4 Publishing and explaining
 
-After each successful edit the engine:
+Every decision is visible in the terminal as it happens, and recorded:
+
+```
+🧠 Next piece: 'Neon Rain', darkwave, D minor, 118 BPM, i-VI-III-VII, late-night
+   "Minor and unhurried suits a rainy city theme."
+🗣  "Now playing: Neon Rain. Pull up a chair. The rain has a rhythm tonight."
+💬 Performer → local/qwen-agentworld-35b: 3 ideas for 'Neon Rain' (groove) (7,962 chars)
+💬 Performer ← local/qwen-agentworld-35b (4.1s): {"proposals": [...]}
+💬 Judge → jevtypesafe/decide: choose the next edit for 'Neon Rain' (groove) from 6 options
+💬 Judge ← jevtypesafe/decide (0.9s): {"edit": {"choice": "e2", "confidence": 0.26, "probabilities": {...}}}
+⚖️  Judge chose the LLM idea (p 0.38, confidence 0.26, from 3 LLM + 3 built-in)
+👂 hears: Kick, hats, bass and pad all lock to a perfectly straight grid; the groove is accurate but stiff.
+✎ [LLM, judged] wrap d1 with `swingBy (1/12) 4`   -- A light swing loosens the 16ths under the hats ...
+🧭 Arc: groove → breakdown (9 edits of groove, time for contrast)
+💬 Narrator → local/qwen-agentworld-35b: a line for the breakdown
+🗣  "Let the floor fall away for a moment and just breathe."
+```
+
+The `→` line shows which agent asked which model for what; the `←` line
+shows the reply as it came back and how long it took; `✎` shows the edit
+with who chose it (`[LLM]`, `[built-in]`, `[LLM, judged]`,
+`[jevtypesafe]`). `--show-llm` also prints every full prompt and raw
+reply, and `runtime/llm_calls.jsonl` keeps the full prompt and reply of
+every call (agent, model, seconds, reply or error) for auditing. A line
+the Narrator does not speak says why (`(skipped: last line 42s ago)`,
+`(not spoken: numbers or technical words)`).
+
+After each successful edit the engine also:
 
 - writes the on-screen **overlay**: a now-playing line (title, key,
   tempo, phase) and the program's code with the `▶` marker and the
   reason as a trailing comment. Both files are written atomically, and
   ffmpeg re-reads them every frame.
 - appends the edit to `runtime/thoughts.log` (human-readable) and
-  `runtime/history.jsonl` (structured: `op`, `role`, `name`, `value`,
-  `reason` and the full program afterwards).
+  `runtime/history.jsonl` (structured: `source`, `listening`, `op`,
+  `role`, `name`, `value`, `reason` and the full program afterwards).
 - saves `runtime/state.json` (program, performer state, style), so a
   restarted engine resumes mid-track with `--resume` instead of starting
   over.
-- hands any `narration` to the narrator.
+- hands any `narration` to the narrator, and, if the arc moved on, asks
+  the Narrator agent for a line about the moment.
 
 What viewers see:
 
@@ -814,15 +1027,15 @@ setcps (84/60/4)
 
 ### 10.1 Providers
 
-All model calls go through a single function,
-`llm.complete(model_id, system, user)`. Model ids are
-`<provider>/<model>`:
+All text-model calls go through `llm.converse(agent, model_id, system,
+user, schema=...)`, which logs the exchange and records it, around
+`llm.complete`. Model ids are `<provider>/<model>`:
 
 | Id | Provider | Transport |
 |---|---|---|
 | `local` or `local/<model>` | llama.cpp `llama-server` (default) | OpenAI-compatible `/chat/completions` over plain HTTP |
 | `claude/<model>` | Anthropic API | official SDK |
-| `jevtypesafe/<model>` | jevtypesafeai.com | OpenAI-compatible or native, configured in `.env` |
+| `jevtypesafe` | jevtypesafeai.com decision API | `POST /api/v1/decide` with a `state` and typed questions (`choice`, `score`, `noul`); used as Performer (choosing among legal candidates) or Judge, via `llm.decide()` |
 | anything else | LiteLLM passthrough | e.g. `ollama/...`, other hosted APIs |
 
 The local path needs no extra packages:
@@ -831,9 +1044,15 @@ The local path needs no extra packages:
 body = {"model": model,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         "max_tokens": max_tokens, "temperature": temperature,
-        "chat_template_kwargs": {"enable_thinking": False}}     # Qwen: no hidden reasoning
+        "chat_template_kwargs": {"enable_thinking": False},     # Qwen: no hidden reasoning
+        "response_format": {"type": "json_schema",               # decode under the legal-moves schema
+                            "json_schema": {"name": "reply", "schema": schema}}}
 resp = requests.post(f"{LOCAL_LLM_API_BASE}/chat/completions", json=body, timeout=timeout)
 ```
+
+If a server rejects schemas, the request is repeated without one and
+later calls skip it; a context-window overflow (also HTTP 400) is not
+mistaken for that and gets its own explanation instead.
 
 Because the interface is the common denominator, any local server works:
 `llama-server`, vLLM, LM Studio, or Ollama's `/v1` endpoint. Swapping
@@ -852,12 +1071,17 @@ down the music thread.
 
 If the configured model is local and nothing answers on the port, the
 orchestrator launches `llama-server` itself: the GGUF file from `.env`,
-all layers on the GPU, a 32k context and two parallel slots. It starts
+all layers on the GPU, a 16k context shared by two parallel slots
+(`LLAMA_CTX_SIZE`, `LLAMA_GPU_LAYERS` and `LLAMA_SERVER_ARGS` adjust it;
+8-bit KV cache and flash attention roughly halve the cache's memory). It starts
 the server *before* booting SuperCollider and Tidal, so the model loads
 while the audio stack starts. It then polls `/health` (503 while
-loading, 200 when ready) for up to five minutes. If the model still
-isn't ready, the built-in performer plays until it is. The stream never
-waits on the model.
+loading, 200 when ready) for up to five minutes, showing how much of the
+model file has been read and which loading stage the server is in. If
+the server dies while loading (typically the GPU running out of memory
+for the KV cache), the end of its log and a likely fix are printed at
+once. If the model still isn't ready, the built-in performer plays until
+it is. The stream never waits on the model.
 
 ---
 
@@ -882,7 +1106,7 @@ waits on the model.
       ReplaceOut.ar(0, sig);
   }).add;
   ```
-- **Narration.** A Piper TTS voice speaks `narration` lines through the
+- **Narration.** A Piper TTS voice speaks the Director's and Narrator's lines through the
   stream's audio sink, loudness-normalised to the stream target plus a
   small lift. At most one line is queued, lines are at least a minute
   apart, and while the voice speaks the whole Tidal mix is ducked with
@@ -907,12 +1131,14 @@ four groups of measures, all computable from the engine's logs.
 
 ### 12.1 Competence: can it play at all?
 
-- **Validity rate**: the share of LLM replies that parse and pass
-  `apply_edit` (count the `LLM edit unusable` lines in the session log).
-  Below about 70%, the fallback does most of the playing and the other
-  measures describe the baseline, not the model.
-- **Punctuality**: the share of replies that arrive before their bar.
-  Measure with `--show-llm` timings, or wrap `llm.complete`.
+- **Validity rate**: the share of edits the model actually played. The
+  per-track report gives it directly (`27/31 edits by the LLM (built-in:
+  3 late, 1 invalid)`), and `history.jsonl` records the `source` of every
+  edit. Below about 70%, the fallback does most of the playing and the
+  other measures describe the baseline, not the model.
+- **Punctuality**: the share of replies that arrive before their bar:
+  the `late` count in the same report; every `←` line shows the reply
+  time.
 
 ### 12.2 Divergence: does it produce ideas?
 
@@ -939,7 +1165,27 @@ four groups of measures, all computable from the engine's logs.
 - **Breadth of attention**: the distribution of edits over roles. A
   performer that edits only the lead is ignoring the ensemble.
 
-### 12.4 Taste: is it any good?
+### 12.4 Preference: does a blind judge prefer its ideas?
+
+Judge mode gives a measure that needs no listening panel. For every
+edit, the model's ideas and random-but-legal ideas compete in front of a
+judge that cannot see where they came from. Two numbers per track:
+
+- **Preference rate**: how often the judge chose the model's idea.
+  Chance is roughly the share of model ideas in the pool (about 40-50%).
+- **Probability mass**: the average share of the judge's probability
+  given to the model's ideas, which also captures near misses.
+
+```
+[Performer] the judge preferred the LLM's idea 14/20 times (70%) over the built-in
+            candidates; on average it gave them 61% of its probability
+```
+
+The judge has its own taste and biases, so this measures agreement with
+one judge, not absolute quality; comparing several models under the same
+judge, and the same model under several judges, separates the two.
+
+### 12.5 Taste: is it any good?
 
 Taste needs ears. Run **blind A/B listening sessions**: the same style,
 seed and duration, one set played by the built-in performer and one by
@@ -948,7 +1194,7 @@ the one they would keep listening to. A 24/7 stream adds a naturally
 occurring signal on top: how long viewers stay, broken down by which
 performer was live.
 
-### 12.5 A minimal scorer
+### 12.6 A minimal scorer
 
 ```python
 import json, math
@@ -964,12 +1210,14 @@ def score(history_path="runtime/history.jsonl", k=6):
     repeats = sum(key(e) in {key(p) for p in edits[max(0, i - k):i]}
                   for i, e in enumerate(edits))
     reasons = sum(bool(e.get("reason")) for e in edits)
+    by_llm = sum(e.get("source", "").startswith("LLM") for e in edits)
     return {"edits": total, "op_entropy_bits": round(entropy, 2),
             "repeat_rate": round(repeats / total, 2),
-            "reasoned": round(reasons / total, 2)}
+            "reasoned": round(reasons / total, 2),
+            "by_llm": round(by_llm / total, 2)}
 ```
 
-### 12.6 Running an experiment
+### 12.7 Running an experiment
 
 `--dry-run` replaces the audio stack with a printer and the clock with a
 simulated one. With the built-in performer, an hour-long set runs in
@@ -982,6 +1230,8 @@ each run, and listen to the interesting ones live:
 python orchestrator.py --dry-run --style lofi --llm none --seed 7 --pieces 3
 # candidate: a local model served by llama.cpp on :8080
 python orchestrator.py --dry-run --style lofi --llm local --model qwen-agentworld-35b --seed 7 --pieces 3
+# the same model as generator, with a blind judge
+python orchestrator.py --dry-run --style lofi --llm local --judge jevtypesafe --seed 7 --pieces 3
 # the same model, live, with its raw replies printed
 python orchestrator.py --style lofi --llm local --show-llm
 ```
@@ -1013,6 +1263,29 @@ choices are diverse) and proves nothing.
   it played.
 - **The validator is also the security boundary.** When model output
   drives a live interpreter, whitelists are not optional.
+- **Fix failures at the source.** A local model's unusable replies were
+  mostly malformed names and slightly-off numbers. Constraining decoding
+  with a schema of the legal moves, clamping numbers and allowing one
+  corrected retry did more than any prompt wording.
+- **Teach the language in the prompt.** A model that only sees
+  `off 0.25 (|+ n 12)` has to guess what it sounds like. One line per
+  wrapper and effect on its *sound*, example moves per phase, and the
+  model's own recent edits made the edits noticeably more purposeful.
+- **Explanations are a product, not a debug aid.** Showing what each
+  agent heard, did and why, and tagging every edit with who chose it, is
+  what lets a human trust (or distrust) the music, and it is the data a
+  creativity evaluation needs.
+- **Measure, don't guess, the mix.** Hand-set levels were 4-8 dB off for
+  sustained beds; measuring every synth offline and deriving gains from
+  targets fixed what listeners complained about. Fades and ducking make
+  an addition sound like part of the song rather than a switch.
+- **A judge needs a generator.** A decision model alone can only pick
+  the best of random ideas; paired with a generator it becomes both a
+  source of taste and a blind measure of the generator's ideas.
+- **Budget the context.** A prompt that grows with every useful addition
+  eventually overflows a small local context window; describing only what
+  applies now, and degrading gracefully to a compact prompt, keeps the
+  performer playing.
 
 ## 14. Limitations and extensions
 
@@ -1025,9 +1298,18 @@ choices are diverse) and proves nothing.
 - **Single-move replies.** One edit per call keeps things attributable
   but prevents coordinated moves (mute the beat *and* open the filter).
   A small "combo" operation is a natural next step.
-- **Memory.** The model sees only the current program and phase. Giving
-  it a short summary of its recent edits would help long-range
-  development, and should be tested for its effect on repetition.
+- **Style knowledge.** The model has little feel for what makes darkwave
+  darkwave or techno techno: in one run it opened a darkwave track with
+  "cold sustained pads" when the genre is carried by the sequencer bass
+  and drum machine. The planned fix (`docs/STYLE_KNOWLEDGE_PLAN.md`) is a
+  short style guide per style in the prompt, a role description per
+  block, style-specific example moves, and a judge that scores style fit.
+- **Memory.** The model sees its last six edits, not the whole set.
+  Longer-range development (a motif introduced early and recalled at
+  the end) would need a summary of the track so far.
+- **Short-sound calibration.** The mixer calibrates sustained sounds from
+  measurements; drums, short chord hits and fast 16th-note streams still
+  use tuned gains, because a single test note does not measure them well.
 - **Gameable metrics.** Divergence measures reward randomness, which is
   why the random baseline is required and why listening remains the
   final judge.
@@ -1043,12 +1325,21 @@ choices are diverse) and proves nothing.
   `jux rev`.
 - **Scale degree**: a step within the current scale; with `scale "minor"`,
   degree 2 is the minor third.
+- **LUFS**: loudness units relative to full scale (EBU R128), the
+  loudness measure the mixer calibrates against.
+- **`xfadeIn`**: a Tidal transition that crossfades a channel from its
+  current pattern to a new one over a number of cycles; used for fades.
+- **Constrained decoding**: generating only tokens that keep the output
+  valid under a grammar, here compiled by llama.cpp from a JSON schema.
+- **Blind judge**: a model that chooses among options without knowing
+  which agent proposed which.
 
 ## See also
 
 - TidalCycles documentation: <https://tidalcycles.org/docs/>
 - Reference implementation, [`jsemrau/ystreamer`](https://github.com/jsemrau/ystreamer):
-  `music/livecode.py`, `music/blocks.py`, `music/performer.py`,
-  `music/live_engine.py`, `music/llm.py`, `prompts/performer.md`,
-  `tidal/synthdefs.scd`
+  `music/livecode.py`, `music/blocks.py`, `music/mix.py`,
+  `music/performer.py`, `music/director.py`, `music/live_engine.py`,
+  `music/llm.py`, `prompts/performer.md`, `tidal/synthdefs.scd`,
+  `eval/synth_levels.sh`, `docs/STYLE_KNOWLEDGE_PLAN.md`
 - The 24/7 stream: YouTube **@sleeplesscomposer**
