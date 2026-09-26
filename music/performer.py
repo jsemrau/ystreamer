@@ -101,6 +101,10 @@ class Performer:
         # Compact prompts (no glossary or example moves) once the model's
         # context window turned out to be too small for the full one.
         self._compact = False
+        # The judge's last answer details (probabilities per option, confidence)
+        # and, per track, the share of its probability given to the LLM's ideas.
+        self.last_judgement: dict = {}
+        self.judge_mass: list[float] = []
         # The last edits that were actually played this track, for the prompt.
         self.recent: deque[str] = deque(maxlen=6)
 
@@ -118,8 +122,11 @@ class Performer:
                  + (f" (built-in: {fallbacks})" if fallbacks else ""))
         judged = self.stats["judge_llm"] + self.stats["judge_builtin"]
         if judged:
+            mass = (f"; on average it gave them {100 * sum(self.judge_mass) / len(self.judge_mass):.0f}% of "
+                    "its probability" if self.judge_mass else "")
             self.log(f"[Performer] the judge preferred the LLM's idea {self.stats['judge_llm']}/{judged} times "
-                     f"({100 * self.stats['judge_llm'] / judged:.0f}%) over the built-in candidates")
+                     f"({100 * self.stats['judge_llm'] / judged:.0f}%) over the built-in candidates{mass}")
+        self.judge_mass.clear()
         self.stats.clear()
 
     def _settings_for(self, style: str) -> dict:
@@ -497,8 +504,15 @@ class Performer:
         if choice not in options:
             raise EditError(f"chose {choice!r}, not one of {sorted(options)}")
         why = ""
+        info: dict = {}
         if isinstance(answer, dict):
             why = next((str(answer[k]) for k in ("reason", "rationale", "explanation", "why") if answer.get(k)), "")
+            probs = answer.get("probabilities")
+            if isinstance(probs, dict):
+                info["probabilities"] = [float(probs.get(f"e{i + 1}", 0) or 0) for i in range(len(candidates))]
+            if isinstance(answer.get("confidence"), (int, float)):
+                info["confidence"] = float(answer["confidence"])
+        self.last_judgement = info
         return int(choice[1:]) - 1, " ".join(why.split())[:200]
 
     def _jev_edit(self, program: Program) -> Edit | None:
@@ -585,14 +599,27 @@ class Performer:
                 self.log(f"[Performer] judge unavailable ({e}); playing the LLM's first idea")
                 chosen, why = (proposals or builtin)[0], ""
         from_llm = chosen.source == "LLM"
+        info = self.last_judgement if len(pool) > 1 else {}
+        self.last_judgement = {}
+        detail = []
+        if "probabilities" in info:
+            detail.append(f"p {info['probabilities'][pool.index(chosen)]:.2f}")
+        if "confidence" in info:
+            detail.append(f"confidence {info['confidence']:.2f}")
         if llm_problem:
             # Nothing from the LLM to compare against: not a judgement.
             self.stats[llm_problem] += 1
             chosen.source = "built-in, judged"
             return chosen
-        self.stats["judge_llm" if from_llm else "judge_builtin"] += 1
+        compared = bool(proposals) and bool(builtin)
+        if compared:
+            # Only a real comparison (LLM ideas against built-in ones) counts.
+            self.stats["judge_llm" if from_llm else "judge_builtin"] += 1
+            if "probabilities" in info:
+                self.judge_mass.append(sum(p for e, p in zip(pool, info["probabilities"]) if e.source == "LLM"))
         self.log(f"⚖️  Judge chose {'the LLM' if from_llm else 'a built-in'} idea "
-                 f"(from {len(proposals)} LLM + {len(builtin)} built-in)" + (f": {why}" if why else ""))
+                 f"({', '.join(detail + [f'from {len(proposals)} LLM + {len(builtin)} built-in'])}"
+                 + ("" if compared else "; not a comparison") + ")" + (f": {why}" if why else ""))
         if not from_llm:
             self.stats["judge picked built-in"] += 1
             chosen.source = "built-in, judged"
