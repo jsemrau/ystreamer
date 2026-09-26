@@ -22,7 +22,8 @@
 #                                     stops archiving very long single sessions)
 #             YS_AUDIO_INPUT          ffmpeg audio input args (default: pulse sink monitor)
 #             YS_FONT / YS_MONO_FONT  font files for drawtext
-#             YS_VIDEO_SIZE, YS_FPS, YS_VIDEO_BITRATE
+#             YS_VIDEO_SIZE, YS_FPS, YS_VIDEO_BITRATE (default 1920x1080, 30, 4500k;
+#                                     for a Twitch target 1280x720 at 3000k)
 #             YS_STREAM_UI            browser | overlay (default: browser if available)
 #             YS_CHROMIUM             Chromium/Chrome binary for the browser look
 #             YS_UI_PORT              port of the stream page server (default 8765)
@@ -55,10 +56,19 @@ else
     exit 1
 fi
 
-SIZE="${YS_VIDEO_SIZE:-1920x1080}"
+# Twitch: most channels get no lower-quality versions, so every viewer
+# receives the stream as sent. 720p at 3 Mbit/s (Twitch's advice) plays
+# without buffering for far more of them, and is lighter to encode.
+if [[ "$TARGET" == *twitch.tv* ]]; then
+    DEFAULT_SIZE=1280x720; DEFAULT_BITRATE=3000k
+else
+    DEFAULT_SIZE=1920x1080; DEFAULT_BITRATE=4500k
+fi
+SIZE="${YS_VIDEO_SIZE:-$DEFAULT_SIZE}"
 W="${SIZE%x*}"; H="${SIZE#*x}"
 FPS="${YS_FPS:-30}"
-VBITRATE="${YS_VIDEO_BITRATE:-4500k}"
+VBITRATE="${YS_VIDEO_BITRATE:-$DEFAULT_BITRATE}"
+echo "Stream: ${SIZE} at ${FPS} fps, ${VBITRATE} (YS_VIDEO_SIZE / YS_FPS / YS_VIDEO_BITRATE)" >&2
 SEGMENT_SECONDS=$(( ${YS_STREAM_SEGMENT_HOURS:-11} * 3600 ))
 FONT="${YS_FONT:-/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf}"
 MONO="${YS_MONO_FONT:-/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf}"
@@ -167,14 +177,38 @@ fontsize=$(( H / 48 )):line_spacing=4:fontcolor=0xCFC6B8@0.75:x=40:y=$(( H / 24 
 fontsize=$(( H / 30 )):fontcolor=0xF4EEE4@0.9:x=(w-text_w)/2:y=H-${WAVE_H}-$(( H / 10 )):\
 shadowcolor=black@0.7:shadowx=2:shadowy=2[vout]"
 
+# Is the encoder keeping up? ffmpeg reports its speed every 10 s; below
+# real time for 30 s, viewers see buffering, so say so in the log (and
+# every 5 minutes while it lasts). Only with an ffmpeg that has -stats_period.
+PROGRESS=()
+if ffmpeg -hide_banner -h full 2>/dev/null | grep -q -- "-stats_period"; then
+    PROGRESS=(-stats_period 10 -progress pipe:1)
+fi
+watch_speed() {
+    awk -F= -v size="$SIZE" -v rate="$VBITRATE" -v fps="$FPS" '
+        $1 == "speed" {
+            s = $2; sub(/x/, "", s); s += 0
+            if (s > 0 && s < 0.95) {
+                slow++
+                if (slow % 30 == 3)
+                    printf "[stream] WARNING: the encoder runs at %.2fx real time (%s, %s fps, %s): the machine can'"'"'t keep up, so viewers see buffering. Lower YS_VIDEO_SIZE (e.g. 1280x720), YS_FPS (e.g. 24) or YS_VIDEO_BITRATE\n", s, size, fps, rate > "/dev/stderr"
+            } else {
+                if (slow >= 3) printf "[stream] the encoder is back to real time (%.2fx)\n", s > "/dev/stderr"
+                slow = 0
+            }
+            fflush("/dev/stderr")
+        }'
+}
+
 run_once() {
-    ffmpeg -hide_banner -loglevel warning -nostats \
+    ffmpeg -hide_banner -loglevel warning -nostats ${PROGRESS[@]+"${PROGRESS[@]}"} \
         "${AUDIO_IN[@]}" "${VIDEO_IN[@]}" \
         -filter_complex "$FILTER" -map "[vout]" -map "[aout]" \
         -c:v libx264 -preset veryfast "${TUNE[@]}" -b:v "$VBITRATE" -maxrate "$VBITRATE" \
         -bufsize "$VBITRATE" -g $(( FPS * 2 )) -keyint_min $(( FPS * 2 )) -pix_fmt yuv420p \
         -c:a aac -b:a 160k -ar 48000 -ac 2 \
-        -t "$SEGMENT_SECONDS" -f "${YS_STREAM_FORMAT:-flv}" "$TARGET"
+        -t "$SEGMENT_SECONDS" -f "${YS_STREAM_FORMAT:-flv}" "$TARGET" | watch_speed
+    return "${PIPESTATUS[0]}"
 }
 
 # Reconnect forever, with backoff on failures. A clean exit (segment ended)

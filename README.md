@@ -471,6 +471,14 @@ and prints the end of `logs/stream.log`.
 | stream | `stream/stream.sh`: the stream page (below) captured at 1080p30, limiter → -14 LUFS → RTMP; reconnects by itself (log: `logs/stream.log`) |
 | watchdog | restarts the engine on sustained silence or a stale heartbeat, optional push via ntfy (log: `logs/watchdog.log`) |
 
+**Twitch** instead of YouTube: put `YS_STREAM_URL=rtmp://live.twitch.tv/app/<your stream key>`
+in `.env` (the key is in the Twitch Creator Dashboard → Settings → Stream). For a
+Twitch target the stream defaults to 720p at 3 Mbit/s: most channels get no
+lower-quality versions, so every viewer receives the stream as sent, and 1080p
+at 4.5 Mbit/s buffers for many. If the machine can't encode in real time,
+`logs/stream.log` says so (`the encoder runs at 0.85x real time`) with what to
+lower (`YS_VIDEO_SIZE`, `YS_FPS`, `YS_VIDEO_BITRATE`).
+
 To keep it running after you close the terminal, start it inside `tmux`
 or `screen`. Test on an **unlisted** stream for a while before going public.
 
