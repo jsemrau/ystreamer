@@ -61,3 +61,35 @@ def test_trance_piece_has_breakdown_build_drop():
     assert "drums" in intro.active_roles() or "arp" in intro.active_roles()
     breakdown = arrange(piece, piece.sections[i], random.Random(0))
     assert "drums" not in breakdown.active_roles()
+
+
+def test_gated_saw_locks_gate_to_the_bar_and_varies_by_section():
+    import re
+
+    def params(section, energy, next_section=""):
+        c = ctx(section=section, next_section=next_section, bars=16, cps=138 / 240)
+        pad = render_layer("pad", c, P.PRESETS["pad"]["gated_saw"], energy)
+        gatetime = float(re.search(r'pF "gatetime" ([\d.]+)', pad).group(1))
+        pattern = int(re.search(r'pI "gatepat" (\d)', pad).group(1))
+        depth = float(re.search(r'pF "gatedepth" ([\d.]+)', pad).group(1))
+        return gatetime, pattern, depth
+
+    gatetime, _, _ = params("verse", 0.6)
+    assert abs(gatetime - 240 / 138) < 1e-3          # one bar at 138 BPM
+    assert params("breakdown", 0.3)[2] == 0          # ungated swell
+    assert params("build", 0.65, "chorus")[1] == 0   # straight chopper
+    assert params("chorus", 0.9)[1] in (2, 3)        # stutter gate in the drop
+    assert params("verse", 0.6)[1] == 1              # classic 1 0 1 1 0 1 0 1
+
+
+def test_synthdef_gate_patterns_are_16_steps():
+    import os
+    import re
+
+    with open(os.path.join(os.path.dirname(__file__), "..", "tidal", "synthdefs.scd")) as f:
+        text = f.read()
+    block = text[text.index("~ysGatePatterns = ["):text.index("];", text.index("~ysGatePatterns"))]
+    patterns = re.findall(r'"([01]+)"', block)
+    assert patterns[0] == "1011010110110101"
+    assert len(patterns) == 3 and all(len(p) == 16 for p in patterns)
+    assert "PulseDPW" in text and "LFPulse" in text  # clean chopper with a fallback

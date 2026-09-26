@@ -177,4 +177,51 @@ SynthDef(\ys_tbass, { |out, sustain = 0.2, pan, freq = 55, speed = 1|
     sig = (sig * 1.5).tanh * 0.8;
     OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
 }).add;
+
+// Real trance gate: sustained supersaw chords chopped by an amplitude gate
+// inside the synth (not separate notes). Two kinds of gate, both remapped
+// to 0..1 so closed really means silent:
+//   gatepat 0    - regular 16th chopper: PulseDPW (clean square), mul 2 so it
+//                  spans -1..1, then .range(0, 1); LFPulse fallback without
+//                  sc3-plugins
+//   gatepat 1..3 - stutter gates: an envelope built from a 16-step pattern,
+//                  retriggered every bar with Impulse, timeScale = gatetime
+// gatetime = one bar in seconds (Tidal sends 1/cps), so the gate locks to the
+// tempo; gatedepth 1 = full chop, 0 = no gate.
+~ysGatePatterns = [
+    "1011010110110101",   // 1: the classic 1 0 1 1 0 1 0 1, twice
+    "1110111011101110",   // 2: driving stutter, a gap before each beat
+    "1010101110101011"    // 3: off-beat skip with a push into the next bar
+];
+~ysGateEnv = { |pattern|
+    var levels = [0], times = [];
+    pattern.do { |step|
+        var on = if(step == $1) { 1 } { 0 };
+        // per 16th (1/16 of the bar): quick rise, hold, soft fall - no clicks
+        levels = levels ++ [on, on, 0];
+        times = times ++ [0.004, 0.036, 0.0225];
+    };
+    Env(levels, times)
+};
+SynthDef(\ys_gatesaw, { |out, sustain = 4, pan, freq = 440, speed = 1,
+                         gatetime = 1.74, gatepat = 1, gatedepth = 0.9|
+    var f = freq * speed;
+    var len = sustain.max(0.1);
+    var env = EnvGen.ar(Env([0, 1, 1, 0], [0.01, len, 0.08]), doneAction: 2);
+    var detune = [0.98, 0.99, 0.995, 1.0, 1.005, 1.01, 1.02];
+    var sig = Mix(LFSaw.ar(f * detune, { Rand(0, 2) } ! 7)) / 7;
+    var trig = Impulse.ar(gatetime.reciprocal);
+    // PulseDPW (sc3-plugins) has the cleanest square; without it, LFPulse
+    // (already 0..1) with a 2 ms lag so the edges don't click.
+    var chopper = if(\PulseDPW.asClass.notNil) {
+        \PulseDPW.asClass.ar(16 / gatetime, 0.5, 2).range(0, 1)
+    } {
+        Lag.ar(LFPulse.ar(16 / gatetime, 0, 0.5), 0.002)
+    };
+    var stutters = ~ysGatePatterns.collect { |p| EnvGen.ar(~ysGateEnv.(p), trig, timeScale: gatetime) };
+    var gate = Select.ar(gatepat.clip(0, ~ysGatePatterns.size), [chopper] ++ stutters);
+    sig = sig + (SinOsc.ar(f * 0.5) * 0.1);
+    sig = HPF.ar(sig, 90) * 0.5 * (1 - (gatedepth.clip(0, 1) * (1 - gate)));
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
 )

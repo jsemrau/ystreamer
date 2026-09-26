@@ -37,6 +37,7 @@ class HarmonyContext:
     fills: bool = True
     movement: str = "gentle"  # still | gentle | lively
     busy: int = 0             # other layers playing in this section (pads back off when busy)
+    cps: float = 0.5625       # tempo (cycles = bars per second); trance gates lock to it
 
     def __post_init__(self):
         if not self.pad_voicings:
@@ -140,11 +141,32 @@ def render_pad(ctx: HarmonyContext, preset: P.Preset, energy: float, use_custom:
     # Background, not foreground: level-matched to a 4-note chord, and 2.5 dB
     # further back when four or more other layers are playing.
     gain_db = _chord_gain_db(len(ctx.pad_voicings[0]), 4) - (2.5 if ctx.busy >= 4 else 0.0)
+    gate = _trance_gate_params(ctx, energy) if synth == "ys_gatesaw" else ""
     # Only the chord sequence is slowed; effects stay on the normal clock so
     # filter sweeps line up with the section.
     return (f'note (slow {ctx.cycles_per_chord} "<{chords}>") # s "{synth}" '
             f'# legato {_fmt(preset.legato)} {_fx(preset, energy, ctx=ctx, move=True, gain_db=gain_db)} '
-            f'# pan (slow 16 $ range 0.4 0.6 sine)')
+            f'# pan (slow 16 $ range 0.4 0.6 sine){gate}')
+
+
+def _trance_gate_params(ctx: HarmonyContext, energy: float) -> str:
+    """Controls for ys_gatesaw's built-in gate (see tidal/synthdefs.scd):
+    gatetime = one bar in seconds, so the gate locks to the tempo;
+    gatepat 0 = straight 16th chopper, 1 = classic 1011 0101, 2/3 = stutters;
+    gatedepth 1 = full chop, 0 = open (ungated)."""
+    gatetime = round(1.0 / ctx.cps, 4)
+    if ctx.section == "breakdown":
+        pattern, depth = 1, 0.0            # open: the chords swell ungated
+    elif ctx.is_build or ctx.section == "build":
+        pattern, depth = 0, 1.0            # straight chopper drives the build
+    elif _intensity(energy) == 2:
+        pattern, depth = 2 + ctx.seed % 2, 1.0  # a stutter gate for the drop
+    elif _intensity(energy) == 1:
+        pattern, depth = 1, 0.95
+    else:
+        pattern, depth = 1, 0.7
+    return f' # pF "gatetime" {_fmt(gatetime)} # pI "gatepat" {pattern} # pF "gatedepth" {_fmt(depth)}'
+
 
 
 _KEYS_RHYTHMS = [
