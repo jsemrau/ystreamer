@@ -16,7 +16,7 @@ import os
 import random
 import re
 import time
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import dataclass, field
 
 import config
@@ -24,7 +24,8 @@ import config
 from . import llm
 from .blocks import STYLE_SETTINGS, Block, blocks_for, find_block
 from .livecode import (ALL_WRAPPERS, BASS_WRAPPERS, CHOICE_SLOTS, DRUM_WRAPPERS, EDIT_OPS, FX_RANGES,
-                       LOCKED_SLOTS, MELODIC_WRAPPERS, PF_RANGES, ROLE_CHANNELS, ROLE_FX, Edit, EditError,
+                       FX_NOTES, LOCKED_SLOTS, MELODIC_WRAPPERS, PF_RANGES, ROLE_CHANNELS, ROLE_FX,
+                       WRAPPER_NOTES, Edit, EditError,
                        Program, Track, allowed_wrappers, apply_edit)
 from .narrator import clean_narration
 from .plan import plan_piece
@@ -81,6 +82,8 @@ class Performer:
         # Per track: how many edits the LLM made, and why the built-in performer
         # had to step in ("late", "invalid", "error", "resting").
         self.stats: Counter[str] = Counter()
+        # The last edits that were actually played this track, for the prompt.
+        self.recent: deque[str] = deque(maxlen=6)
 
     # ------------------------------------------------------------- tracks
 
@@ -93,7 +96,14 @@ class Performer:
                  + (f" (built-in: {fallbacks})" if fallbacks else ""))
         self.stats.clear()
 
+    def applied(self, edit: Edit) -> None:
+        """Called by the engine once an edit is actually playing."""
+        who = "you" if edit.source == "LLM" else "the built-in performer"
+        self.recent.append(f"- {edit.describe()} ({who}, {self.state.phase})"
+                           + (f": {edit.reason}" if edit.reason else ""))
+
     def new_track(self, previous: Track | None) -> Track:
+        self.recent.clear()
         if previous is not None:
             self._report_stats()
         if self.locked_style is None:
@@ -121,17 +131,22 @@ class Performer:
     def _advance_phase(self, program: Program) -> None:
         st = self.state
         active = program.active_roles()
+        before = st.phase
+        why = ""
         if st.phase == "build" and len(active) >= st.target_lines:
-            st.phase, st.edits_in_phase = "groove", 0
+            st.phase, why = "groove", f"{len(active)} lines playing, the target for this track"
         elif st.phase == "groove" and st.edits_in_phase >= st.groove_edits:
-            st.phase, st.edits_in_phase = "breakdown", 0
+            st.phase, why = "breakdown", f"{st.edits_in_phase} edits of groove, time for contrast"
         elif st.phase == "breakdown" and st.edits_in_phase >= 4:
-            st.phase, st.edits_in_phase = "rebuild", 0
+            st.phase, why = "rebuild", "the breakdown has had 4 edits"
         elif st.phase == "rebuild" and not any(program.lines.get(r) and program.lines[r].muted
                                                for r in st.muted_for_breakdown):
-            st.phase, st.edits_in_phase = "groove2", 0
+            st.phase, why = "groove2", "everything muted for the breakdown is back"
         elif st.phase == "groove2" and st.edits_in_phase >= st.groove_edits:
-            st.phase, st.edits_in_phase = "outro", 0
+            st.phase, why = "outro", f"{st.edits_in_phase} edits of the second peak"
+        if st.phase != before:
+            st.edits_in_phase = 0
+            self.log(f"🧭 Arc: {before} → {st.phase} ({why})")
 
     def track_finished(self, program: Program) -> bool:
         return self.state.phase == "outro" and len(program.active_roles()) <= 1 and self.state.edits_in_phase > 0
@@ -330,7 +345,7 @@ class Performer:
             try:
                 reply = llm.converse("Performer", self.model_id, system, prompt, log=self.log,
                                      asks=asks if attempt == 1 else "corrected edit", show_full=self.show_llm,
-                                     max_tokens=300, temperature=0.7, timeout=max(2.0, remaining),
+                                     max_tokens=400, temperature=0.7, timeout=max(2.0, remaining),
                                      schema=schema)
                 if time.monotonic() > deadline + 1:
                     raise llm.LLMError("reply came after the edit was due")
@@ -368,13 +383,15 @@ class Performer:
         decodes under it, so only real block, role, slot, effect and wrapper
         names can come out; numbers are still range-checked afterwards."""
         text = {"type": "string", "maxLength": 80}
-        extra = {"reason": {"type": "string", "maxLength": 80},
-                 "narration": {"type": "string", "maxLength": 160}}
+        note = {"type": "string", "maxLength": 160}
 
         def variant(op: str, **props) -> dict:
-            properties = {"reason": text, "op": {"const": op}, **props, "narration": extra["narration"]}
+            # What it hears, then why, then the move: the model explains
+            # itself before it commits.
+            properties = {"listening": note, "reason": note, "op": {"const": op}, **props,
+                          "narration": {"type": "string", "maxLength": 160}}
             return {"type": "object", "properties": properties,
-                    "required": ["reason", "op", *props], "additionalProperties": False}
+                    "required": ["listening", "reason", "op", *props], "additionalProperties": False}
 
         options = []
         addable = [b.name for b in blocks_for(self.style) if b.role not in program.lines]
@@ -415,8 +432,9 @@ class Performer:
         name = str(data.get("name", "")).strip()
         value = _clamp_value(op, name, str(data.get("value", "")).strip(), program)
         edit = Edit(op, role=role, name=name, value=value,
-                    reason=" ".join(str(data.get("reason", "")).split())[:160],
-                    narration=clean_narration(data.get("narration")))
+                    reason=" ".join(str(data.get("reason", "")).split())[:200],
+                    narration=clean_narration(data.get("narration")),
+                    listening=" ".join(str(data.get("listening", "")).split())[:200])
         if op == "add":
             block = find_block(self.style, str(data.get("block", "")))
             if block is None:
@@ -444,8 +462,11 @@ class Performer:
             addable=json.dumps(addable), max_lines=self.settings["max_lines"],
             melodic_wrappers=json.dumps(MELODIC_WRAPPERS), drum_wrappers=json.dumps(DRUM_WRAPPERS),
             bass_wrappers=json.dumps(BASS_WRAPPERS), role_fx=json.dumps(ROLE_FX),
-            fx=json.dumps({k: list(v) for k, v in FX_RANGES.items()}),
-            controls=json.dumps({k: list(v) for k, v in PF_RANGES.items()}),
+            examples="\n".join(f"- {e}" for e in PHASE_EXAMPLES[self.state.phase]),
+            recent="\n".join(self.recent) or "(none yet: this is the start of the track)",
+            wrapper_notes="\n".join(f"- `{w}`: {n}" for w, n in WRAPPER_NOTES.items()),
+            fx_notes="\n".join(f"- `{n}` [{lo:g}-{hi:g}]: {FX_NOTES[n]}"
+                                for n, (lo, hi) in {**FX_RANGES, **PF_RANGES}.items()),
         )
 
 
@@ -481,6 +502,41 @@ PHASE_HELP = {
     "rebuild": "Bring the muted lines back (unmute), building tension.",
     "groove2": "Second peak: revise and intensify, then start easing off.",
     "outro": "Outro: remove or mute lines one by one; the track is ending.",
+}
+
+
+# A few example moves per phase: local models copy good examples far more
+# reliably than they follow rules.
+PHASE_EXAMPLES = {
+    "build": [
+        "Start with the most characteristic line of the style alone for a while (add the beat, or the acid).",
+        "Add a line in a free register: bass under drums, then keys or chords, the melody last.",
+        "Before adding the next line, give the new one a tweak so it sits (e.g. lpf on keys to 2500).",
+    ],
+    "groove": [
+        "Change one or two notes of the melody so the phrase answers itself (\"0 ~ 2 4\" -> \"0 ~ 2 5\").",
+        "Let a filter breathe: set_fx lpf to (slow 16 $ range 1200 4000 sine) on the keys.",
+        "Wrap the melody in off 0.25 (|+ n 12) for a call-and-answer echo, then take it off a few edits later.",
+        "Open the acid knob step by step across several edits to build tension.",
+    ],
+    "breakdown": [
+        "Mute the beat first; the space it leaves is the point.",
+        "Make what remains bigger: more room on the keys or chords, slower filter sweeps.",
+        "Thin the melody (more ~ rests) so the breakdown breathes.",
+    ],
+    "rebuild": [
+        "Bring the bass back first, then the beat, so the drop lands.",
+        "Close a filter slightly before the beat returns, then open it with the beat.",
+    ],
+    "groove2": [
+        "Push further than the first groove: a busier hi-hat pattern, a higher melody, the acid more open.",
+        "Add a wrapper that creates motion (every 4 (fast 2) on the drums) for the peak.",
+        "Near the end of this phase start easing off: darken filters, sparser patterns.",
+    ],
+    "outro": [
+        "Remove the busiest lines first; keep the texture and one melodic line to the end.",
+        "Darken what's left with a lower lpf as it fades out.",
+    ],
 }
 
 
