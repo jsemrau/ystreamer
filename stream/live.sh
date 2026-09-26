@@ -9,8 +9,8 @@
 #   - the stream page (stream/ui_server.py) on http://127.0.0.1:8765, to
 #     preview what the stream shows, even before YouTube is set up
 #   - the audio sink the stream captures (stream/setup_audio.sh)
-#   - the engine (orchestrator.py --resume ...); if it stops or crashes it is
-#     restarted and resumes the saved track
+#   - the engine (orchestrator.py ...); if it stops or crashes it is
+#     restarted with --resume and picks up the track that was playing
 #   - the stream (stream/stream.sh: the stream page, captured and sent to
 #     YouTube; it reconnects by itself), output in logs/stream.log
 #   - the watchdog (stream/watchdog.py): restarts the engine on sustained
@@ -47,15 +47,18 @@ stop() {
 trap stop INT TERM
 
 # The engine, restarted whenever it exits (the watchdog stops it when the
-# stream goes silent or the engine hangs). --resume picks up the saved track.
+# stream goes silent or the engine hangs). It starts fresh, with your theme;
+# a restart adds --resume to pick up the track that was playing.
 (
     trap 'exit 0' TERM
+    RESUME=()
     while true; do
-        "$PY" orchestrator.py --resume --llm local --judge jevtypesafe "$@" &
+        "$PY" orchestrator.py ${RESUME[@]+"${RESUME[@]}"} --llm local --judge jevtypesafe "$@" &
         echo $! > "$PIDFILE"
         wait $!
         status=$?
-        echo "[live] engine exited ($status); restarting in 5 s" >&2
+        echo "[live] engine exited ($status); restarting in 5 s, resuming the track" >&2
+        RESUME=(--resume)
         sleep 5
     done
 ) & PIDS+=($!)
