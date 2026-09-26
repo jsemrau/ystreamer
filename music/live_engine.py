@@ -10,6 +10,7 @@ edited line marked and the performer's reason as a code comment.
 from __future__ import annotations
 
 import concurrent.futures
+import copy
 import math
 import threading
 import time
@@ -90,6 +91,29 @@ class LiveEngine:
                      groove_complexity=round(sum(values) / len(values), 2) if values else None,
                      peak_complexity=max(values) if values else None,
                      code=[program.statement(r) for r in program.lines], program=program.to_dict())
+
+    def _follow_harmony(self, program: Program) -> Program:
+        """Change the progression when the arc reaches a part with its own
+        (e.g. the breakdown), starting on its first chord at this bar."""
+        wanted = self.performer.harmony_for_phase(program.track)
+        if not wanted or wanted[1]["degrees"] == program.track.degrees:
+            return program
+        part, prog = wanted
+        new = copy.deepcopy(program)
+        new.track.degrees = list(prog["degrees"])
+        new.track.start_cycle = math.floor(self.clock.cycle() + 0.25)
+        if not self._send([new.statement(r) for r in new.lines]):
+            return program
+        label = {"main": "back to the main progression", "breakdown": "the breakdown's own progression",
+                 "peak": "a lift for the peak"}.get(part, part)
+        self.log(f"🎼 Harmony: {prog['name']} ({label})")
+        runtime.append_thought(f"🎼 harmony: {prog['name']} ({label})")
+        runtime.ui_event("director", what="Harmony", model="plan", decision=prog["name"],
+                         reason=f"{label}, from the Director's plan for this track")
+        self._record("harmony", **self._track_info(new), part=part, progression=prog["name"],
+                     degrees=new.track.degrees, start_cycle=new.track.start_cycle)
+        self._publish(new, None, f"harmony: {prog['name']}")
+        return new
 
     def _report_complexity(self) -> None:
         values, self.groove_complexity = self.groove_complexity, []
@@ -264,6 +288,7 @@ class LiveEngine:
             self.log(f"[Live] Resuming '{program.track.title}' ({len(program.lines)} lines)")
         else:
             program = Program(self.performer.new_track(None))
+        program.track.start_cycle = 0          # resetCycles below: the progression restarts too
         self._record_track_start(program, resumed=bool(resume_state and "program" in resume_state))
         self.clock.reset(program.track.cps)
         self._send(["hush", program.tempo_statement(), "resetCycles"])
@@ -347,6 +372,7 @@ class LiveEngine:
                 previous = program.track
                 track = self.performer.new_track(previous)
                 silence = [f"d{ROLE_CHANNELS[r]} $ silence" for r in program.lines]
+                track.start_cycle = math.floor(self.clock.cycle() + 0.25)   # first chord on this bar
                 program = self.program = Program(track)
                 self._send(silence + [program.tempo_statement()])
                 self.clock.set_cps(track.cps)
@@ -357,6 +383,7 @@ class LiveEngine:
             # in), so the wait until the next edit already uses the new phase's
             # pace, the same one the performer's deadline uses.
             self.performer.advance_phase(program)
+            program = self.program = self._follow_harmony(program)
             next_cycle += self.performer.edit_bars_now()
         self.performer.report_stats()
         self._pool.shutdown(wait=False, cancel_futures=True)

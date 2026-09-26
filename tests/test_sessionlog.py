@@ -99,3 +99,30 @@ def test_a_full_track_offers_no_blocks_to_add():
     prompt = performer._prompt(program)
     assert "none right now: 6 lines play" in prompt
     assert '"pluck_seq"' not in prompt
+
+
+def test_the_harmony_moves_with_the_arc(tmp_path):
+    _, log = _session(tmp_path, tracks=1)
+    records = [json.loads(line) for line in open(log.path, encoding="utf-8")]
+    changes = [r for r in records if r["type"] == "harmony"]
+    parts = [c["part"] for c in changes]
+    assert "breakdown" in parts and "peak" in parts                 # its own chords for each
+    start = next(r for r in records if r["type"] == "track_start")
+    names = {start["program"]["track"]["progressions"][p]["name"] for p in ("main", "breakdown", "peak")}
+    assert len(names) == 3                                          # three different progressions
+    for c in changes:                                               # each begins on its first chord
+        assert c["start_cycle"] == round(c["start_cycle"]) and c["start_cycle"] > 0
+
+
+def test_consecutive_tracks_dont_repeat_progressions():
+    import random as _r
+
+    performer = Performer(_r.Random(3), style="trance", log=lambda *_: None)
+    from music.director import Director
+
+    performer.director = Director(None, _r.Random(3), style="trance", log=lambda *_: None)
+    track, seen = None, []
+    for _ in range(5):
+        track = performer.new_track(track)
+        seen.append(track.progressions["main"]["name"])
+    assert len(set(seen)) == 5

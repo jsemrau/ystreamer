@@ -170,12 +170,30 @@ class Performer:
         from .theory import PROGRESSIONS_BY_NAME
 
         degrees = list(PROGRESSIONS_BY_NAME[piece.progression].degrees)
+        # The harmony moves with the arc: the main progression, its own for
+        # the breakdown, another for the peak (from the Director's plan).
+        progressions = {"main": {"name": piece.progression, "degrees": degrees}}
+        for part, section in (("breakdown", "breakdown"), ("peak", "chorus")):
+            name = piece.section_progressions.get(section)
+            if name in PROGRESSIONS_BY_NAME and name != piece.progression:
+                progressions[part] = {"name": name, "degrees": list(PROGRESSIONS_BY_NAME[name].degrees)}
         self.state = SetState(tracks_played=self.state.tracks_played + (1 if previous else 0),
                               target_lines=self.rng.randint(max(3, self.settings["max_lines"] - 1),
                                                             self.settings["max_lines"]),
                               groove_edits=self.rng.randint(6, 10))
         return Track(title=piece.title, style=self.style, key=piece.key, bpm=piece.bpm,
-                     degrees=degrees, bars_per_chord=piece.cycles_per_chord)
+                     degrees=degrees, bars_per_chord=piece.cycles_per_chord, progressions=progressions)
+
+    # Which progression plays in each phase of the arc.
+    HARMONY_PARTS = {"build": "main", "groove": "main", "breakdown": "breakdown", "rebuild": "breakdown",
+                     "groove2": "peak", "outro": "main"}
+
+    def harmony_for_phase(self, track: Track) -> tuple[str, dict] | None:
+        """(part, {"name", "degrees"}) for the current phase, or None when the
+        track has no separate progression for it."""
+        part = self.HARMONY_PARTS.get(self.state.phase, "main")
+        chosen = track.progressions.get(part) or track.progressions.get("main")
+        return (part, chosen) if chosen else None
 
     # -------------------------------------------------------------- phases
 

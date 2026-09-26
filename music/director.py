@@ -23,7 +23,7 @@ from . import presets as P
 from .melody import STEPS_PER_CYCLE
 from .plan import (STYLES, Arrangement, Piece, Section, arrange, describe_options, plan_piece,
                    validate_arrangement, validate_piece)
-from .theory import Key
+from .theory import Key, progressions_for
 
 PROMPTS_DIR = os.path.join(config.REPO_DIR, "prompts")
 
@@ -152,6 +152,16 @@ class Director:
                     piece.progression = fallback.progression
                     if Key.parse(piece.key).mode != Key.parse(fallback.key).mode:
                         piece.key = fallback.key
+                if piece.progression in self.recent_progressions:
+                    # Don't let every track sit on the same chords.
+                    mode = Key.parse(piece.key).mode
+                    fresh = [p.name for p in progressions_for(mode) if p.name not in self.recent_progressions]
+                    if fresh:
+                        choice = fallback.progression if fallback.progression in fresh else self.rng.choice(fresh)
+                        notes.append(f"progression {piece.progression} was used in the last "
+                                     f"{len(self.recent_progressions)} tracks; using {choice}")
+                        piece.progression = choice
+                _distinct_sections(piece, self.rng)
                 if notes:
                     self.log(f"[Director] corrected LLM piece plan: {'; '.join(notes)}")
                 piece.narration = clean_narration(data.get("narration"))
@@ -266,3 +276,14 @@ def degrees_to_cycles(raw, key: Key, cycles: int, low: int = 0) -> list[str]:
                 rendered.append(str(degree_note(d)))
         out.append("[" + " ".join(rendered) + "]")
     return out
+
+
+def _distinct_sections(piece: Piece, rng) -> None:
+    """The breakdown and the chorus (the peak) get progressions of their own,
+    different from the main one, so the harmony moves with the arc."""
+    mode = Key.parse(piece.key).mode
+    others = [p.name for p in progressions_for(mode) if p.name != piece.progression]
+    rng.shuffle(others)
+    for part in ("breakdown", "chorus"):
+        if piece.section_progressions.get(part) in (None, piece.progression) and others:
+            piece.section_progressions[part] = others.pop()
