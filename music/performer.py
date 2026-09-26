@@ -174,6 +174,9 @@ class Performer:
 
     # -------------------------------------------------------------- phases
 
+    def advance_phase(self, program: Program) -> None:
+        self._advance_phase(program)
+
     def _advance_phase(self, program: Program) -> None:
         st = self.state
         active = program.active_roles()
@@ -788,6 +791,11 @@ class Performer:
             used_wrappers.update(line.wrappers)
             used_fx.update(fx_ok + [n for n, _ in line.pfs])
         addable = {b.name: b.role for b in blocks_for(self.style) if b.role not in program.lines}
+        full = len(program.active_roles()) >= self.settings["max_lines"]
+        # A full track can't take another line: say so, rather than offer blocks
+        # a model (one that doesn't decode under the schema) will try to add.
+        addable_text = (f"none right now: {len(program.active_roles())} lines play, the most this style allows "
+                        "(remove or mute one first)") if full else json.dumps(addable)
         template = _load_prompt("performer.md")
         return template.format(
             theme=self.theme or "chill, hypnotic, evolving", style=self.style,
@@ -796,7 +804,7 @@ class Performer:
             code="\n".join(program.code_lines()),
             lines="\n".join(f'"{r}": {json.dumps(e, separators=(",", ":"))}' for r, e in editable.items())
             or "(no lines yet)",
-            addable=json.dumps(addable), max_lines=self.settings["max_lines"],
+            addable=addable_text, max_lines=self.settings["max_lines"],
             examples=("(compact prompt)" if self._compact
                       else "\n".join(f"- {e}" for e in PHASE_EXAMPLES[self.state.phase])),
             recent="\n".join(self.recent) or "(none yet: this is the start of the track)",

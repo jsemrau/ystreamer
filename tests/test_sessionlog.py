@@ -72,3 +72,27 @@ def test_complexity_is_logged(tmp_path):
     engine, log = _session(tmp_path, tracks=1)
     edits = [json.loads(line) for line in open(log.path, encoding="utf-8") if '"type": "edit"' in line]
     assert max(e["complexity_after"] for e in edits) >= 6
+
+
+def test_the_first_groove_edit_waits_the_grooves_interval_not_the_builds(tmp_path):
+    from music.blocks import STYLE_SETTINGS
+
+    _, log = _session(tmp_path, tracks=1)
+    edits = [json.loads(line) for line in open(log.path, encoding="utf-8") if '"type": "edit"' in line]
+    i = next(i for i, e in enumerate(edits) if e["phase"] == "groove")
+    gap = edits[i]["cycle"] - edits[i - 1]["cycle"]
+    assert round(gap) == STYLE_SETTINGS["trance"]["edit_bars"]
+    assert round(edits[1]["cycle"] - edits[0]["cycle"]) == 4       # the build itself stays quick
+
+
+def test_a_full_track_offers_no_blocks_to_add():
+    import random as _r
+
+    performer = Performer(_r.Random(0), style="hardcore", log=lambda *_: None)
+    from test_livecode import _program_with
+
+    program = _program_with("hardcore", "gabber_kick", "hats", "rumble", "acid", "stab", "hoover")
+    assert len(program.active_roles()) == performer.settings["max_lines"]
+    prompt = performer._prompt(program)
+    assert "none right now: 6 lines play" in prompt
+    assert '"pluck_seq"' not in prompt
