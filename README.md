@@ -407,6 +407,17 @@ intimate late-night radio voice, and shown as a subtitle on the stream:
 
 ## Going live on YouTube
 
+**Quickest:** put `YT_STREAM_KEY` (and `LLAMA_GGUF_MODEL`, `YS_JEV_API_KEY`) in
+`.env`, then
+
+```bash
+stream/live.sh                      # local model performs, jevtypesafe judges; Ctrl-C stops
+stream/live.sh --style darkwave     # extra flags go to orchestrator.py
+```
+
+It starts the audio sink, the engine and the stream in one terminal, no
+systemd needed. For a 24/7 setup that survives reboots, use the services:
+
 1. In YouTube Studio → **Go live** → **Stream**, copy the stream key into
    `.env` as `YT_STREAM_KEY` (see `.env.example`). Optionally set
    `YS_STREAM_BG` to a background image or looping video.
