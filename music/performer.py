@@ -38,6 +38,7 @@ ROLE_ORDER = {
     "ambient": ["chords", "texture", "keys", "lead", "bass", "beat"],
     "piano": ["keys", "lead", "bass", "chords", "texture"],
     "downtempo": ["beat", "keys", "bass", "lead", "texture"],
+    "darkwave": ["bass", "beat", "chords", "lead", "keys", "texture"],
     "techno": ["beat", "perc", "bass", "acid", "chords", "texture", "lead"],
     "hardcore": ["beat", "perc", "acid", "lead", "chords", "texture"],
 }
@@ -303,7 +304,8 @@ class Performer:
             value = rng.choice([v for v in CHOICE_SLOTS[slot] if v != current])
             return Edit("set_pattern", role=role, name=slot, value=value, reason=f"switch the {slot} pattern")
         variants = [v for v in (block.patterns.get(slot, []) if block else []) if v != current]
-        numbers = [m for m in re.finditer(r"-?\d+", current)]
+        # Notes only: not the counts after * ! / @ (e.g. the 16 in "0*16").
+        numbers = [m for m in re.finditer(r"(?<![*!/@%\d.])-?\d+", current)]
         if not line.drums and numbers and block and block.pool and (not variants or rng.random() < 0.6):
             m = rng.choice(numbers)
             new_num = str(rng.choice([n for n in block.pool if str(n) != m.group()] or block.pool))

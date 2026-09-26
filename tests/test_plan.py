@@ -105,6 +105,8 @@ def test_theme_selects_style():
     assert style_from_theme("hardcore techno") == "hardcore"
     assert style_from_theme("dark techno in a berlin basement") == "techno"
     assert style_from_theme("rotterdam gabber") == "hardcore"
+    assert style_from_theme("cold electro dark wave") == "darkwave"
+    assert style_from_theme("berlin coldwave, post-punk night") == "darkwave"
 
 
 def test_fast_styles_plan_fast_tempos():

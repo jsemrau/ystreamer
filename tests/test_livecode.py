@@ -510,3 +510,15 @@ def test_judge_unavailable_plays_the_llms_idea(monkeypatch):
     monkeypatch.setattr(llm, "decide", down)
     edit = performer.next_edit(program)
     assert edit.source == "LLM, judged"
+
+
+def test_one_note_changes_never_touch_repeat_counts():
+    performer = Performer(random.Random(0), style="darkwave", log=lambda *_: None)
+    program = _program_with("darkwave", "sequencer_bass")
+    line = program.lines["bass"]
+    for seed in range(40):
+        performer.rng = random.Random(seed)
+        line.patterns["rhythm"] = "[0 0 7 0]*4"
+        edit = performer._pattern_edit("bass", line)
+        if edit and edit.name == "rhythm" and "*" in edit.value and edit.value.startswith("["):
+            assert edit.value.endswith("]*4"), edit.value

@@ -235,6 +235,33 @@ def _techno_blocks(hard: bool) -> list[Block]:
     ]
 
 
+# ------------------------------------------------------------- darkwave
+# Cold electro / coldwave / minimal synth: a stiff drum machine, a 16th-note
+# sequencer bass, a cold string-machine bed, arpeggios lost in delay.
+BLOCKS["darkwave"] = [
+    Block("drum_machine", "beat", 's "[{kick}, {snare}, {hats}]"',
+          {"kick": ["808bd ~ 808bd ~", "808bd*4", "808bd ~ ~ 808bd ~ ~ 808bd ~"],
+           "snare": ["~ 808sd ~ 808sd", "~ cp ~ cp", "~ 808sd ~ [808sd cp]"],
+           "hats": ["808hc*16", "808hc*8", "[~ 808hc]*8", "[808hc 808hc 808oh 808hc]*4"]},
+          fx=[["gain", "0.95"], ["room", "0.2"], ["lpf", "7000"]], drums=True),
+    _melodic("sequencer_bass", "bass", "ys_tbass", "rhythm",
+             ["0*16", "[0 0 7 0]*4", "[0 ~ 0 7]*4", "[0 0 0 12]*4"],
+             [["gain", "1.0"], ["lpf", "900"], ["legato", "0.5"]], octave=" - 24", pool=[0, 7, 12, -2, 3]),
+    Block("cold_strings", "chords", 'n (scale "{mode}" "<{chords}>" {root}) # s "{synth}"',
+          {"synth": ["ys_strings", "ys_choir", "ys_organ"]},
+          fx=[["gain", "0.68"], ["legato", "1.05"], ["lpf", "1800"], ["room", "0.5"], ["size", "0.8"]]),
+    _melodic("cold_arp", "lead", "ys_pluck", "melody",
+             ["0 2 4 7 4 2 0 2", "[0 4 7 4]*2", "7 4 2 0 ~ 0 2 4", "0 ~ 7 ~ 3 ~ 7 ~"],
+             [["gain", "0.9"], ["lpf", "3500"], ["room", "0.4"], ["delay", "0.35"], ["delaytime", "0.375"],
+              ["delayfeedback", "0.45"]], octave=" + 12", pool=[0, 2, 3, 4, 5, 7, 12]),
+    _melodic("glass_line", "keys", "ys_glass", "melody",
+             ["4 ~ ~ ~ 2 ~ ~ ~", "7 ~ ~ 4 ~ ~ 2 ~", "~ ~ 0 ~ ~ ~ 3 ~"],
+             [["gain", "0.9"], ["room", "0.6"], ["delay", "0.4"], ["delaytime", "0.5"],
+              ["delayfeedback", "0.4"]], octave=" + 12", pool=[0, 2, 3, 4, 7]),
+    Block("static", "texture", 'n (scale "{mode}" "<{roots}>" {root} - 12) # s "ys_air"', {},
+          fx=[["gain", "0.85"], ["hpf", "400"], ["legato", "1.3"], ["room", "0.8"]]),
+]
+
 BLOCKS["techno"] = _techno_blocks(hard=False)
 BLOCKS["hardcore"] = _techno_blocks(hard=True)
 
@@ -247,6 +274,7 @@ STYLE_SETTINGS = {
     "ambient": {"edit_bars": 8, "max_lines": 5, "openers": [["chords"], ["texture"], ["keys"]]},
     "piano": {"edit_bars": 8, "max_lines": 4, "openers": [["keys"]]},
     "downtempo": {"edit_bars": 8, "max_lines": 5, "openers": [["beat"], ["keys"]]},
+    "darkwave": {"edit_bars": 12, "max_lines": 6, "openers": [["bass"], ["beat"], ["bass", "beat"]]},
     "techno": {"edit_bars": 16, "max_lines": 6, "openers": [["beat"], ["beat", "perc"]]},
     "hardcore": {"edit_bars": 16, "max_lines": 5, "openers": [["beat"]]},
 }
