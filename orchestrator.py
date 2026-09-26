@@ -366,7 +366,10 @@ def run_engine(args) -> None:
         # Launch now so the model loads while SuperCollider and Tidal boot.
         audio_stack.ensure_local_llm_server(wait=False)
 
-    print(audio_stack.start_superdirt())
+    superdirt = audio_stack.start_superdirt()
+    print(superdirt)
+    if superdirt.startswith("Error"):
+        sys.exit(1)
     tidal = audio_stack.TidalSession()
     print(tidal.start())
     if tidal.boot_error:
