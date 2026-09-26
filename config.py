@@ -8,25 +8,30 @@ import os
 
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 
-try:
-    from dotenv.parser import parse_stream
+def load_env_file(path: str) -> None:
+    """Load a .env file into os.environ. .env wins over the shell, but an
+    empty entry (e.g. a leftover `ANTHROPIC_API_KEY=` from .env.example,
+    before or after the real one) never wipes out a real value. ${VAR},
+    $VAR and ~ are expanded like python-dotenv does."""
+    try:
+        from dotenv.parser import parse_stream
+    except ImportError:  # python-dotenv is optional for the engine/tests
+        if os.path.exists(path):
+            print("[config] WARNING: python-dotenv isn't installed, so .env is NOT loaded "
+                  "(./venv/bin/pip install python-dotenv)")
+        return
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        for binding in parse_stream(f):
+            if binding.error:
+                print(f"[config] WARNING: .env line {binding.original.line} can't be read "
+                      "(unclosed quote or stray character?), so it is ignored")
+            elif binding.key and binding.value and binding.value.strip():
+                os.environ[binding.key] = os.path.expanduser(os.path.expandvars(binding.value.strip()))
 
-    # .env wins over the shell, but an empty entry (e.g. a leftover
-    # `ANTHROPIC_API_KEY=` from .env.example, before or after the real one)
-    # never wipes out a real value.
-    _env_file = os.path.join(REPO_DIR, ".env")
-    if os.path.exists(_env_file):
-        with open(_env_file, encoding="utf-8") as _f:
-            for _binding in parse_stream(_f):
-                if _binding.error:
-                    print(f"[config] WARNING: .env line {_binding.original.line} can't be read "
-                          "(unclosed quote or stray character?), so it is ignored")
-                elif _binding.key and _binding.value and _binding.value.strip():
-                    os.environ[_binding.key] = _binding.value.strip()
-except ImportError:  # python-dotenv is optional for the engine/tests
-    if os.path.exists(os.path.join(REPO_DIR, ".env")):
-        print("[config] WARNING: python-dotenv isn't installed, so .env is NOT loaded "
-              "(./venv/bin/pip install python-dotenv)")
+
+load_env_file(os.path.join(REPO_DIR, ".env"))
 
 
 def _env(name: str, default: str) -> str:
