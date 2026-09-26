@@ -66,7 +66,42 @@ def test_technical_text_is_not_spoken():
     logs = []
     n = N.Narrator(log=logs.append, mode="sections", speak=False)
     n.say("Adding the epiano_lead at 0.5 energy")
-    assert logs == []
+    assert logs == ['🗣  (not spoken: numbers or technical words) "Adding the epiano_lead at 0.5 energy"']
+
+
+def test_dropped_lines_say_why(monkeypatch):
+    logs = []
+    n = N.Narrator(log=logs.append, mode="sections", speak=False)
+    n.available = True                      # pretend a voice is set up, without starting the worker
+    n._last_spoken = N.time.monotonic()     # a line was just spoken
+    n.say("Here comes the rain again.", kind="section")
+    assert "skipped: last line" in logs[-1]
+    n.say("Now playing: Neon Rain.", kind="piece")   # track intros are never skipped for the gap
+    assert logs[-1] == '🗣  "Now playing: Neon Rain."'
+
+
+def test_relative_voice_path_resolves_against_the_repo(tmp_path, monkeypatch):
+    import config
+
+    monkeypatch.chdir(tmp_path)
+    n = N.Narrator(log=lambda *_: None, mode="off", voice="voices/x.onnx", speak=False)
+    assert n.voice == f"{config.REPO_DIR}/voices/x.onnx"
+
+
+def test_env_values_expand_variables(tmp_path, monkeypatch):
+    import os
+
+    import config
+
+    env = tmp_path / ".env"
+    env.write_text("YS_TEST_VOICE=${HOME}/voices/v.onnx\nYS_TEST_EMPTY=\nYS_TEST_EMPTY=\n")
+    monkeypatch.setenv("HOME", "/home/someone")
+    monkeypatch.setenv("YS_TEST_EMPTY", "kept")
+    monkeypatch.delenv("YS_TEST_VOICE", raising=False)
+    config.load_env_file(str(env))
+    assert os.environ["YS_TEST_VOICE"] == "/home/someone/voices/v.onnx"
+    assert os.environ["YS_TEST_EMPTY"] == "kept"
+    monkeypatch.delenv("YS_TEST_VOICE")
 
 
 def test_engine_narrates_piece_start_and_sections(monkeypatch):

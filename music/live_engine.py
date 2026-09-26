@@ -95,7 +95,11 @@ class LiveEngine:
         self.log(f"\n♪ New track: {track.title}  ·  {track.key}  ·  {track.bpm:g} BPM  ·  {track.style}")
         runtime.append_thought(f"♪ {track.title} · {track.key} · {track.bpm:g} BPM · {track.style}")
         if self.narrator is not None:
-            line = self.performer.track_narration
+            from .narrator import clean_narration
+
+            # The Director's line is checked on its own, so a line it can't
+            # speak (e.g. with a number in it) never takes the title with it.
+            line = clean_narration(self.performer.track_narration)
             self.narrator.say(f"Now playing: {track.title}. {line}".strip(), kind="piece")
 
     def _on_arc(self, before: str, after: str, why: str) -> None:

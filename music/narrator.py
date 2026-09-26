@@ -69,6 +69,9 @@ class Narrator:
         if self.mode not in MODES:
             self.mode = "sections"
         self.voice = voice if voice is not None else os.getenv("YS_TTS_VOICE", "")
+        if self.voice and not os.path.isabs(self.voice) and not os.path.exists(self.voice):
+            # A relative path in .env means relative to the repo, wherever we start from.
+            self.voice = os.path.join(config.REPO_DIR, self.voice)
         self.tts_cmd = os.getenv("YS_TTS_CMD", "")
         # warm = low, intimate late-night radio voice (default); calm = clean and soft
         self.style = os.getenv("YS_VOICE_STYLE", "warm").lower()
@@ -85,6 +88,7 @@ class Narrator:
         self._busy = threading.Event()
         # speak=False: only print the lines (dry runs); no audio, no setup hints.
         self.available = self._check() if speak else False
+        self._speak = speak
         if self.available:
             threading.Thread(target=self._worker, daemon=True, name="narrator").start()
 
@@ -117,19 +121,30 @@ class Narrator:
         return self.mode == "sections" or (self.mode == "pieces" and kind == "piece")
 
     def say(self, text: str, kind: str = "section") -> None:
+        if not self.wants(kind):
+            return
+        raw = " ".join(str(text or "").split())
         text = clean_narration(text)
-        if not text or not self.wants(kind):
+        if not text:
+            if raw:
+                self.log(f'🗣  (not spoken: numbers or technical words) "{raw[:120]}"')
             return
-        self.log(f'🗣  "{text}"')
-        runtime.append_thought(f"🗣  {text}")
         if not self.available:
+            # speak=False is a dry run: just print the line.
+            self.log(f'🗣  (voice off) "{text}"' if self._speak else f'🗣  "{text}"')
+            runtime.append_thought(f"🗣  {text}")
             return
-        if time.monotonic() - self._last_spoken < self.min_gap and kind != "piece":
+        since = time.monotonic() - self._last_spoken
+        if since < self.min_gap and kind != "piece":
+            self.log(f'🗣  (skipped: last line {since:.0f}s ago, min gap {self.min_gap:.0f}s) "{text}"')
             return
         try:
             self._queue.put_nowait(text)
         except queue.Full:
-            pass  # still speaking the previous sentence; skip this one
+            self.log(f'🗣  (skipped: still speaking) "{text}"')  # still speaking the previous sentence
+            return
+        self.log(f'🗣  "{text}"')
+        runtime.append_thought(f"🗣  {text}")
 
     # ----------------------------------------------------------------- worker
 
