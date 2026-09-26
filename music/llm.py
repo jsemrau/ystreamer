@@ -132,6 +132,11 @@ def _openai_compatible(model: str, api_base: str, api_key: str, system: str, use
     except requests.RequestException as e:
         raise LLMError(f"cannot reach {url}: {e}") from e
     if resp.status_code >= 400:
+        if "exceed_context_size" in resp.text or "exceeds the available context" in resp.text:
+            raise LLMError(f"HTTP {resp.status_code}: the prompt doesn't fit the model's context window "
+                           f"({resp.text[:160]}). Raise LLAMA_CTX_SIZE in .env: it is shared by 2 parallel "
+                           "slots, so 16384 gives each request 8192 tokens (add LLAMA_SERVER_ARGS=-fa on "
+                           "--cache-type-k q8_0 --cache-type-v q8_0 if memory is tight)")
         raise LLMError(f"HTTP {resp.status_code} from {url}: {resp.text[:300]}")
     try:
         return resp.json()["choices"][0]["message"]["content"] or ""
@@ -203,8 +208,9 @@ def complete(model_id: str, system: str, user: str, timeout: float | None = None
                         {**extra, "response_format": {"type": "json_schema",
                                                       "json_schema": {"name": "reply", "schema": schema}}})
                 except LLMError as e:
-                    if "HTTP 400" not in str(e):
-                        raise
+                    text = str(e).lower()
+                    if "http 400" not in text or "context" in text:
+                        raise   # e.g. the prompt doesn't fit: not a schema problem
                     _local_schema_ok = False  # the server can't do schemas; ask without
             return _openai_compatible(model, config.LOCAL_LLM_API_BASE, "", system, user, timeout, max_tokens,
                                       temperature, extra)

@@ -98,6 +98,9 @@ class Performer:
         # Per track: how many edits the LLM made, and why the built-in performer
         # had to step in ("late", "invalid", "error", "resting").
         self.stats: Counter[str] = Counter()
+        # Compact prompts (no glossary or example moves) once the model's
+        # context window turned out to be too small for the full one.
+        self._compact = False
         # The last edits that were actually played this track, for the prompt.
         self.recent: deque[str] = deque(maxlen=6)
 
@@ -379,18 +382,17 @@ class Performer:
         # at the current tempo), with a little margin for applying it.
         window = self.settings["edit_bars"] / program.track.cps
         deadline = time.monotonic() + max(4.0, window * 0.85)
-        prompt = self._prompt(program)
+        extra = ""   # a correction request, added after a rejected reply
         schema = self._edit_schema(program)
         asks = (f"next edit for '{program.track.title}' ({self.state.phase}, "
                 f"{len(program.active_roles())} line{'' if len(program.active_roles()) == 1 else 's'} playing)")
-        system = "You are a live coder performing TidalCycles. Reply with JSON only."
         for attempt in (1, 2):
             remaining = deadline - time.monotonic()
             try:
-                reply = llm.converse("Performer", self.model_id, system, prompt, log=self.log,
-                                     asks=asks if attempt == 1 else "corrected edit", show_full=self.show_llm,
-                                     max_tokens=400, temperature=0.7, timeout=max(2.0, remaining),
-                                     schema=schema)
+                reply = self._ask_fitting(lambda: self._prompt(program) + extra,
+                                          asks=asks if attempt == 1 else "corrected edit", show_full=self.show_llm,
+                                          max_tokens=400, temperature=0.7, timeout=max(2.0, remaining),
+                                          schema=schema)
                 if time.monotonic() > deadline + 1:
                     raise llm.LLMError("reply came after the edit was due")
                 edit = self._edit_from_json(llm.extract_json(reply), program)
@@ -403,8 +405,8 @@ class Performer:
                 # say what was wrong and let the model correct itself once.
                 if attempt == 1 and deadline - time.monotonic() > 3.0:
                     self.log(f"[Performer] edit rejected ({e}); asking the model to correct it")
-                    prompt = (f"{prompt}\n\n## Your previous reply was rejected\n\n{reply.strip()[:400]}\n\n"
-                              f"Reason: {e}. Reply with a corrected edit (one JSON object).")
+                    extra = (f"\n\n## Your previous reply was rejected\n\n{reply.strip()[:400]}\n\n"
+                             f"Reason: {e}. Reply with a corrected edit (one JSON object).")
                     continue
                 return self._llm_failed(f"edit unusable ({e})", "invalid")
             except llm.LLMError as e:
@@ -528,11 +530,9 @@ class Performer:
                                                                  "minItems": 1, "maxItems": 3}},
                   "required": ["proposals"], "additionalProperties": False}
         asks = f"3 ideas for '{program.track.title}' ({self.state.phase})"
-        reply = llm.converse("Performer", self.model_id,
-                             "You are a live coder performing TidalCycles. Reply with JSON only.",
-                             self._prompt(program, proposals=3), log=self.log, asks=asks,
-                             show_full=self.show_llm, max_tokens=900, temperature=0.8, timeout=timeout,
-                             schema=schema)
+        reply = self._ask_fitting(lambda: self._prompt(program, proposals=3), asks=asks,
+                                  show_full=self.show_llm, max_tokens=900, temperature=0.8, timeout=timeout,
+                                  schema=schema)
         data = llm.extract_json(reply)
         items = data.get("proposals") if isinstance(data, dict) else None
         if not isinstance(items, list):
@@ -600,6 +600,22 @@ class Performer:
         chosen.source = "LLM, judged"
         self._llm_failures = 0
         return chosen
+
+    def _ask_fitting(self, build_prompt, **kwargs) -> str:
+        """converse() with the prompt from build_prompt(); if the model's
+        context window is too small for it, switch to compact prompts for
+        the rest of the run and retry once."""
+        try:
+            return llm.converse("Performer", self.model_id, self._SYSTEM, build_prompt(), log=self.log, **kwargs)
+        except llm.LLMError as e:
+            if self._compact or "context window" not in str(e):
+                raise
+            self._compact = True
+            self.log("[Performer] the prompt doesn't fit the model's context window; switching to compact "
+                     "prompts (no glossary or example moves). Raise LLAMA_CTX_SIZE for the full prompt.")
+            return llm.converse("Performer", self.model_id, self._SYSTEM, build_prompt(), log=self.log, **kwargs)
+
+    _SYSTEM = "You are a live coder performing TidalCycles. Reply with JSON only."
 
     def _llm_failed(self, why: str, kind: str) -> None:
         self.stats[kind] += 1
@@ -676,31 +692,75 @@ class Performer:
         return edit
 
     def _prompt(self, program: Program, proposals: int = 0) -> str:
+        # Only what applies to the lines playing now: a smaller prompt fits
+        # small local context windows and keeps the model focused.
         editable = {}
+        used_wrappers: set[str] = set()
+        wrap_kinds: set[str] = set()
+        used_fx: set[str] = set()
         for role, line in program.lines.items():
-            editable[role] = {
-                "channel": f"d{line.channel}", "muted": line.muted,
-                "patterns": {k: v for k, v in line.patterns.items() if k not in LOCKED_SLOTS},
-                "fx": dict((n, v) for n, v in line.fx), "controls": dict((n, v) for n, v in line.pfs),
-                "wrappers": line.wrappers, "drums": line.drums,
-            }
+            fx_ok = [n for n in ROLE_FX.get(role, list(FX_RANGES)) if n in FX_RANGES]
+            wraps_ok = [w for w in allowed_wrappers(line) if w not in line.wrappers]
+            entry = {"line": f"d{line.channel}", "patterns": {k: v for k, v in line.patterns.items()
+                                                               if k not in LOCKED_SLOTS}}
+            if line.muted:
+                entry["muted"] = True
+            entry["fx"] = dict((n, v) for n, v in line.fx)
+            if line.pfs:
+                entry["controls"] = dict((n, v) for n, v in line.pfs)
+            entry["can_set_fx"] = fx_ok
+            if line.wrappers:
+                entry["wrappers"] = line.wrappers
+            if wraps_ok:
+                entry["wrap_with"] = _wrapper_kind(line)
+                wrap_kinds.add(_wrapper_kind(line))
+            editable[role] = entry
+            used_wrappers.update(line.wrappers)
+            used_fx.update(fx_ok + [n for n, _ in line.pfs])
         addable = {b.name: b.role for b in blocks_for(self.style) if b.role not in program.lines}
         template = _load_prompt("performer.md")
         return template.format(
             theme=self.theme or "chill, hypnotic, evolving", style=self.style,
             track=json.dumps(program.track.to_dict()), phase=self.state.phase,
             phase_help=PHASE_HELP[self.state.phase], edits_in_phase=self.state.edits_in_phase,
-            code="\n".join(program.code_lines()), lines=json.dumps(editable, indent=1),
+            code="\n".join(program.code_lines()),
+            lines="\n".join(f'"{r}": {json.dumps(e, separators=(",", ":"))}' for r, e in editable.items())
+            or "(no lines yet)",
             addable=json.dumps(addable), max_lines=self.settings["max_lines"],
-            melodic_wrappers=json.dumps(MELODIC_WRAPPERS), drum_wrappers=json.dumps(DRUM_WRAPPERS),
-            bass_wrappers=json.dumps(BASS_WRAPPERS), role_fx=json.dumps(ROLE_FX),
-            examples="\n".join(f"- {e}" for e in PHASE_EXAMPLES[self.state.phase]),
+            examples=("(compact prompt)" if self._compact
+                      else "\n".join(f"- {e}" for e in PHASE_EXAMPLES[self.state.phase])),
             recent="\n".join(self.recent) or "(none yet: this is the start of the track)",
-            wrapper_notes="\n".join(f"- `{w}`: {n}" for w, n in WRAPPER_NOTES.items()),
+            wrapper_notes=_wrapper_notes(wrap_kinds, used_wrappers, names_only=self._compact),
             fx_notes="\n".join(f"- `{n}` [{lo:g}-{hi:g}]: {FX_NOTES[n]}"
-                                for n, (lo, hi) in {**FX_RANGES, **PF_RANGES}.items()),
+                                for n, (lo, hi) in {**FX_RANGES, **PF_RANGES}.items() if n in used_fx)
+            if not self._compact else
+            "Ranges: " + ", ".join(f"{n} {lo:g}-{hi:g}" for n, (lo, hi) in {**FX_RANGES, **PF_RANGES}.items()
+                                   if n in used_fx),
             reply=REPLY_PROPOSALS.replace("N", str(proposals)) if proposals else REPLY_SINGLE,
         )
+
+
+_WRAPPER_KINDS = {"drum wrappers": DRUM_WRAPPERS, "bass wrappers": BASS_WRAPPERS,
+                  "melodic wrappers": MELODIC_WRAPPERS}
+
+
+def _wrapper_kind(line) -> str:
+    return "drum wrappers" if line.drums else "bass wrappers" if line.role == "bass" else "melodic wrappers"
+
+
+def _wrapper_notes(kinds: set[str], extra: set[str], names_only: bool = False) -> str:
+    """Each wrapper once, grouped by the kind of line it can go on."""
+    out = []
+    for kind, names in _WRAPPER_KINDS.items():
+        if kind in kinds:
+            if names_only:
+                out.append(f"{kind[0].upper()}{kind[1:]}: " + "; ".join(f"`{w}`" for w in names))
+                continue
+            out.append(f"{kind[0].upper()}{kind[1:]}:")
+            out.extend(f"- `{w}`: {WRAPPER_NOTES[w]}" for w in names)
+    shown = {w for k in kinds for w in _WRAPPER_KINDS[k]}
+    out.extend(f"- `{w}`: {WRAPPER_NOTES[w]}" for w in sorted(extra - shown) if w in WRAPPER_NOTES)
+    return "\n".join(out)
 
 
 _NUM_RE = re.compile(r"^-?\d+(\.\d+)?$")
