@@ -92,8 +92,18 @@ STYLES = {
     },
 }
 
+# Techno and hardcore: a pounding four-on-the-floor kick, offbeat rumble,
+# 16th hats, acid and short stabs. They share trance's arranger presets; the
+# live engine has its own blocks for them (music/blocks.py).
+for _name, _bpm in (("techno", (138, 150)), ("hardcore", (160, 185))):
+    STYLES[_name] = {**STYLES["trance"], "bpm": _bpm, "cycles_per_chord": 4,
+                     "openers": [["drums"], ["drums", "bass"]],
+                     "energy_order": ["drums", "bass", "arp", "pad", "texture", "melody", "keys"]}
+
 # Theme words that select a style (checked in this order).
 THEME_STYLE_KEYWORDS = [
+    ("hardcore", ("hardcore", "gabber", "gabba", "speedcore", "frenchcore", "terrorcore", "rotterdam")),
+    ("techno", ("techno", "hard techno", "acid techno", "industrial", "rave", "berghain")),
     ("trance", ("trance", "switch angel", "switchangel", "uplifting", "psytrance", "supersaw")),
     ("deephouse", ("deep house", "house", "garage", "club", "dance")),
     ("lofi", ("lofi", "lo-fi", "hip hop", "hiphop", "study", "beats")),
@@ -273,7 +283,8 @@ def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | N
 
 # Styles where a lifted final chorus fits; chance of ninth chords per style.
 _LIFT_STYLES = {"lofi", "downtempo", "deephouse", "trance"}
-_NINTH_CHANCE = {"lofi": 0.6, "deephouse": 0.7, "downtempo": 0.5, "ambient": 0.5, "piano": 0.4, "trance": 0.2}
+_NINTH_CHANCE = {"lofi": 0.6, "deephouse": 0.7, "downtempo": 0.5, "ambient": 0.5, "piano": 0.4, "trance": 0.2,
+                 "techno": 0.0, "hardcore": 0.0}
 
 
 def _add_variety(piece: Piece, rng: random.Random, avoid: set[str] | None = None,

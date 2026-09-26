@@ -35,6 +35,8 @@ ROLE_ORDER = {
     "ambient": ["chords", "texture", "keys", "lead", "bass", "beat"],
     "piano": ["keys", "lead", "bass", "chords", "texture"],
     "downtempo": ["beat", "keys", "bass", "lead", "texture"],
+    "techno": ["beat", "perc", "bass", "acid", "chords", "texture", "lead"],
+    "hardcore": ["beat", "perc", "acid", "lead", "chords", "texture"],
 }
 
 PHASES = ("build", "groove", "breakdown", "rebuild", "groove2", "outro")
