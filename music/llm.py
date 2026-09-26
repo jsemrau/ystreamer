@@ -29,7 +29,7 @@ _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_pre
 
 PROVIDERS = ("claude", "local", "jevtypesafe")
 DEFAULT_MODELS = {
-    "claude": os.getenv("YS_CLAUDE_MODEL", "claude-opus-5"),
+    "claude": os.getenv("YS_CLAUDE_MODEL") or os.getenv("ANTHROPIC_MODEL") or "claude-opus-5",
     "local": os.getenv("YS_LOCAL_MODEL", "qwen-agentworld-35b"),
     "jevtypesafe": os.getenv("YS_JEV_MODEL", "default"),
 }
@@ -67,7 +67,10 @@ def _claude(model: str, system: str, user: str, timeout: float, max_tokens: int)
     global _claude_client
     if _claude_client is None:
         # Credentials resolve from ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / `ant auth login`.
-        _claude_client = anthropic.Anthropic(max_retries=2)
+        try:
+            _claude_client = anthropic.Anthropic(max_retries=2)
+        except Exception as e:
+            raise LLMError(f"no Claude credentials ({e})") from e
 
     kwargs = {}
     effort = os.getenv("YS_CLAUDE_EFFORT")  # low | medium | high (API default) | xhigh | max
@@ -89,6 +92,11 @@ def _claude(model: str, system: str, user: str, timeout: float, max_tokens: int)
         raise LLMError(f"Claude API error {e.status_code}: {e.message}") from e
     except anthropic.APIConnectionError as e:
         raise LLMError(f"Claude connection error: {e}") from e
+    except TypeError as e:
+        if "authentication" in str(e):
+            raise LLMError("no Claude API key: set ANTHROPIC_API_KEY=sk-ant-... in .env "
+                           "(one line, no quotes or spaces)") from e
+        raise
     if response.stop_reason == "refusal":
         raise LLMError("Claude declined the request")
     return "".join(block.text for block in response.content if block.type == "text")
