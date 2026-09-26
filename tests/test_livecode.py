@@ -328,7 +328,7 @@ def test_local_request_carries_schema_and_survives_servers_without_it(monkeypatc
 
 def test_prompt_teaches_tidal_and_remembers_recent_edits():
     performer = Performer(random.Random(0), style="lofi", model_id="local", log=lambda *_: None)
-    program = _program_with("lofi", "dusty_beat", "sub_walk")
+    program = _program_with("lofi", "dusty_beat", "sub_walk", "felt_melody")
     performer.applied(Edit("set_fx", role="beat", name="lpf", value="2400", reason="darker drums", source="LLM"))
     prompt = performer._prompt(program)
     assert "`jux rev`: a reversed copy in the other ear" in prompt       # wrapper glossary
@@ -522,3 +522,26 @@ def test_one_note_changes_never_touch_repeat_counts():
         edit = performer._pattern_edit("bass", line)
         if edit and edit.name == "rhythm" and "*" in edit.value and edit.value.startswith("["):
             assert edit.value.endswith("]*4"), edit.value
+
+
+def test_small_context_window_switches_to_compact_prompts(monkeypatch):
+    prompts = []
+
+    def fake(agent, model_id, system, prompt, **kw):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            raise llm.LLMError("HTTP 400: the prompt doesn't fit the model's context window (...)")
+        return '{"listening": "x", "reason": "darker", "op": "set_fx", "role": "beat", "name": "lpf", "value": "2400"}'
+
+    monkeypatch.setattr(llm, "converse", fake)
+    logs = []
+    performer = Performer(random.Random(0), style="lofi", model_id="local", log=logs.append)
+    program = _program_with("lofi", "dusty_beat", "sub_walk", "felt_melody")
+    performer.state.phase = "groove"
+    edit = performer.next_edit(program)
+    assert edit.source == "LLM"
+    assert len(prompts[1]) < len(prompts[0]) - 1500
+    assert "`jux rev`" in prompts[1] and "a reversed copy" not in prompts[1]   # names kept, notes dropped
+    assert any("compact prompts" in line for line in logs)
+    performer.next_edit(program)
+    assert len(prompts[2]) < len(prompts[0]) - 1500                          # stays compact

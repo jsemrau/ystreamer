@@ -40,23 +40,20 @@ you just made, and don't make the same kind of move three times in a row.
   higher degrees = more energy.
 - Drum patterns use sample names, e.g. `"bd ~ ~ bd ~ ~ bd ~"`.
 
-What the wrappers do:
+What the wrappers and effects below do (only the ones you can use now):
 {wrapper_notes}
-
-What the effects and controls do (ranges in brackets):
 {fx_notes}
 
 ## What you can edit
 
-Lines (by role), with their editable parts:
+Lines (by role): their editable parts, which effects they accept (`can_set_fx`) and which
+group of wrappers above they take (`wrap_with`):
 
 ```json
 {lines}
 ```
 
 Blocks you can add (name -> role): {addable}. At most {max_lines} lines play at once.
-Effects allowed per role: {role_fx}. Wrappers allowed: melodic lines {melodic_wrappers};
-drums {drum_wrappers}; bass {bass_wrappers}; textures none.
 
 Operations (exactly one per reply):
 
