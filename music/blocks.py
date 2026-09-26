@@ -1,0 +1,211 @@
+"""
+The block library: short, idiomatic Tidal lines a performer can add to the
+program, per style, with the pattern variants it can later swap in.
+
+Melodic lines are written in scale degrees relative to the chord root
+(`"0 ~ 2 4" |+ "<{roots}>"`), so they follow the progression and can't leave
+the key. Levels come from the offline measurements in music/presets.py.
+
+Lofi deliberately has no sustained pad: chords are short Rhodes/felt comping.
+"""
+
+from __future__ import annotations
+
+import random
+from dataclasses import dataclass, field
+
+from .livecode import LineSpec
+
+
+@dataclass
+class Block:
+    name: str
+    role: str
+    body: str
+    patterns: dict[str, list[str]]           # slot -> variants (first is default)
+    fx: list[list[str]] = field(default_factory=list)
+    pfs: list[list[str]] = field(default_factory=list)
+    wrappers: list[str] = field(default_factory=list)
+    drums: bool = False
+    # Degree pool for mutating melodic patterns (numbers the performer may use).
+    pool: list[int] = field(default_factory=list)
+
+    def make(self, rng: random.Random) -> LineSpec:
+        return LineSpec(
+            role=self.role, body=self.body,
+            patterns={slot: rng.choice(options) for slot, options in self.patterns.items()},
+            fx=[list(p) for p in self.fx], pfs=[list(p) for p in self.pfs],
+            wrappers=list(self.wrappers), drums=self.drums, block=self.name,
+        )
+
+
+def _melodic(name, role, synth, pattern_slot, variants, fx, octave="", pool=None, rhythm_body=None, **kw):
+    body = rhythm_body or (
+        f'n (scale "{{mode}}" ("{{{pattern_slot}}}" |+ "<{{roots}}>") {{root}}{octave}) # s "{synth}"')
+    return Block(name, role, body, {pattern_slot: variants}, fx=fx, pool=pool or [0, 1, 2, 3, 4, 5, 7], **kw)
+
+
+BLOCKS: dict[str, list[Block]] = {
+    # ------------------------------------------------------------------ lofi
+    "lofi": [
+        Block("dusty_beat", "beat", 's "[{kick}, {snare}, {hats}]"',
+              {"kick": ["bd ~ ~ ~ ~ bd ~ ~", "bd ~ ~ bd ~ ~ bd ~", "bd ~ [~ bd] ~ ~ ~ bd ~"],
+               "snare": ["~ sn ~ sn", "~ sn ~ [sn ~ ~ sn:2]", "~ sn:1 ~ sn"],
+               "hats": ["hh27*8", "[~ hh27]*4", "hh27*8?", "[hh27 hh27:3]*4"]},
+              fx=[["gain", "0.92"], ["lpf", "5000"]], wrappers=["swingBy (1/8) 4"], drums=True),
+        _melodic("sub_walk", "bass", "ys_sub", "rhythm",
+                 ["0 ~ ~ 0 ~ ~ 4 ~", "0 ~ 0 ~ ~ 4 ~ ~", "0 ~ ~ ~ 0 ~ -1 ~"],
+                 [["gain", "0.95"], ["lpf", "500"], ["legato", "0.9"]], octave=" - 24", pool=[0, 4, -1, -3, 7]),
+        Block("rhodes_comp", "keys",
+              'struct "{comp}" $ n (scale "{mode}" "<{chords}>" {root}) # s "ys_epiano"',
+              {"comp": ["t ~ ~ t ~ ~ t ~", "~ t ~ ~ t ~ ~ ~", "t ~ ~ ~ ~ t ~ ~", "~ ~ t ~ ~ ~ t ~"]},
+              fx=[["gain", "0.9"], ["legato", "0.5"], ["room", "0.3"], ["lpf", "3200"]]),
+        Block("felt_comp", "keys",
+              'struct "{comp}" $ n (scale "{mode}" "<{chords}>" {root}) # s "ys_keys"',
+              {"comp": ["t ~ ~ ~ t ~ ~ ~", "~ ~ t ~ ~ ~ t ~", "t ~ ~ t ~ ~ ~ ~"]},
+              fx=[["gain", "0.9"], ["legato", "0.8"], ["room", "0.35"]]),
+        _melodic("felt_melody", "lead", "ys_keys", "melody",
+                 ["0 ~ 2 ~ 4 ~ 2 ~", "~ 4 ~ 2 0 ~ ~ ~", "4 ~ ~ 2 ~ 0 ~ -1", "0 2 ~ 4 ~ ~ 2 ~"],
+                 [["gain", "1.02"], ["room", "0.35"], ["delay", "0.25"], ["delaytime", "0.375"],
+                  ["delayfeedback", "0.3"]], octave=" + 12"),
+        _melodic("glass_melody", "lead", "ys_glass", "melody",
+                 ["~ 4 ~ ~ 2 ~ ~ ~", "0 ~ ~ 2 ~ ~ 4 ~", "~ ~ 7 ~ 4 ~ 2 ~"],
+                 [["gain", "1.0"], ["room", "0.45"], ["delay", "0.3"], ["delaytime", "0.375"],
+                  ["delayfeedback", "0.35"]], octave=" + 12"),
+        _melodic("pluck_arp", "acid", "ys_pluck", "arp",
+                 ["0 2 4 7 4 2 0 ~", "[0 4] [2 7] [4 2] ~", "0 ~ 4 ~ 7 ~ 4 ~"],
+                 [["gain", "1.0"], ["room", "0.3"], ["lpf", "4000"], ["pan", "(slow 8 $ range 0.3 0.7 sine)"]]),
+        Block("vinyl", "texture", 'slow 4 $ note "0" # s "ys_vinyl"', {},
+              fx=[["gain", "1.1"], ["hpf", "300"], ["legato", "1.2"]]),
+        Block("congas", "perc", 's "{perc}"',
+              {"perc": ["~ ~ 808mc ~ ~ 808lc ~ ~", "~ 808lc ~ ~ 808mc ~ ~ 808lc", "[~ 808mc]*2 ~ 808lc"]},
+              fx=[["gain", "0.7"], ["pan", "0.35"], ["room", "0.2"]], drums=True),
+    ],
+    # ------------------------------------------------------------- deep house
+    "deephouse": [
+        Block("house_beat", "beat", 's "[{kick}, {hats}, {clap}]"',
+              {"kick": ["bd*4"], "hats": ["[~ hh]*4", "[~ hh]*4, hh*16?", "[~ 808oh]*4"],
+               "clap": ["~ cp ~ cp", "~ cp ~ [cp cp]", "~"]},
+              fx=[["gain", "0.95"]], wrappers=["swingBy (1/24) 4"], drums=True),
+        _melodic("deep_bass", "bass", "ys_sub", "rhythm",
+                 ["~ 0 ~ 0 ~ 0 ~ 0", "0 ~ ~ 0 ~ 0 ~ ~", "~ 0 0 ~ ~ 0 ~ 7"],
+                 [["gain", "0.96"], ["lpf", "420"], ["legato", "0.75"]], octave=" - 24", pool=[0, 7, 4, -1]),
+        Block("deep_stab", "keys",
+              'struct "{comp}" $ n (scale "{mode}" "<{chords}>" {root}) # s "{synth}"',
+              {"comp": ["~ ~ t ~ ~ ~ t ~", "t ~ ~ t ~ ~ t ~", "~ t ~ t ~ ~ t ~"], "synth": ["ys_epiano", "ys_organ"]},
+              fx=[["gain", "0.92"], ["legato", "0.35"], ["delay", "0.3"], ["delaytime", "0.375"],
+                  ["delayfeedback", "0.35"], ["lpf", "2800"]]),
+        _melodic("glass_hook", "lead", "ys_glass", "melody",
+                 ["~ 4 ~ ~ ~ 2 ~ ~", "0 ~ ~ 4 ~ ~ 2 ~", "~ ~ 7 ~ ~ 4 ~ ~"],
+                 [["gain", "1.0"], ["room", "0.4"], ["delay", "0.3"], ["delaytime", "0.375"],
+                  ["delayfeedback", "0.3"]], octave=" + 12"),
+        Block("strings", "chords", 'n (scale "{mode}" "<{chords}>" {root}) # s "ys_strings"', {},
+              fx=[["gain", "0.8"], ["legato", "1.05"], ["room", "0.5"], ["lpf", "2600"]]),
+        Block("congas", "perc", 's "{perc}"',
+              {"perc": ["[~ ~ ~ 808lc] [~ 808mc ~ ~] [~ ~ 808lc ~] ~", "~ 808mc ~ 808lc"]},
+              fx=[["gain", "0.68"], ["pan", "0.6"]], drums=True),
+        Block("vinyl", "texture", 'slow 4 $ note "0" # s "ys_vinyl"', {},
+              fx=[["gain", "1.05"], ["hpf", "300"], ["legato", "1.2"]]),
+    ],
+    # ---------------------------------------------------------------- trance
+    "trance": [
+        Block("trance_beat", "beat", 's "[{kick}, {hats}, {clap}]"',
+              {"kick": ["ys_kick*4"], "hats": ["[~ 808oh]*4", "[~ 808oh]*4, hh*16", "[~ hh]*4"],
+               "clap": ["~", "~ cp ~ cp"]},
+              fx=[["gain", "1.0"]], drums=True),
+        Block("acid", "acid",
+              'n (scale "{mode}" ("<{motif}>*16" |+ "<{roots}>") {root} - 12) # s "ys_acid"',
+              {"motif": ["0 4 0 9 7", "0 7 0 3", "0 2 0 4 7", "0 5 0 9 7 12", "0 0 7 3 5"]},
+              fx=[["gain", "0.98"], ["legato", "0.6"]], pfs=[["acid", "0.546"]],
+              wrappers=['(|* gain "[0.67 0.91 1 1]*4")'], pool=[0, 2, 3, 4, 5, 7, 9, 12]),
+        _melodic("rolling_bass", "bass", "ys_tbass", "rhythm",
+                 ["[~ 0 0 0]*4", "[~ 0 0 0]*3 [~ 0 0 7]", "[~ ~ 0 ~]*4"],
+                 [["gain", "1.05"], ["lpf", "1200"], ["legato", "0.5"]], octave=" - 24", pool=[0, 7],
+                 wrappers=['(|* gain "[0.67 0.91 1 1]*4")']),
+        Block("gated_saw", "chords",
+              'n (scale "{mode}" "<{chords}>" {root}) # s "ys_gatesaw" # pI "gatepat" {gate}'
+              ' # pF "gatetime" {bar} # pF "beattime" {beat}',
+              {"gate": ["1", "2", "3", "0"]},
+              fx=[["gain", "0.88"], ["legato", "1"], ["lpf", "3000"], ["room", "0.35"]],
+              pfs=[["gatedepth", "0.95"], ["duckdepth", "0.8"]]),
+        _melodic("saw_lead", "lead", "ys_supersaw", "melody",
+                 ["0 ~ ~ 2 ~ ~ 4 ~", "4 ~ 2 ~ 0 ~ ~ ~", "7 ~ ~ 4 ~ 2 ~ 0"],
+                 [["gain", "1.05"], ["lpf", "4500"], ["room", "0.4"], ["delay", "0.3"], ["delaytime", "0.33"],
+                  ["delayfeedback", "0.35"]], octave=" + 12",
+                 pfs=[["duckdepth", "0.8"]]),
+        Block("air", "texture", 'n (scale "{mode}" "<{roots}>" {root} - 12) # s "ys_air"', {},
+              fx=[["gain", "0.92"], ["hpf", "200"], ["legato", "1.3"], ["room", "0.7"]]),
+    ],
+    # --------------------------------------------------------------- ambient
+    "ambient": [
+        Block("air_pad", "chords", 'n (scale "{mode}" "<{chords}>" {root}) # s "{synth}"',
+              {"synth": ["ys_air", "ys_strings", "ys_choir"]},
+              fx=[["gain", "0.85"], ["legato", "1.1"], ["room", "0.6"], ["size", "0.9"], ["lpf", "2400"]]),
+        _melodic("glass_bells", "lead", "ys_glass", "melody",
+                 ["~ 4 ~ ~ ~ ~ 2 ~", "0 ~ ~ ~ 7 ~ ~ ~", "~ ~ 4 ~ ~ 2 ~ ~"],
+                 [["gain", "0.98"], ["room", "0.6"], ["delay", "0.4"], ["delaytime", "0.5"],
+                  ["delayfeedback", "0.45"]], octave=" + 12"),
+        Block("felt_notes", "keys", 'struct "{comp}" $ n (scale "{mode}" "<{chords}>" {root}) # s "ys_keys"',
+              {"comp": ["t ~ ~ ~ ~ ~ ~ ~", "~ ~ ~ ~ t ~ ~ ~"]},
+              fx=[["gain", "0.88"], ["legato", "1.5"], ["room", "0.5"]]),
+        _melodic("sub_drone", "bass", "ys_sub", "rhythm", ["0 ~ ~ ~ ~ ~ ~ ~", "0 ~ ~ ~ 4 ~ ~ ~"],
+                 [["gain", "0.9"], ["legato", "1"], ["lpf", "300"]], octave=" - 24", pool=[0, 4]),
+        Block("pulse", "beat", 's "{kick}"', {"kick": ["bd ~ ~ ~", "bd ~ ~ ~ ~ ~ ~ ~"]},
+              fx=[["gain", "0.85"], ["lpf", "2500"], ["room", "0.3"]], drums=True),
+        Block("air", "texture", 'n (scale "{mode}" "<{roots}>" {root} - 12) # s "ys_air"', {},
+              fx=[["gain", "0.92"], ["hpf", "200"], ["legato", "1.3"], ["room", "0.7"]]),
+    ],
+    # ----------------------------------------------------------------- piano
+    "piano": [
+        Block("piano_chords", "keys", 'struct "{comp}" $ n (scale "{mode}" "<{chords}>" {root}) # s "superpiano"',
+              {"comp": ["t ~ ~ ~ t ~ ~ ~", "t ~ ~ t ~ ~ t ~", "t ~ ~ ~ ~ ~ ~ ~"]},
+              fx=[["gain", "0.8"], ["legato", "1"], ["room", "0.4"]]),
+        _melodic("piano_melody", "lead", "superpiano", "melody",
+                 ["0 ~ 2 ~ 4 ~ ~ ~", "~ 4 2 ~ 0 ~ ~ ~", "4 ~ ~ 7 ~ 4 2 ~"],
+                 [["gain", "0.85"], ["room", "0.4"]], octave=" + 12"),
+        _melodic("felt_bass", "bass", "ys_keys", "rhythm", ["0 ~ ~ ~ 4 ~ ~ ~", "0 ~ ~ ~ ~ ~ ~ ~"],
+                 [["gain", "0.95"], ["legato", "1"]], octave=" - 12", pool=[0, 4]),
+        Block("strings", "chords", 'n (scale "{mode}" "<{chords}>" {root}) # s "ys_strings"', {},
+              fx=[["gain", "0.78"], ["legato", "1.05"], ["room", "0.5"], ["lpf", "2400"]]),
+        Block("air", "texture", 'n (scale "{mode}" "<{roots}>" {root} - 12) # s "ys_air"', {},
+              fx=[["gain", "0.9"], ["hpf", "200"], ["legato", "1.3"]]),
+    ],
+    # ------------------------------------------------------------- downtempo
+    "downtempo": [
+        Block("slow_beat", "beat", 's "[{kick}, {snare}, {hats}]"',
+              {"kick": ["808bd ~ ~ 808bd ~ ~ ~ ~", "808bd ~ ~ ~ ~ ~ 808bd ~"],
+               "snare": ["~ ~ 808sd ~", "~ ~ 808sd [~ 808sd]"], "hats": ["808hc*8", "[~ 808hc]*4"]},
+              fx=[["gain", "0.95"], ["lpf", "7000"]], drums=True),
+        _melodic("pluck_bass", "bass", "ys_pluck", "rhythm", ["0 ~ ~ 0 ~ ~ 4 ~", "0 ~ ~ ~ 0 ~ ~ 7"],
+                 [["gain", "1.1"], ["lpf", "900"], ["legato", "0.8"]], octave=" - 24", pool=[0, 4, 7]),
+        Block("felt_comp", "keys", 'struct "{comp}" $ n (scale "{mode}" "<{chords}>" {root}) # s "ys_keys"',
+              {"comp": ["t ~ ~ t ~ ~ ~ ~", "~ ~ t ~ ~ ~ t ~"]},
+              fx=[["gain", "0.9"], ["legato", "0.8"], ["room", "0.35"]]),
+        _melodic("epiano_melody", "lead", "ys_epiano", "melody",
+                 ["0 ~ 2 4 ~ ~ 2 ~", "~ 4 ~ 2 ~ 0 ~ ~"],
+                 [["gain", "1.0"], ["room", "0.3"], ["delay", "0.2"], ["delaytime", "0.25"],
+                  ["delayfeedback", "0.25"]], octave=" + 12"),
+        Block("vinyl", "texture", 'slow 4 $ note "0" # s "ys_vinyl"', {},
+              fx=[["gain", "1.1"], ["hpf", "300"], ["legato", "1.2"]]),
+    ],
+}
+
+# Per style: bars between edits, how many lines a track builds up to, and
+# which roles open a track.
+STYLE_SETTINGS = {
+    "lofi": {"edit_bars": 4, "max_lines": 6, "openers": [["beat"], ["keys"], ["bass", "beat"]]},
+    "deephouse": {"edit_bars": 8, "max_lines": 6, "openers": [["beat"], ["beat", "bass"]]},
+    "trance": {"edit_bars": 8, "max_lines": 6, "openers": [["acid"], ["beat"], ["acid", "beat"]]},
+    "ambient": {"edit_bars": 4, "max_lines": 5, "openers": [["chords"], ["texture"], ["keys"]]},
+    "piano": {"edit_bars": 4, "max_lines": 4, "openers": [["keys"]]},
+    "downtempo": {"edit_bars": 4, "max_lines": 5, "openers": [["beat"], ["keys"]]},
+}
+
+
+def blocks_for(style: str, role: str | None = None) -> list[Block]:
+    items = BLOCKS.get(style, BLOCKS["lofi"])
+    return [b for b in items if role is None or b.role == role]
+
+
+def find_block(style: str, name: str) -> Block | None:
+    return next((b for b in blocks_for(style) if b.name == name), None)
