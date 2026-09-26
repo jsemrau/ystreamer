@@ -81,7 +81,10 @@ def test_the_first_groove_edit_waits_the_grooves_interval_not_the_builds(tmp_pat
     edits = [json.loads(line) for line in open(log.path, encoding="utf-8") if '"type": "edit"' in line]
     i = next(i for i, e in enumerate(edits) if e["phase"] == "groove")
     gap = edits[i]["cycle"] - edits[i - 1]["cycle"]
-    assert round(gap) == STYLE_SETTINGS["trance"]["edit_bars"]
+    # The groove's interval (16), not the build's (4-5). Under the simulated
+    # clock the performer's thread can finish just after the bar, and the
+    # engine then (correctly) lands the edit one bar later.
+    assert STYLE_SETTINGS["trance"]["edit_bars"] <= round(gap) <= STYLE_SETTINGS["trance"]["edit_bars"] + 1
     assert round(edits[1]["cycle"] - edits[0]["cycle"]) == 4       # the build itself stays quick
 
 

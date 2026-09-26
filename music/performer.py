@@ -12,6 +12,7 @@ answers with something invalid.
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import re
@@ -98,6 +99,10 @@ class Performer:
         # Per track: how many edits the LLM made, and why the built-in performer
         # had to step in ("late", "invalid", "error", "resting").
         self.stats: Counter[str] = Counter()
+        # How long the model takes to decide (seconds, smoothed), so the
+        # build's quick pace still leaves it time to make the moves.
+        self.latency: float | None = None
+        self._bar_seconds = 0.0
         # Compact prompts (no glossary or example moves) once the model's
         # context window turned out to be too small for the full one.
         self._compact = False
@@ -208,14 +213,18 @@ class Performer:
     def next_edit(self, program: Program) -> Edit:
         """Choose the next edit (LLM if available, built-in otherwise)."""
         self._advance_phase(program)
+        self._bar_seconds = 1 / program.track.cps
         edit = None
         if self.model_id and self._skip_llm <= 0:
+            started, late_before = time.monotonic(), self.stats["late"]
             if llm.resolve(self.model_id)[0] == "jevtypesafe" and llm.jev_style() == "decide":
                 edit = self._jev_edit(program)
             elif self.judge:
                 edit = self._judged_edit(program)
             else:
                 edit = self._llm_edit(program)
+            self._note_latency(time.monotonic() - started, late=self.stats["late"] > late_before,
+                               answered=edit is not None and edit.source.startswith(("LLM", "jevtypesafe")))
         elif self._skip_llm > 0:
             self._skip_llm -= 1
             self.stats["resting"] += 1
@@ -393,11 +402,28 @@ class Performer:
 
     # ------------------------------------------------------------------ LLM
 
+    def _note_latency(self, seconds: float, late: bool, answered: bool) -> None:
+        """Keep a smoothed estimate of how long the model takes. A late
+        reply only says it takes longer than the time it had, so the
+        estimate grows until the build leaves it enough."""
+        if late:
+            self.latency = max(self.latency or 0.0, seconds * 1.5)
+        elif answered:
+            self.latency = seconds if self.latency is None else 0.7 * self.latency + 0.3 * seconds
+
     def edit_bars_now(self) -> int:
         """Bars until the next edit: short while the track builds up (a new
-        line every YS_BUILD_BARS bars), then the style's edit interval."""
+        line every YS_BUILD_BARS bars, or as many more as the model needs to
+        answer in time, so the build stays the AI's), then the style's edit
+        interval."""
         if self.state.phase == "build":
-            return max(1, min(self.settings["edit_bars"], config.BUILD_BARS))
+            bars = config.BUILD_BARS
+            if self.model_id and self.latency and self._bar_seconds:
+                # The model's reply must fit the deadline (85% of the window);
+                # with a judge, the ideas get about 70% of that.
+                need = self.latency / (0.85 * (0.7 if self.judge else 1.0)) + 0.5
+                bars = max(bars, math.ceil(need / self._bar_seconds))
+            return max(1, min(self.settings["edit_bars"], bars))
         return self.settings["edit_bars"]
 
     def _wait_seconds(self, program: Program) -> float:

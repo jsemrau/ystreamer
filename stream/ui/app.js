@@ -235,7 +235,10 @@ function renderFooter() {
   if (ui.models && ui.models.performer) chips.push(`<span class="chip">performer <b>${esc(ui.models.performer)}</b></span>`);
   if (ui.models && ui.models.judge) chips.push(`<span class="chip">judge <b>${esc(ui.models.judge)}</b></span>`);
   if (s.edits) chips.push(`<span class="chip">AI edits <b>${s.llm}/${s.edits}</b></span>`);
-  if (s.judged) chips.push(`<span class="chip">judge prefers AI <b>${Math.round(100 * s.judge_llm / s.judged)}%</b></span>`);
+  // A percentage of one or two comparisons says nothing: show the count
+  // until there are a few, then both.
+  if (s.judged) chips.push(`<span class="chip">judge prefers AI <b>${s.judge_llm}/${s.judged}` +
+                           (s.judged >= 5 ? ` · ${Math.round(100 * s.judge_llm / s.judged)}%` : "") + `</b></span>`);
   $("stats").innerHTML = chips.join("");
 }
 
