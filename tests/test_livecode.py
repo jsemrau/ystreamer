@@ -467,7 +467,9 @@ def _judge_setup(monkeypatch, pick):
         options = questions["edit"]["criteria"]
         calls["options"] = options
         calls["agent"] = agent
-        return {"edit": {"choice": pick(options), "reason": "it develops the groove"}}
+        choice = pick(options)
+        return {"edit": {"choice": choice, "reason": "it develops the groove", "confidence": 0.45,
+                         "probabilities": {k: (0.6 if k == choice else 0.4 / (len(options) - 1)) for k in options}}}
 
     monkeypatch.setattr(llm, "decide", decide)
     performer = Performer(random.Random(0), style="lofi", model_id="local", log=lambda *_: None,
@@ -489,6 +491,11 @@ def test_judge_picks_the_llm_idea(monkeypatch):
     assert not any("lead" in t and "900" in t for t in texts)  # the invalid proposal was dropped
     assert not any("LLM" in t or "built-in" in t for t in texts)   # blind
     assert performer.stats["judge_llm"] == 1 and performer.stats["llm"] == 1
+    assert len(performer.judge_mass) == 1 and 0.6 < performer.judge_mass[0] < 1.0
+    logs = []
+    performer.log = logs.append
+    performer.report_stats()
+    assert "gave them" in logs[-1] and "of its probability" in logs[-1]
 
 
 def test_judge_picks_a_builtin_idea(monkeypatch):
@@ -545,3 +552,17 @@ def test_small_context_window_switches_to_compact_prompts(monkeypatch):
     assert any("compact prompts" in line for line in logs)
     performer.next_edit(program)
     assert len(prompts[2]) < len(prompts[0]) - 1500                          # stays compact
+
+
+def test_director_tempo_follows_the_locked_style():
+    from music.director import Director
+    from music import llm as L
+
+    director = Director("local", random.Random(0), style="darkwave", log=lambda *_: None)
+    reply = {"title": "Paper Lanterns", "style": "lofi", "key": "A minor", "bpm": 76,
+             "progression": "i-VI-III-VII", "mood": "late-night", "reason": "x"}
+    director._ask = lambda *a, **k: dict(reply)
+    piece = director.next_piece(None)
+    assert piece.style == "darkwave"
+    assert 110 <= piece.bpm <= 128
+    assert piece.title == "Paper Lanterns"

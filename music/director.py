@@ -21,7 +21,7 @@ from . import feedback, llm, runtime
 from .narrator import clean_narration
 from . import presets as P
 from .melody import STEPS_PER_CYCLE
-from .plan import (Arrangement, Piece, Section, arrange, describe_options, plan_piece,
+from .plan import (STYLES, Arrangement, Piece, Section, arrange, describe_options, plan_piece,
                    validate_arrangement, validate_piece)
 from .theory import Key
 
@@ -135,6 +135,15 @@ class Director:
                     notes.append(f"style locked to {self.style}")
                     piece.style = fallback.style
                     piece.cycles_per_chord = fallback.cycles_per_chord
+                # Tempo and key must suit the style that actually plays (the
+                # LLM may have planned them for another style).
+                lo, hi = STYLES[piece.style]["bpm"]
+                if not lo <= piece.bpm <= hi:
+                    notes.append(f"{piece.bpm:g} BPM is outside {piece.style}'s {lo}-{hi}; using {fallback.bpm:g}")
+                    piece.bpm = fallback.bpm
+                if Key.parse(piece.key).mode not in STYLES[piece.style]["modes"]:
+                    notes.append(f"{piece.key} doesn't suit {piece.style}; using {fallback.key}")
+                    piece.key, piece.progression = fallback.key, fallback.progression
                 if piece.progression in avoid["progressions"]:
                     notes.append(f"progression {piece.progression} is disliked; using fallback")
                     piece.progression = fallback.progression
