@@ -98,7 +98,7 @@ class Performer:
 
     def applied(self, edit: Edit) -> None:
         """Called by the engine once an edit is actually playing."""
-        who = "you" if edit.source == "LLM" else "the built-in performer"
+        who = "you" if edit.source in ("LLM", "jevtypesafe") else "the built-in performer"
         self.recent.append(f"- {edit.describe()} ({who}, {self.state.phase})"
                            + (f": {edit.reason}" if edit.reason else ""))
 
@@ -158,7 +158,10 @@ class Performer:
         self._advance_phase(program)
         edit = None
         if self.model_id and self._skip_llm <= 0:
-            edit = self._llm_edit(program)
+            if llm.resolve(self.model_id)[0] == "jevtypesafe" and llm.jev_style() == "decide":
+                edit = self._jev_edit(program)
+            else:
+                edit = self._llm_edit(program)
         elif self._skip_llm > 0:
             self._skip_llm -= 1
             self.stats["resting"] += 1
@@ -368,6 +371,107 @@ class Performer:
                 return self._llm_failed(f"LLM {'too slow' if late else 'failed'} ({e})",
                                         "late" if late else "error")
         return None
+
+    # ------------------------------------------------ jevtypesafe decisions
+
+    def _candidates(self, program: Program, limit: int = 8) -> list[Edit]:
+        """Distinct edits that are legal now and fit the phase, for a
+        decision model to choose from."""
+        st = self.state
+        out: list[Edit] = []
+        seen: set[str] = set()
+
+        def offer(edit: Edit | None) -> None:
+            if edit is None or len(out) >= limit or edit.describe() in seen:
+                return
+            try:
+                apply_edit(program, edit, self.settings["max_lines"])
+            except EditError:
+                return
+            seen.add(edit.describe())
+            out.append(edit)
+
+        active = program.active_roles()
+        if st.phase == "build" or (st.phase in ("groove", "groove2") and len(active) < self.settings["max_lines"]):
+            for role in self._missing_roles(program)[:3 if st.phase == "build" else 1]:
+                offer(self._add(program, role))
+        if st.phase == "breakdown":
+            for role in active:
+                if len(active) > 1:
+                    offer(Edit("mute", role=role, reason=f"drop the {role} for the breakdown"))
+        if st.phase == "rebuild":
+            for role, line in program.lines.items():
+                if line.muted:
+                    offer(Edit("unmute", role=role, reason=f"bring the {role} back in"))
+        if st.phase == "outro":
+            for role in active:
+                if role != "texture" and len(active) > 1:
+                    offer(Edit("remove", role=role, reason=f"take out the {role}"))
+        offer(self._builtin_edit(program) if program.lines else None)
+        calm = st.phase in ("breakdown", "outro")
+        for _ in range(40):
+            if len(out) >= limit or not program.lines:
+                break
+            offer(self._tweak(program, calm=calm))
+        return out
+
+    @staticmethod
+    def _explain(edit: Edit) -> str:
+        text = f"{edit.describe()}: {edit.reason}"
+        if edit.op in ("wrap", "unwrap") and edit.name in WRAPPER_NOTES:
+            text += f" ({WRAPPER_NOTES[edit.name]})"
+        elif edit.op in ("set_fx", "set_pf", "remove_fx") and edit.name in FX_NOTES:
+            text += f" ({FX_NOTES[edit.name].split(':')[0]})"
+        return text[:240]
+
+    def _jev_edit(self, program: Program) -> Edit | None:
+        """jevtypesafe's decision API chooses the next edit from legal candidates."""
+        candidates = self._candidates(program)
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        window = self.settings["edit_bars"] / program.track.cps
+        options = {f"e{i + 1}": self._explain(e) for i, e in enumerate(candidates)}
+        state = "\n".join([
+            f"A live coder is performing a {self.style} set in TidalCycles for a 24/7 stream "
+            f"(theme: {self.theme or 'chill, hypnotic, evolving'}).",
+            f"Track: {program.track.title}, {program.track.key}, {program.track.bpm:g} BPM.",
+            f"Phase: {self.state.phase} ({self.state.edits_in_phase} edits so far). {PHASE_HELP[self.state.phase]}",
+            "The program playing now:", *program.code_lines(),
+            "Recent edits (oldest first):", *(self.recent or ["(none yet)"]),
+        ])
+        questions = {
+            "edit": {"type": "choice",
+                     "instructions": "Which edit should the live coder make next? Choose the one that best "
+                                     "develops the track at this point of its arc and fits the theme: a change "
+                                     "a listener will notice, not a jolt, and not a repeat of a recent move.",
+                     "criteria": options},
+        }
+        asks = (f"choose the next edit for '{program.track.title}' ({self.state.phase}) "
+                f"from {len(candidates)} options")
+        try:
+            answers = llm.decide("Performer", state, questions, log=self.log, asks=asks,
+                                 show_full=self.show_llm, timeout=max(4.0, window * 0.85))
+            answer = answers.get("edit") or {}
+            choice = answer.get("choice") if isinstance(answer, dict) else answer
+            if choice not in options:
+                raise EditError(f"chose {choice!r}, not one of {sorted(options)}")
+        except llm.LLMError as e:
+            late = "timed out" in str(e)
+            return self._llm_failed(f"jevtypesafe {'too slow' if late else 'failed'} ({e})",
+                                    "late" if late else "error")
+        except EditError as e:
+            return self._llm_failed(f"jevtypesafe answer unusable ({e})", "invalid")
+        edit = candidates[int(choice[1:]) - 1]
+        # Keep any explanation the API gives, so the choice can be understood.
+        if isinstance(answer, dict):
+            why = next((str(answer[k]) for k in ("reason", "rationale", "explanation", "why")
+                        if answer.get(k)), "")
+            edit.listening = " ".join(why.split())[:200]
+        edit.source = "jevtypesafe"
+        self._llm_failures = 0
+        return edit
 
     def _llm_failed(self, why: str, kind: str) -> None:
         self.stats[kind] += 1

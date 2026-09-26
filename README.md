@@ -49,7 +49,7 @@ stream/setup_audio.sh --monitor               # create the stream sink and liste
 |---|---|---|
 | `claude` | Claude via the official Anthropic SDK (default `claude-opus-5`) | `ANTHROPIC_API_KEY` in `.env`, or `ant auth login` |
 | `local` (default) | local llama.cpp server (default `qwen-agentworld-35b`) | `LLAMA_SERVER_BIN`, `LLAMA_GGUF_MODEL`; started automatically |
-| `jevtypesafe` | [jevtypesafeai.com](https://jevtypesafeai.com/how-to-use) | `YS_JEV_API_BASE`, `YS_JEV_API_KEY`, `YS_JEV_API_STYLE` (`openai` or `json`) |
+| `jevtypesafe` | [jevtypesafeai.com](https://jevtypesafeai.com/how-to-use) decision API: picks each live edit from a list of legal candidates | `YS_JEV_API_KEY` (live engine only) |
 | `none` | deterministic director, no LLM | nothing |
 
 ```bash

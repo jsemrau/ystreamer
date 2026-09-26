@@ -358,3 +358,46 @@ def test_listening_is_logged_before_the_edit(monkeypatch):
     engine.clock.reset(program.track.cps)
     edit = performer.next_edit(program)
     assert edit.listening == "The beat is alone and bare."
+
+
+def test_jevtypesafe_chooses_among_legal_candidates(monkeypatch):
+    import types
+
+    import requests
+
+    sent = {}
+
+    def fake_post(url, headers, json, timeout):
+        sent.update(url=url, headers=headers, body=json)
+        options = json["questions"]["edit"]["criteria"]
+        pick = sorted(options)[1]
+        return types.SimpleNamespace(status_code=200, text="{}",
+                                     json=lambda: {"answers": {"edit": {"choice": pick,
+                                                                        "reason": "the groove needs weight"}}})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setenv("YS_JEV_API_KEY", "test-key")
+    monkeypatch.delenv("YS_JEV_API_BASE", raising=False)
+    monkeypatch.delenv("YS_JEV_API_STYLE", raising=False)
+    logs = []
+    performer = Performer(random.Random(0), style="lofi", model_id="jevtypesafe", log=logs.append)
+    program = _program_with("lofi", "dusty_beat")
+    edit = performer.next_edit(program)
+    assert sent["url"] == "https://jevtypesafeai.com/api/v1/decide"
+    assert sent["headers"]["Authorization"] == "Bearer test-key"
+    options = sent["body"]["questions"]["edit"]["criteria"]
+    assert len(options) >= 3 and "The program playing now:" in sent["body"]["state"]
+    assert edit.source == "jevtypesafe" and edit.listening == "the groove needs weight"
+    apply_edit(program, edit)                      # every candidate is legal
+    assert any("jevtypesafe/decide" in line and "←" in line for line in logs)
+
+
+def test_jevtypesafe_without_key_falls_back(monkeypatch):
+    monkeypatch.delenv("YS_JEV_API_KEY", raising=False)
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+    monkeypatch.delenv("YS_JEV_API_STYLE", raising=False)
+    logs = []
+    performer = Performer(random.Random(0), style="lofi", model_id="jevtypesafe", log=logs.append)
+    edit = performer.next_edit(_program_with("lofi", "dusty_beat"))
+    assert edit.source == "built-in"
+    assert any("YS_JEV_API_KEY" in line for line in logs)

@@ -57,9 +57,16 @@ def test_claude_refusal_raises(monkeypatch):
         llm.complete("claude", "sys", "user")
 
 
-def test_jevtypesafe_requires_config(monkeypatch):
+def test_jevtypesafe_text_endpoint_requires_config(monkeypatch):
     monkeypatch.delenv("YS_JEV_API_BASE", raising=False)
+    monkeypatch.setenv("YS_JEV_API_STYLE", "openai")
     with pytest.raises(llm.LLMError, match="YS_JEV_API_BASE"):
+        llm.complete("jevtypesafe/m", "sys", "user")
+
+
+def test_jevtypesafe_decision_api_is_not_a_text_model(monkeypatch):
+    monkeypatch.delenv("YS_JEV_API_STYLE", raising=False)
+    with pytest.raises(llm.LLMError, match="typed decisions"):
         llm.complete("jevtypesafe/m", "sys", "user")
 
 

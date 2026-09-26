@@ -149,9 +149,12 @@ def _jevtypesafe(model: str, system: str, user: str, timeout: float, max_tokens:
     """
     api_base = os.getenv("YS_JEV_API_BASE", "")
     api_key = os.getenv("YS_JEV_API_KEY", "")
+    style = jev_style()
+    if style == "decide":
+        raise LLMError("jevtypesafe answers typed decisions, not free text; it can drive the live "
+                       "performer (default engine) but not this agent")
     if not api_base:
         raise LLMError("jevtypesafe provider selected but YS_JEV_API_BASE is not set in .env")
-    style = os.getenv("YS_JEV_API_STYLE", "openai").lower()
     if style == "openai":
         return _openai_compatible(model, api_base, api_key, system, user, timeout, max_tokens, temperature)
 
@@ -313,3 +316,67 @@ def converse(agent: str, model_id: str, system: str, user: str, *, log=print, as
         log("   ┌─ raw reply\n" + "\n".join(f"   │ {line}" for line in reply.strip().splitlines()) + "\n   └─")
     runtime.append_llm_call({**record, "seconds": round(seconds, 2), "reply": reply})
     return reply
+
+
+# ---------------------------------------------------------------------------
+# jevtypesafe decision API: typed questions about a situation, not free text
+# ---------------------------------------------------------------------------
+
+JEV_DECIDE_URL = "https://jevtypesafeai.com/api/v1/decide"
+
+
+def jev_style() -> str:
+    """"decide" (the decision API, default), or "openai"/"json" for a text endpoint."""
+    return os.getenv("YS_JEV_API_STYLE", "decide").strip().lower() or "decide"
+
+
+def decide(agent: str, state: str, questions: dict, *, log=print, asks: str = "", show_full: bool = False,
+           timeout: float | None = None) -> dict:
+    """Ask jevtypesafe's decision API typed questions about `state`.
+
+    questions: {"name": {"type": "choice"|"score"|"noul", "instructions": ..., "criteria": ...}}
+    Returns the "answers" object. Logs the exchange like converse() and
+    records it in runtime/llm_calls.jsonl. Raises LLMError on any failure."""
+    import time
+
+    import requests
+
+    from . import runtime
+
+    url = os.getenv("YS_JEV_API_BASE", "").strip() or JEV_DECIDE_URL
+    key = (os.getenv("YS_JEV_API_KEY") or os.getenv("JEV_API_KEY") or "").strip()
+    timeout = timeout or config.LLM_TIMEOUT_SECONDS
+    who = "jevtypesafe/decide"
+    log(f"💬 {agent} → {who}: {asks or 'decision'} ({len(state):,} chars)")
+    if show_full:
+        log("   ┌─ state\n" + "\n".join(f"   │ {line}" for line in state.splitlines())
+            + "\n   ├─ questions\n   │ " + json.dumps(questions) + "\n   └─")
+    record = {"agent": agent, "model": who, "asks": asks, "prompt": state, "questions": questions}
+    started = time.monotonic()
+    try:
+        if not key:
+            raise LLMError("no jevtypesafe API key: set YS_JEV_API_KEY=... in .env")
+        try:
+            resp = requests.post(url, headers={"Authorization": f"Bearer {key}"},
+                                 json={"state": state, "questions": questions}, timeout=timeout)
+        except requests.Timeout as e:
+            raise LLMError(f"jevtypesafe call timed out after {timeout:.0f}s") from e
+        except requests.RequestException as e:
+            raise LLMError(f"cannot reach {url}: {e}") from e
+        if resp.status_code >= 400:
+            raise LLMError(f"jevtypesafe HTTP {resp.status_code}: {resp.text[:300]}")
+        try:
+            answers = resp.json()["answers"]
+            if not isinstance(answers, dict):
+                raise TypeError("answers is not an object")
+        except (ValueError, KeyError, TypeError) as e:
+            raise LLMError(f"unexpected jevtypesafe reply: {resp.text[:300]}") from e
+    except LLMError as e:
+        seconds = time.monotonic() - started
+        log(f"💬 {agent} ← {who} ({seconds:.1f}s): ✗ {e}")
+        runtime.append_llm_call({**record, "seconds": round(seconds, 2), "error": str(e)})
+        raise
+    seconds = time.monotonic() - started
+    log(f"💬 {agent} ← {who} ({seconds:.1f}s): {_one_line(json.dumps(answers))}")
+    runtime.append_llm_call({**record, "seconds": round(seconds, 2), "reply": resp.text})
+    return answers
