@@ -477,10 +477,11 @@ virtual display (Xvfb) and captured by ffmpeg:
   "Performer is thinking with qwen…" shows while a model works.
 - **Bottom:** the narration as a subtitle, and live stats (AI edits,
   how often the judge prefers the AI).
-- **Behind it:** a beat-synced visual per style, driven by the engine's
-  clock and calmer in breakdowns: darkwave ridgelines, techno and house
-  grids, a trance tunnel, rain for lofi and downtempo, an aurora for ambient
-  and piano.
+- **Behind it:** a 3D field of sound waves flying towards the viewer, in
+  the style's colours, on the engine's clock: every beat sends a shockwave
+  through it, the bass swells it, chords roll it and lead / arp / acid
+  ripple it, according to the lines playing; calmer in breakdowns, fullest
+  at the peak.
 
 Preview it while the engine runs (or after a `--dry-run`):
 
