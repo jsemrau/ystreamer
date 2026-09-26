@@ -1,57 +1,98 @@
 # Live Coding Music with Local LLMs: Testing Creativity
 
-*Encyclopedia Autonomica · Agents in creative domains*
+*Encyclopedia Autonomica · Agents in creative domains · Technical deep dive*
 
-**Live coding** is a performance practice in which a musician writes and
-rewrites a program on stage while it plays. The audience sees the code
-and hears every change. Performers such as Switch Angel build a track
-from a single line, then keep revising it (a note here, a filter there, a
-wrapper that doubles the hi-hats) until the piece has moved somewhere new.
-
-That makes live coding a good **testbed for machine creativity**. The
-task is open-ended: there is no right answer, only better or worse
-choices in context. It is sequential, because every edit must follow
-from the program as it is now. It is judged by ear, not by a test suite.
-And it keeps going: a performer has to keep producing ideas for hours
-without repeating itself or falling apart.
-
-This article describes an architecture in which a **local LLM** (for
-example a quantized Qwen model served by `llama.cpp`) performs a
-live-coded [TidalCycles](https://tidalcycles.org) set that streams
-without end. It covers the components, shows code from the reference
-implementation ([`jsemrau/ystreamer`](https://github.com/jsemrau/ystreamer)),
-and proposes a protocol for treating each performance as a creativity
-test.
+> **Summary.** This article describes an architecture in which a local large
+> language model performs a live-coded [TidalCycles](https://tidalcycles.org)
+> set that streams without end. The model does not generate a song. It
+> *performs* one: it grows a short program line by line and keeps revising
+> it, one small, audible edit every few bars, and states a reason for each
+> edit. Every move is guaranteed to be legal and musically safe, so the
+> only thing left to the model is judgement: what to change, when, and why.
+> That makes each performance a controlled experiment in machine
+> creativity, scored against a random baseline performer. The reference
+> implementation is [`jsemrau/ystreamer`](https://github.com/jsemrau/ystreamer),
+> which streams 24/7 on YouTube as **@sleeplesscomposer**.
 
 ---
 
-## 1. Why this is a creativity test and not a code-generation test
+## 1. Background: live coding as a stage for machine creativity
 
-Asking an LLM to "write a lofi track in Tidal" measures recall: can the
-model reproduce plausible syntax it saw during training? Local models
-often fail even this. They produce type errors, notes out of key or
-patterns that are too dense. More importantly, a one-shot program does
-not show what creative behaviour actually looks like:
+**Live coding** is a performance practice in which the musician writes
+and rewrites a program while it plays, with the code projected for the
+audience. In TidalCycles, a Haskell-embedded pattern language, a set
+starts with a single line:
 
-| One-shot generation | Live performance |
-|---|---|
-| One output, judged once | Hundreds of small decisions over time |
-| Syntax errors are fatal | Invalid edits are rejected, and the music continues |
-| Tests recall of examples | Tests *judgement*: what to change next, and why |
-| No memory of its own work | The model must read its own program and build on it |
-| Novelty is hard to separate from noise | Novelty is measured against the model's own history |
+```haskell
+d1 $ s "bd ~ ~ bd ~ ~ bd ~"
+```
 
-The key design move is to **separate the space of legal moves from the
-choice among them**. The system guarantees that every move is
-syntactically valid and musically safe (always in key, levels balanced,
-values in range). The LLM is left with only the creative problem:
-*which* move, *when*, and *why*. Anything the model adds on top of a
-random walk through legal moves is its creative contribution, and that
-contribution can be measured.
+and grows into a small program of eight or so lines, one per channel
+(`d1`...`d8`). Each line is a pattern: rhythms and melodies in compact
+*mini-notation* (`"0 ~ 2 4"`, `"<a b>"`, `"hh*8"`), piped through
+effects (`# lpf 800`, `# room 0.4`) and transformations (`jux rev`,
+`every 4 (fast 2)`, `off 0.25 (|+ n 12)`). Re-evaluating a line replaces
+that channel's pattern at the next cycle. The music never stops; it is
+steered.
+
+Performers such as Switch Angel have made the style popular. What the
+audience enjoys is not the final program but its *trajectory*: the
+build-up, the moment the acid filter opens, the breakdown when the kick
+drops out, the small twist that makes a loop feel new.
+
+This makes live coding an unusually good **test of creative behaviour in
+language models**, for four reasons:
+
+1. **It is open-ended.** No edit is correct; edits are only better or
+   worse in context.
+2. **It is sequential and self-referential.** Every decision must be
+   read against the program as it is now, which is the model's own
+   earlier work.
+3. **It is long-horizon.** A stream runs for hours. A model that has
+   three good ideas and then loops on them fails visibly.
+4. **It is judged by ear.** Listeners, not unit tests, decide what is
+   good. That keeps the test honest about what creativity means.
+
+Asking a model to *write a track* in one shot tests something different:
+recall of syntax seen during training. Local models (for example
+quantized 27B to 35B Qwen models served by `llama.cpp`) do poorly at
+this. They produce type errors, wrong notes, clashing layers and walls
+of sound. None of that tells us whether the model has musical judgement.
+The architecture below separates the two questions.
 
 ---
 
-## 2. Architecture overview
+## 2. Design principles
+
+Five principles shape every component.
+
+**P1. Separate the space of legal moves from the choice among them.**
+The system, not the model, guarantees that a move is syntactically valid,
+in key, within sensible ranges and appropriate for the instrument. The
+model only chooses among legal moves. Anything its choices add beyond a
+random walk through the same moves is its creative contribution, and
+that contribution is measurable.
+
+**P2. The artefact is the code.** The program is not an internal
+representation hidden behind the music. It is the product. It is shown
+on screen, it is what the model reads, and it is what gets revised.
+
+**P3. One small edit at a time.** An edit touches one line. Small edits
+sound like a human performer, keep every decision attributable (so it
+can be evaluated), and limit the damage a bad decision can do.
+
+**P4. The music never stops.** Every LLM call can time out or return
+garbage. A built-in performer takes over any edit the model fails to
+provide, so model failures become data points, not outages.
+
+**P5. Engineering belongs to engineers, judgement to the model.** Sound
+design, gain staging, timing, syntax and streaming are solved once, by
+hand, and kept out of the model's reach. The model gets the part that
+can't be solved once and for all: what to play next.
+
+---
+
+## 3. Architecture overview
 
 ```
                       ┌─────────────────────────────────────────────┐
@@ -85,33 +126,155 @@ contribution can be measured.
                                -- reason) + spoken narration      (YouTube live)
 ```
 
-The components, from the inside out:
+The system has six layers:
 
-1. **Program model.** The live program as structured data: one line per
-   musical role, each rendered to a Tidal statement (`d1 $ ...`).
-2. **Block library.** Curated, level-matched starting lines per style
-   (drum kits, basses, comping keys, melodies, textures). These are the
-   musician's "instruments".
-3. **Edit language and validator.** A small set of operations (add,
-   mute, change a pattern, ride an effect, wrap in a transformation, nudge
-   the tempo). The validator checks them and applies them immutably.
-4. **Performer.** A phase machine that shapes each track into an arc,
-   plus the LLM prompt and a built-in fallback performer.
-5. **Live engine.** A clock that applies one edit per N bars exactly on
-   the bar line, sends only the changed statements, and publishes the
-   code, reasons and narration.
-6. **Audio stack.** GHCi running Tidal, SuperCollider with SuperDirt and
-   custom SynthDefs, a master compressor and limiter, and ffmpeg for
-   streaming.
+| Layer | Module(s) | Responsibility |
+|---|---|---|
+| Program model | `music/livecode.py` | The live program as data; rendering to Tidal; the edit language and its validator |
+| Block library | `music/blocks.py`, `tidal/synthdefs.scd` | Curated, level-matched instruments and starting lines per style |
+| Performer | `music/performer.py`, `prompts/performer.md` | Phase machine, LLM prompt and parsing, built-in fallback performer |
+| Live engine | `music/live_engine.py`, `music/engine.py` (`Clock`) | Timing, applying edits on the bar, sending changed lines, publishing state |
+| LLM gateway | `music/llm.py`, `audio_stack.py` | Provider routing, local server lifecycle, timeouts, JSON extraction |
+| Audio and stream | `audio_stack.py`, `tidal/`, `stream/`, `music/narrator.py` | GHCi session, SuperCollider boot, master bus, TTS narration, ffmpeg, watchdog |
+
+**One edit cycle** looks like this. While bars *n* to *n+3* play, a
+worker thread builds a prompt from the current program and asks the
+model for its next move. At the start of bar *n+4* the engine collects
+the reply, validates it, and on success sends only the changed Tidal
+statements. It then updates the on-screen code, logs the edit and the
+reason, saves state, and possibly speaks a line of narration. If the
+reply is late, invalid or missing, the built-in performer's edit is used
+instead. The loop then starts over.
+
+**Threads.** There are three concurrent actors: the engine thread (the
+clock and sending), one performer worker (LLM calls, so thinking never
+blocks the beat), and one narrator worker (text-to-speech). Tidal itself
+runs in a child GHCi process and SuperCollider in a child `sclang`
+process.
 
 ---
 
-## 3. Components
+## 4. The roles of the LLM
 
-### 3.1 The program model
+"The LLM makes music" is too vague to design or evaluate, so the
+architecture assigns the model explicit **roles**. Each role has a
+defined input, a JSON output contract, a validator and a fallback. The
+live-coding engine uses the first two roles together on every edit; the
+other roles belong to the older arranger engine or are auxiliary. They
+are described here because contrasting them is instructive.
 
-A program is a track (key, tempo, chord progression) plus a set of
-`LineSpec`s, one per role. Each role is pinned to a Tidal channel, so the
+| Role | Engine | Called | Input | Output | Validated by | Fallback |
+|---|---|---|---|---|---|---|
+| **Performer** | live | every 4 to 8 bars | program as code, phase, legal moves | one edit as JSON | `apply_edit` (+ GHCi type check) | built-in performer |
+| **Commentator** | live | with every edit | same call | `reason` (on screen), `narration` (spoken) | length and "no technical words" filter | template reason, no narration |
+| **Director** | arranger | per piece and per section | theme, previous piece, preset catalogue | key, tempo, progressions, instrumentation | schema and catalogue checks | deterministic planner |
+| **Composer** (free layer) | arranger | per section, opt-in | key, progression, mood | counter-melody as pentatonic degrees | token grammar, 8 steps per bar | layer omitted |
+| **Free-form composer** (legacy) | legacy | continuously | natural-language goal | raw Tidal code | GHCi only | none |
+
+### 4.1 Performer
+
+The Performer is the central role. The model sees the program exactly as
+the audience does, plus a machine-readable view of what it may change,
+and returns **exactly one** operation. It never writes a Tidal statement
+itself. It writes *edits*, which the system turns into statements. This
+is what lets a 35B local model play for hours without a single syntax
+error reaching the audio engine.
+
+What the Performer decides:
+- **Arrangement**: which instrument enters next, when to drop the beat,
+  when to strip back.
+- **Composition**: melodic contour and rhythm, as scale-degree and
+  mini-notation strings.
+- **Timbre and space**: filters, reverb, delay, the acid knob, including
+  slow sine modulation.
+- **Transformation**: which Tidal higher-order functions to wrap around
+  a line.
+- **Energy**: small tempo changes.
+
+What the Performer does *not* decide: pitch spelling (the key is fixed
+per track), sound design, levels, timing and the overall arc of a track
+(the phase machine suggests it; see section 8).
+
+### 4.2 Commentator
+
+Every Performer reply carries a `reason`, a few words shown on screen as
+a Tidal comment (`-- let the melody echo into the space`), and
+optionally a `narration`, one warm sentence spoken over the music by a
+text-to-speech voice at big moments. This role costs almost nothing
+because it shares the Performer's call. It does three jobs:
+
+1. **It makes the model state an intention before committing to a
+   move**, which is a light form of chain-of-thought constrained to a
+   single line.
+2. **It makes the performance legible to viewers**, who can read *why*
+   the hi-hats just doubled.
+3. **It gives evaluators ground truth about intent.** "Darken the keys"
+   followed by a *raised* low-pass cutoff is a measurable
+   inconsistency.
+
+Narration is filtered before it is spoken: anything with digits,
+underscores or engineering words ("layer", "energy", "orbit", "cps") is
+dropped. Listeners should hear "the melody leans down, like it's getting
+sleepy", not "lpf to 1800".
+
+### 4.3 Director (arranger engine)
+
+Before the live engine existed, the model worked as a **Director**. Per
+piece it chose a title, key, tempo, chord progression, mood, extra
+progressions for the chorus and breakdown, chord colour (sevenths or
+ninths) and an optional key lift. Per section it chose which preset
+played in each role (pad, keys, bass, melody, arpeggio, drums, texture)
+and how much movement and fill to use. A deterministic harmony engine
+rendered those plans into Tidal code.
+
+The Director role is reliable because it is almost pure selection from
+catalogues. It turned out to be a poor test of creativity. Decisions
+came every one to three minutes and were coarse, and the result was
+correct but static music. The same sustained pad sat under every
+section, and listeners called it boring. That experience motivated
+principle P2: the model's creative surface must be *the code*, and
+changes must be frequent and small.
+
+### 4.4 Composer (free layer)
+
+The arranger engine could optionally ask the model for one
+**counter-melody** per section, written as degrees of a pentatonic scale
+(`"0 _ ~ 2 ~ ~ 4 _"`, exactly 8 steps per bar, at most 4 onsets). This
+was the first use of the technique that the live engine generalises:
+*let the model write material only in a representation where every
+string is in key*. The same idea reappears as scale-degree pattern slots
+(section 5.2).
+
+### 4.5 Free-form composer (legacy)
+
+The project's original design asked the model to write raw Tidal code
+from a natural-language goal. It is kept (`--legacy`) as a negative
+result. With local models, most outputs failed to type-check, and those
+that did were rarely harmonic. Unconstrained generation mixes three
+separate skills (syntax, music theory, taste) in one sample, so it
+measures none of them cleanly.
+
+### 4.6 Division of labour, summarised
+
+| Concern | Owner |
+|---|---|
+| Syntax and types | system (templates + validator + GHCi) |
+| Harmony (key, chords) | system (track plan; degrees relative to chord roots) |
+| Sound design, mix levels | human (curated SynthDefs and blocks, measured offline) |
+| Timing and synchronisation | system (bar-aligned clock) |
+| Track arc (phases) | system proposes, model fills in |
+| **What changes next, and why** | **model** |
+| **Melodic and rhythmic material** | **model** (within the degree representation) |
+| **Commentary** | **model** |
+
+---
+
+## 5. The program model
+
+### 5.1 Lines and roles
+
+A program is a **track** (key, tempo, progression) plus up to eight
+lines, one per musical role. Roles are pinned to Tidal channels so the
 screen always reads like a hand-written set:
 
 ```python
@@ -119,9 +282,11 @@ ROLE_CHANNELS = {"beat": 1, "bass": 2, "chords": 3, "keys": 4,
                  "lead": 5, "acid": 6, "texture": 7, "perc": 8}
 ```
 
-A line is a **template body with named slots**, plus effects, custom
-synth controls and wrappers. Keeping these parts separate is what makes
-small, meaningful edits possible:
+Each line is a `LineSpec`: a **template body with named slots**, plus
+effects, custom synth controls and wrappers. Keeping the parts separate
+is what makes small, meaningful edits possible. "Change the melody" is a
+slot write, "darken" is one effect value, "reverse in stereo" is one
+wrapper.
 
 ```python
 @dataclass
@@ -134,6 +299,7 @@ class LineSpec:
     wrappers: list[str]        # ["jux rev", "off 0.25 (|+ n 12)"]
     muted: bool = False
     drums: bool = False
+    block: str = ""            # which library block it came from
 
     def render(self, harmony: dict[str, str]) -> str:
         body = self.body.format(**harmony, **self.patterns)
@@ -145,25 +311,89 @@ class LineSpec:
         return expr
 ```
 
-**Harmony is injected, never generated.** The track supplies `{mode}`,
-`{root}`, `{chords}` and `{roots}`. Melodic slots hold *scale degrees
-relative to the current chord* (0 = root, 2 = third, 4 = fifth), so any
-digit string the LLM writes is in key by construction:
+A `Program` renders each line as `dN $ <expr>` (or `dN $ silence` when
+muted), plus a tempo statement `setcps (bpm/60/4)` (one Tidal cycle is
+one 4-beat bar). For display, muted lines are shown commented out
+(`-- d1 $ ...`) and the most recently edited line gets a `▶` marker.
 
-```haskell
-d5 $ n (scale "minor" ("~ 4 ~ ~ 2 ~ ~ ~" |+ "<0 -2 3 -3>") - 3 + 12) # s "ys_glass" # room 0.45
---                     ^ the LLM edits only this string
+### 5.2 Harmony is injected, never generated
+
+The track supplies harmony as template placeholders:
+
+```python
+def harmony(self) -> dict[str, str]:
+    key = Key.parse(self.key)                       # e.g. "A minor"
+    rep = f"!{self.bars_per_chord}" if self.bars_per_chord > 1 else ""
+    stacks = []
+    for d in self.degrees:                          # progression as scale degrees
+        base = d - 7 if d > 3 else d                # keep chords near the tonic
+        stacks.append("[" + ",".join(str(base + i) for i in (0, 2, 4, 6)) + "]" + rep)
+    roots = " ".join(f"{d - 7 if d > 3 else d}{rep}" for d in self.degrees)
+    root = key.root if key.root <= 5 else key.root - 12
+    return {"mode": key.mode,
+            "root": f" + {root}" if root > 0 else (f" - {-root}" if root < 0 else ""),
+            "chords": " ".join(stacks), "roots": roots,
+            "bar": f"{1 / self.cps:.4f}", "beat": f"{1 / self.cps / 4:.4f}"}
 ```
 
-This one decision removes the most common failure of local models in
-music (wrong notes). What is left are real creative decisions: contour,
-rhythm and density.
+Melodic lines are built from this pattern:
 
-### 3.2 The block library
+```haskell
+n (scale "minor" ("~ 4 ~ ~ 2 ~ ~ ~" |+ "<0 -2 3 -3>") - 3 + 12) # s "ys_glass"
+--                 └── melody slot ─┘   └ chord roots ┘ └key┘ └octave
+```
 
-Blocks are the curated sound palette. Each has a body, variants for each
-slot, default effects measured to sit well in the mix, and optionally
-starting wrappers:
+The melody slot holds **scale degrees relative to the current chord
+root**. `|+` adds the root of whichever chord is playing, `scale` maps
+degrees to semitones in the track's mode, and the key offset transposes.
+So 0 is always the chord root, 2 its third and 4 its fifth. Any string
+of digits the model writes lands in key and follows the chord changes.
+This single decision removes the most common failure of local models in
+music (wrong notes). What remains is the creative part: contour, rhythm,
+density and register.
+
+Chord lines use four-note stacks (`[0,2,4,6]` is a seventh chord in
+scale steps) kept near the tonic so voicings don't drift. Rhythm is
+added with `struct "t ~ ~ t ~ ~ ~ ~"`, which is itself an editable slot.
+
+### 5.3 Immutability and diffs
+
+Edits never mutate the running program. `apply_edit` deep-copies it,
+changes the copy and returns it. `changed_statements(before, after)`
+computes the minimal set of Tidal statements needed to move from one
+program to the next:
+
+```python
+def changed_statements(before: Program, after: Program) -> list[str]:
+    out = []
+    if before.track.bpm != after.track.bpm:
+        out.append(after.tempo_statement())
+    harmony_changed = before.track.harmony() != after.track.harmony()
+    for role in after.lines:
+        if harmony_changed or role not in before.lines or \
+                before.statement(role) != after.statement(role):
+            out.append(after.statement(role))
+    for role in before.lines:
+        if role not in after.lines:
+            out.append(f"d{ROLE_CHANNELS[role]} $ silence")
+    return out
+```
+
+A tempo change also changes `bar` and `beat` (used by tempo-synced
+synths), so every line is re-sent. Otherwise usually exactly one line
+goes over the wire, just as a human re-evaluates one line with
+Ctrl-Enter.
+
+---
+
+## 6. The block library and the sound palette
+
+### 6.1 Blocks
+
+A **block** is a curated starting line: body, a few variants for each
+slot, default effects and optional starting wrappers. `Block.make(rng)`
+picks slot variants and returns a fresh `LineSpec`. Styles (lofi, deep
+house, trance, ambient, piano, downtempo) each have their own library:
 
 ```python
 Block("acid", "acid",
@@ -174,76 +404,178 @@ Block("acid", "acid",
       wrappers=['(|* gain "[0.67 0.91 1 1]*4")'])     # 16th accent pattern
 ```
 
-Curating the palette is a deliberate division of labour. Sound design
-and gain staging are engineering problems that local LLMs do badly and
-that humans can solve once. What to *do* with the sounds is where the
-model's creativity shows. The library is also where taste gets encoded:
-in the reference implementation the lofi palette has no sustained pad,
-because a pad droning under the whole set made every track sound the
-same.
+`<a b c>*16` plays one element of the motif per sixteenth note and
+cycles through it. With a five-note motif against sixteen steps, the
+line phases against the bar, which is the rolling acid figure of
+Switch Angel-style trance.
 
-### 3.3 The edit language
-
-Every move the performer can make is one of eleven operations:
-
-| op | Example | Musical meaning |
-|---|---|---|
-| `add` | `{"op":"add","block":"felt_melody"}` | Bring in a new line |
-| `remove`, `mute`, `unmute` | `{"op":"mute","role":"beat"}` | Arrangement: drops, breakdowns |
-| `set_pattern` | `{"op":"set_pattern","role":"lead","name":"melody","value":"4 ~ 2 ~ 0 ~ ~ ~"}` | Melody or rhythm variation |
-| `set_fx`, `remove_fx` | `{"op":"set_fx","role":"keys","name":"lpf","value":"(slow 8 $ range 800 3000 sine)"}` | Timbre, space, movement |
-| `set_pf` | `{"op":"set_pf","role":"acid","name":"acid","value":"0.7"}` | Synth-specific knobs |
-| `wrap`, `unwrap` | `{"op":"wrap","role":"keys","name":"jux rev"}` | Structural transformation |
-| `tempo` | `{"op":"tempo","value":"86"}` | Energy |
-
-`apply_edit` validates each operation and returns a *new* program, so a
-rejected edit cannot corrupt the running state:
+Each style also has settings: how often to edit, how many lines may play
+at once, and which roles may open a track:
 
 ```python
-def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
-    new = copy.deepcopy(program)
+STYLE_SETTINGS = {
+    "lofi":   {"edit_bars": 4, "max_lines": 6, "openers": [["beat"], ["keys"], ["bass", "beat"]]},
+    "trance": {"edit_bars": 8, "max_lines": 6, "openers": [["acid"], ["beat"], ["acid", "beat"]]},
+    "piano":  {"edit_bars": 4, "max_lines": 4, "openers": [["keys"]]},
     ...
-    elif op in ("set_fx", "remove_fx"):
-        if edit.name not in FX_RANGES or edit.name not in ROLE_FX.get(role, list(FX_RANGES)):
-            raise EditError(f"effect {edit.name!r} not allowed on the {role}")
-        line.fx = [pair for pair in line.fx if pair[0] != edit.name]
-        if op == "set_fx":
-            line.fx.append([edit.name, _check_number(edit.value, *FX_RANGES[edit.name])])
-    elif op == "set_pattern":
-        value = check_pattern(edit.value)          # charset, length, balanced brackets
-        if not line.drums and re.search(r"[a-z]", value.replace("~", "")):
-            raise EditError("melodic patterns are scale degrees (numbers), not names")
-        line.patterns[edit.name] = value
-    elif op == "wrap":
-        if edit.name not in allowed_wrappers(line):  # e.g. no `jux rev` on the bass
-            raise EditError(f"wrapper {edit.name!r} not allowed here")
-        if len(line.wrappers) >= 3:
-            raise EditError("at most 3 wrappers per line")
-        line.wrappers.append(edit.name)
-    ...
-    return new
+}
 ```
 
-Values are either plain numbers or a single modulation form, both
-checked against per-effect ranges:
+The library is where **taste is encoded by humans**. For example, the
+lofi palette has no sustained pad at all. Its harmony comes from Rhodes
+and felt-piano comping, because an earlier version with a pad under
+every track was the single most common listener complaint.
+
+### 6.2 SynthDefs
+
+The sounds are custom SuperCollider SynthDefs (`tidal/synthdefs.scd`):
+an electric piano, a felt piano, a sub bass, a glass bell, a pluck, air
+and vinyl textures, strings, organ, choir, a supersaw with sidechain
+duck, a kick, a rolling bass, a gated saw and a 303-style acid voice.
+The acid voice shows how one model-facing control (`acid`, 0.1 to 0.95)
+can drive a musically rich parameter space:
+
+```supercollider
+SynthDef(\ys_acid, { |out, sustain = 0.1, pan, freq = 110, speed = 1, acid = 0.5, acidres = 0.18|
+    var env    = EnvGen.ar(Env([0, 1, 0.9, 0], [0.002, sustain.max(0.04), 0.03]), doneAction: 2);
+    var fenv   = EnvGen.ar(Env([0, 1, 0.2], [0.001, 0.12], -4));
+    var cutoff = (100 * (2 ** (acid.clip(0, 1) * 9 * fenv))).clip(40, 16000);
+    var sig    = RLPF.ar(Saw.ar(freq * speed), cutoff, acidres.clip(0.05, 1));
+    sig = (sig * 1.8).tanh * 0.3;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+```
+
+The filter envelope sweeps from 100 Hz up to `100 * 2^(9 * acid)`, a
+range of nine octaves. So `acid 0.3` is a muffled pulse and `acid 0.8`
+screams. A single number the model can ride, even as
+`(slow 8 $ range 0.4 0.75 sine)`, carries the whole tension arc of an
+acid track.
+
+### 6.3 Gain staging
+
+Every SynthDef was rendered offline (sclang plus scsynth in non-realtime
+mode) and measured with an EBU R128 loudness meter. Block gains were set
+so that a melody sits in front, keys and bass behind it, and textures in
+the background. A master chain (a gentle 2:1 compressor, make-up gain
+and a limiter at -1 dBFS) runs after all channels, so no combination of
+edits can clip the stream. The model can change `gain` only within 0.5
+to 1.15, and the built-in performer does not touch gain at all.
+
+---
+
+## 7. The edit language and its validator
+
+### 7.1 Operations
+
+Every move is one of eleven operations:
+
+| op | Fields | Example | Musical meaning |
+|---|---|---|---|
+| `add` | `block` | `{"op":"add","block":"felt_melody"}` | Bring in a new line |
+| `remove` | `role` | `{"op":"remove","role":"perc"}` | Take a line out for good |
+| `mute` / `unmute` | `role` | `{"op":"mute","role":"beat"}` | Breakdowns and drops |
+| `set_pattern` | `role`, `name`, `value` | `{"op":"set_pattern","role":"lead","name":"melody","value":"4 ~ 2 ~ 0 ~ ~ ~"}` | Melody or rhythm variation |
+| `set_fx` | `role`, `name`, `value` | `{"op":"set_fx","role":"keys","name":"lpf","value":"(slow 8 $ range 800 3000 sine)"}` | Timbre, space, movement |
+| `remove_fx` | `role`, `name` | `{"op":"remove_fx","role":"beat","name":"crush"}` | Clean up |
+| `set_pf` | `role`, `name`, `value` | `{"op":"set_pf","role":"acid","name":"acid","value":"0.7"}` | Synth-specific knobs |
+| `wrap` / `unwrap` | `role`, `name` | `{"op":"wrap","role":"keys","name":"jux rev"}` | Structural transformation |
+| `tempo` | `value` | `{"op":"tempo","value":"86"}` | Energy |
+
+The language is deliberately **small and closed**. A model can learn
+everything it needs from the prompt, and each operation corresponds to
+something a human live coder actually does.
+
+### 7.2 Validation rules
+
+`apply_edit(program, edit, max_lines)` enforces:
+
+- **Value ranges.** Numbers must fall within per-effect ranges
+  (`lpf` 200 to 9000, `room` 0 to 0.8, `delay` 0 to 0.6, `gain` 0.5 to
+  1.15, `acid` 0.1 to 0.95, ...). The only non-numeric value allowed is
+  one modulation form, `(slow N $ range a b sine|saw|tri)`, with
+  N from 1 to 64 and both bounds in range.
+- **Pattern hygiene.** Mini-notation must match a restricted character
+  set (lowercase letters, digits, whitespace and the mini-notation
+  symbols `~ _ [ ] < > * ! . , : - | / ? @`; no quotes, parentheses, `$`,
+  `#` or `;`), be at most 120 characters long, and have balanced `[]`
+  and `<>`. Melodic slots may not contain letters, only numbers, rests
+  and symbols, so the model cannot write note names that escape the key.
+- **Role rules.** Each role has its own allowed effects (`ROLE_FX`): the
+  bass gets no reverb or delay (it would muddy the low end), textures get
+  only space and tone. Wrappers come from three whitelists (melodic,
+  drum, bass), and textures take none.
+- **Structural limits.** At most three wrappers per line, a per-style
+  cap on simultaneous lines, no adding a role that is already playing,
+  and tempo moves of at most ±12 BPM within 50 to 150.
+- **Locked and choice slots.** Some slots are locked (the synth name).
+  Others take a value from a fixed list, for example the trance gate
+  pattern `gate` ∈ {0, 1, 2, 3}.
 
 ```python
-FX_RANGES = {"lpf": (200, 9000), "room": (0.0, 0.8), "delay": (0.0, 0.6), ...}
-_check_number("(slow 8 $ range 800 3000 sine)", *FX_RANGES["lpf"])   # ok
-_check_number("99999", *FX_RANGES["lpf"])                          # EditError
-_check_number("1; hush", *FX_RANGES["lpf"])                        # EditError
+def _check_number(value: str, lo: float, hi: float) -> str:
+    value = str(value).strip()
+    if _NUMBER_RE.match(value):
+        v = float(value)
+        if not lo <= v <= hi:
+            raise EditError(f"{value} outside {lo}..{hi}")
+        return f"{round(v, 4):g}"
+    m = _SINE_RE.match(value)
+    if m:
+        rate, a, b = int(m.group(1)), float(m.group(2)), float(m.group(3))
+        if not (1 <= rate <= 64 and lo <= a <= hi and lo <= b <= hi):
+            raise EditError(f"{value} outside {lo}..{hi}")
+        return f"(slow {rate} $ range {a:g} {b:g} {m.group(4)})"
+    raise EditError(f"{value!r} is not a number or (slow N $ range a b sine)")
 ```
 
-Role rules carry musical common sense: the bass takes no reverb or delay
-and no `jux rev`, textures take no rhythmic wrappers, and there is a cap
-on how many lines play at once. They do not limit creativity. They
-remove moves that are never good.
+### 7.3 Why the whitelists matter beyond music
 
-### 3.4 The performer: phases, prompt, fallback
+The Tidal session is a live Haskell interpreter. A free-text value such
+as `1; hush` or a crafted string containing `"` could end a statement
+early and inject arbitrary code. Because every value is either parsed as
+a number, matched against one modulation template, restricted to a
+mini-notation character set or picked from a list, **no model output
+ever reaches GHCi as free text**. The validator is a musical safety net
+and a security boundary at the same time. This matters because prompts
+can carry untrusted content (for example a viewer-supplied theme).
 
-Unstructured freedom produces aimless music. The performer runs a small
-**phase machine** that gives every track a dramatic arc and tells the
-model what kind of move fits now:
+### 7.4 Wrappers
+
+The wrapper whitelists are small vocabularies of idiomatic Tidal
+transformations, all pitch-safe (they shift only by octaves):
+
+```python
+MELODIC_WRAPPERS = ["every 4 (fast 2)", "every 3 (0.25 <~)", "every 4 (0.125 ~>)",
+                    "sometimesBy 0.2 (degradeBy 0.5)", "off 0.125 (|+ n 12)",
+                    "off 0.25 (|+ n 12)", "jux rev", "every 4 rev", "degradeBy 0.1",
+                    "whenmod 8 6 (# lpf 800)", "every 2 (# room 0.5)"]
+DRUM_WRAPPERS    = ["every 4 (fast 2)", "sometimesBy 0.15 (# speed 2)", "degradeBy 0.1",
+                    "every 8 (0.25 <~)", "whenmod 8 7 (# crush 6)", "swingBy (1/8) 4",
+                    "swingBy (1/12) 4", "every 3 (# lpf 1500)",
+                    "sometimesBy 0.1 (echo 3 0.125 0.5)"]
+```
+
+Wrappers compose. `jux rev $ off 0.25 (|+ n 12) $ n (...)` plays the
+line, adds an octave echo a sixteenth later, and plays a reversed copy
+in the other stereo channel. Choosing *which* transformation suits a
+line, and when to take it off again, is one of the most expressive
+decisions available to the model.
+
+---
+
+## 8. The performer
+
+### 8.1 The phase machine
+
+Unstructured freedom produces aimless music. Every track follows a
+**phase machine** that gives it a dramatic arc and tells the model what
+kind of move fits now:
+
+```
+build ──(target lines reached)──▶ groove ──(6-10 edits)──▶ breakdown ──(4 edits)──▶
+rebuild ──(muted lines back)──▶ groove2 ──(6-10 edits)──▶ outro ──(≤1 line left)──▶ next track
+```
 
 ```python
 def _advance_phase(self, program):
@@ -260,10 +592,42 @@ def _advance_phase(self, program):
         st.phase, st.edits_in_phase = "outro", 0
 ```
 
-The **prompt** shows the model the program *as code* (what the audience
-sees), the current phase with a one-line brief, each line's editable
-parts as JSON, the blocks that could still be added, the legal
-operations, and the value ranges. The model replies with one JSON object:
+Each phase comes with a one-sentence brief in the prompt ("Breakdown:
+mute the beat and/or bass, and make what's left more spacious."). The
+target number of lines and the length of the groove phases are drawn at
+random per track, so tracks differ in shape. When the outro leaves at
+most one line, the track ends. The performer plans a new track (new
+key, tempo and progression, related to the previous one), the old lines
+are silenced, and the build starts again. With no fixed style, the
+stream rotates between lofi, ambient, downtempo and piano from track to
+track.
+
+### 8.2 The prompt
+
+The prompt (`prompts/performer.md`) is built fresh for every edit.
+Section by section, it contains:
+
+1. **Framing**: "You are performing a live-coding set in TidalCycles,
+   like Switch Angel ... The audience sees the code and hears every
+   change," plus the stream theme and style.
+2. **The program as code**: exactly what viewers see, including
+   commented-out muted lines.
+3. **Phase and brief**, with the number of edits made so far in this
+   phase.
+4. **Editable parts as JSON**: for each line, its channel, mute state,
+   pattern slots and current values, effects, controls and wrappers.
+5. **Addable blocks** (`name -> role`) and the line limit.
+6. **The operation list**, with the degree convention spelled out ("0 =
+   root, 2 = third, 4 = fifth, 7 = octave; ~ = rest").
+7. **Ranges and whitelists**: effect ranges, effects allowed per role,
+   control ranges, and the melodic, drum and bass wrappers.
+8. **Taste guidance**: "Make each edit count: something a listener will
+   notice, but not a jolt. Prefer revising what's there over adding
+   more. Vary what you touch."
+9. **Reply contract**: one JSON object with the operation plus `reason`
+   and optional `narration`, with an example.
+
+A typical reply:
 
 ```json
 {"op": "set_pattern", "role": "lead", "name": "melody",
@@ -272,13 +636,13 @@ operations, and the value ranges. The model replies with one JSON object:
  "narration": "The melody leans down, like it's getting sleepy."}
 ```
 
-`reason` is shown on screen as a code comment and `narration` is spoken
-by a TTS voice. Requiring a reason is cheap and useful. It makes the
-model state an intention before committing to a move, and it gives the
-evaluator a record of what the model *meant*, not only what it did.
+The system prompt is one sentence: *"You are a live coder performing
+TidalCycles. Reply with JSON only."* The performer asks for at most 500
+tokens at temperature 0.8. For Qwen-family models, the local provider
+turns off "thinking" mode in the chat template; otherwise the model can
+spend thousands of tokens reasoning and miss its bar.
 
-The LLM call itself is plain OpenAI-compatible HTTP, so any local server
-works (`llama.cpp`'s `llama-server`, vLLM, LM Studio, Ollama's `/v1`):
+### 8.3 From reply to edit
 
 ```python
 def _llm_edit(self, program):
@@ -287,7 +651,7 @@ def _llm_edit(self, program):
                              "You are a live coder performing TidalCycles. Reply with JSON only.",
                              self._prompt(program), max_tokens=500)
         edit = self._edit_from_json(llm.extract_json(reply), program)
-        apply_edit(program, edit, self.settings["max_lines"])   # dry-run validation
+        apply_edit(program, edit, self.settings["max_lines"])   # validate before returning
         self._llm_failures = 0
         return edit
     except (llm.LLMError, EditError, ValueError, TypeError, KeyError) as e:
@@ -298,18 +662,76 @@ def _llm_edit(self, program):
         return None
 ```
 
-The **built-in performer** makes the same kinds of moves at random
-within each phase (add the next role in the style's order, mutate one
-note, ride a filter, try a wrapper). It keeps the music going when the
-model is slow, loading or wrong. It also serves as the **null model** for
-the creativity test in section 4.
+`extract_json` finds the first balanced JSON object in the reply, fenced
+or not, while tracking strings and escapes. This tolerates the chatty
+preambles local models like to add. `_edit_from_json` checks that the
+op is known, trims `reason` to 160 characters, passes `narration`
+through the speakability filter and, for `add`, looks the block up in
+the current style's library and creates the line. The edit is then
+validated against the *current* program before it is returned, so the
+engine gets either a valid edit or `None`.
 
-### 3.5 The live engine
+After three failures in a row, the performer skips the model for the
+next five edits. This keeps a model that is still loading, or one that
+has fallen into a bad output pattern, from delaying every bar.
 
-The engine is where the performance becomes real time. It asks the
-performer for the next edit *in the background* while the current bars
-play, then applies it exactly on a bar boundary, re-evaluating only the
-lines that changed:
+### 8.4 The built-in performer
+
+When the model is unavailable, or deliberately as a **baseline**, the
+built-in performer chooses edits with simple, phase-aware randomness:
+
+- **build**: start with one of the style's openers, then add missing
+  roles in the style's order (lofi: beat, keys, bass, lead, texture,
+  percussion), sometimes tweaking in between.
+- **breakdown**: mute beat, then bass, then make calm tweaks (darker
+  filters, lower acid).
+- **rebuild**: unmute bass, then beat.
+- **outro**: remove lines one by one, keeping the texture for last.
+- **groove**: occasionally add a missing role (12%) or nudge the tempo
+  (5%); otherwise *tweak*.
+
+A tweak picks a random line and a random kind of change: a pattern edit
+(most often changing one number to another from the block's degree
+pool, a small motivic mutation), an effect edit (filter scaled by a
+random factor, sometimes turned into a slow sine sweep, bitcrush toggled
+on the beat), a control ride (the acid knob drifting up or down, which
+direction depending on phase), or toggling a wrapper. Every candidate
+goes through `apply_edit`, and the performer retries up to twelve times
+until one is valid.
+
+The result sounds acceptable, structured and in key, but it has no
+intention behind it. That is exactly what a null model should be.
+
+---
+
+## 9. The live engine
+
+### 9.1 The clock
+
+Tidal keeps its own time in *cycles*. The engine mirrors it with a
+`Clock` that converts wall-clock time into a cycle position and handles
+tempo changes without drift. It does this by re-anchoring on every cps
+change:
+
+```python
+class Clock:
+    def cycle(self) -> float:
+        return self.ref_cycle + (self._now() - self.ref_time) * self.cps
+
+    def set_cps(self, cps: float) -> None:
+        self.ref_cycle = self.cycle()          # re-anchor at the current position
+        self.ref_time = self._now()
+        self.cps = cps
+
+    def seconds_until(self, cycle: float) -> float:
+        return (cycle - self.cycle()) / self.cps
+```
+
+At the start of a set the engine sends `hush`, `setcps` and
+`resetCycles` and resets its clock at the same moment, so both agree on
+where cycle 0 is.
+
+### 9.2 Thinking while the music plays
 
 ```python
 while not self.stop_event.is_set():
@@ -322,7 +744,7 @@ while not self.stop_event.is_set():
         self.log(f"[Live] skipped invalid edit ({edit.describe()}): {e}")
         next_cycle += edit_bars
         continue
-    statements = changed_statements(program, new)          # e.g. ["d5 $ n (scale ...)"]
+    statements = changed_statements(program, new)
     if self._type_ok(statements) and self._send(statements):
         program = new
         self.log(f"✎ {edit.describe()}   -- {edit.reason}")
@@ -330,14 +752,49 @@ while not self.stop_event.is_set():
     next_cycle += edit_bars
 ```
 
-Thinking in the background matters for local models. A 35B model on a
-consumer GPU can take 5 to 20 seconds per reply. With edits every 4 bars
-at 80 BPM (12 seconds), the engine absorbs that latency instead of
-stuttering. An optional GHCi type checker compiles every changed
-statement against the real Tidal library before it is sent, which is a
-second safety net behind the validator.
+The next edit is requested *as soon as* the previous one has been
+applied, so the model has the full `edit_bars` window to answer: four
+bars at 80 BPM is 12 seconds, eight bars at 138 BPM is about 14 seconds.
+That is enough for a 35B mixture-of-experts model on a single consumer
+GPU when thinking mode is off. Edits always land on a bar boundary
+(Tidal re-evaluates at the next cycle anyway), so even a late edit
+sounds intentional. While waiting, the engine writes a heartbeat file
+every few seconds for the watchdog.
 
-What viewers see is the program itself, with the most recent edit marked:
+### 9.3 Defence in depth
+
+An edit passes up to four gates before it is heard:
+
+1. **Parse**: JSON extraction and op and block lookup (in the performer).
+2. **Validate**: `apply_edit` ranges and rules (in the performer, and
+   again in the engine against the program at apply time).
+3. **Type check (optional)**: each changed statement is compiled in a
+   separate GHCi process running Tidal, as
+   `:t ((<expr>) # orbit N :: ControlPattern)`, before it is sent. This
+   is on whenever an LLM is performing and GHCi with Tidal is installed.
+4. **Interpreter**: the live GHCi session's output is scanned for errors
+   after every send. A rejected statement leaves the previous pattern
+   playing, and the engine keeps the old program.
+
+At every gate a failure costs one edit slot and nothing else.
+
+### 9.4 Publishing
+
+After each successful edit the engine:
+
+- writes the on-screen **overlay**: a now-playing line (title, key,
+  tempo, phase) and the program's code with the `▶` marker and the
+  reason as a trailing comment. Both files are written atomically, and
+  ffmpeg re-reads them every frame.
+- appends the edit to `runtime/thoughts.log` (human-readable) and
+  `runtime/history.jsonl` (structured: `op`, `role`, `name`, `value`,
+  `reason` and the full program afterwards).
+- saves `runtime/state.json` (program, performer state, style), so a
+  restarted engine resumes mid-track with `--resume` instead of starting
+  over.
+- hands any `narration` to the narrator.
+
+What viewers see:
 
 ```haskell
 setcps (84/60/4)
@@ -351,70 +808,147 @@ setcps (84/60/4)
 -- let the melody echo into the space
 ```
 
-### 3.6 The audio stack
+---
 
-- **GHCi + Tidal** receives the statements through a persistent session
-  that starts from `BootTidal.hs`.
-- **SuperCollider + SuperDirt** plays them. Custom SynthDefs (electric
-  piano, sub, glass bell, acid, gated saw, supersaw with sidechain duck)
-  were rendered offline and loudness-measured, so the blocks start
-  balanced. A master compressor and limiter keep any edit from clipping
-  the stream.
-- **ffmpeg** captures the SuperCollider output plus an overlay of the
-  code and pushes it over RTMP. A watchdog restarts crashed parts, and
-  the engine saves its state after every edit so it can resume where it
-  left off.
+## 10. The LLM gateway
+
+### 10.1 Providers
+
+All model calls go through a single function,
+`llm.complete(model_id, system, user)`. Model ids are
+`<provider>/<model>`:
+
+| Id | Provider | Transport |
+|---|---|---|
+| `local` or `local/<model>` | llama.cpp `llama-server` (default) | OpenAI-compatible `/chat/completions` over plain HTTP |
+| `claude/<model>` | Anthropic API | official SDK |
+| `jevtypesafe/<model>` | jevtypesafeai.com | OpenAI-compatible or native, configured in `.env` |
+| anything else | LiteLLM passthrough | e.g. `ollama/...`, other hosted APIs |
+
+The local path needs no extra packages:
+
+```python
+body = {"model": model,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "max_tokens": max_tokens, "temperature": temperature,
+        "chat_template_kwargs": {"enable_thinking": False}}     # Qwen: no hidden reasoning
+resp = requests.post(f"{LOCAL_LLM_API_BASE}/chat/completions", json=body, timeout=timeout)
+```
+
+Because the interface is the common denominator, any local server works:
+`llama-server`, vLLM, LM Studio, or Ollama's `/v1` endpoint. Swapping
+models for an experiment is a command-line flag.
+
+### 10.2 Failure containment
+
+`complete` runs every call in a worker thread with a hard timeout (60
+seconds by default). It turns *every* failure (connection refused, HTTP
+503 while a model loads, bad JSON envelope, authentication, even crashes
+inside native extensions) into a single `LLMError`. Callers only need to
+handle one exception type, and nothing an LLM backend does can take
+down the music thread.
+
+### 10.3 Local server lifecycle
+
+If the configured model is local and nothing answers on the port, the
+orchestrator launches `llama-server` itself: the GGUF file from `.env`,
+all layers on the GPU, a 32k context and two parallel slots. It starts
+the server *before* booting SuperCollider and Tidal, so the model loads
+while the audio stack starts. It then polls `/health` (503 while
+loading, 200 when ready) for up to five minutes. If the model still
+isn't ready, the built-in performer plays until it is. The stream never
+waits on the model.
 
 ---
 
-## 4. Testing creativity: a protocol
+## 11. The audio and streaming stack
 
-Because every move is legal, you can compare a local model to the
-built-in random performer and to other models on the same footing. We
-suggest four families of measures, all computable from the engine's logs
-(`runtime/history.jsonl` stores every applied edit as `op`, `role`,
-`name` and `value`, with its reason and the full program afterwards; the session log records every rejected or
-unusable LLM reply).
+- **Tidal session.** A persistent GHCi process loads `BootTidal.hs`,
+  which connects to SuperDirt on port 57120 and defines the usual
+  helpers (`d1`..`d12`, `hush`, `setcps`, `all`, `resetCycles`). One
+  lock serialises writes, so the engine, the narrator and a watchdog
+  replay never interleave. Output is scanned for GHCi error signatures
+  after each send.
+- **SuperCollider.** `sclang superdirt_boot.scd` boots the server, starts
+  SuperDirt with 12 orbits, loads the custom SynthDefs and appends the
+  master chain at the tail of the node tree:
 
-### 4.1 Competence: can it play at all?
+  ```supercollider
+  SynthDef(\ys_master, {
+      var sig = In.ar(0, 2);
+      sig = Compander.ar(sig, sig, thresh: 0.25, slopeBelow: 1, slopeAbove: 0.5,
+                         clampTime: 0.02, relaxTime: 0.25);
+      sig = Limiter.ar(sig * 1.4, 0.89, 0.01);
+      ReplaceOut.ar(0, sig);
+  }).add;
+  ```
+- **Narration.** A Piper TTS voice speaks `narration` lines through the
+  stream's audio sink, loudness-normalised to the stream target plus a
+  small lift. At most one line is queued, lines are at least a minute
+  apart, and while the voice speaks the whole Tidal mix is ducked with
+  `all (|* gain 0.85)` and restored with `all id`.
+- **Streaming.** `stream/stream.sh` runs ffmpeg with a background image
+  or video, an audio waveform and three `drawtext` layers (now playing,
+  code, narration) that reload their text files every frame. The
+  captured audio is encoded and pushed over RTMP to YouTube. ffmpeg is
+  restarted with backoff if it exits.
+- **Watchdog.** A separate process watches for sustained silence on the
+  stream sink and for a stale engine heartbeat. When either happens, it
+  restarts the engine service, which resumes from `state.json`. Restarts
+  are rate-limited and can send a phone notification.
 
-- **Validity rate**: the share of LLM replies that parse *and* pass
-  `apply_edit`. Below about 70%, the fallback performer is doing most of
-  the playing and nothing else can be measured.
-- **Latency**: the share of replies that arrive before their bar
-  boundary.
+---
 
-### 4.2 Divergence: does it produce ideas?
+## 12. Testing creativity: the protocol
 
-- **Operation entropy**: Shannon entropy over `op` types. A model that
-  only rides `lpf` is not performing.
-- **Novel material**: the number of distinct pattern strings the model
-  writes that come neither from the block library nor from its own
-  history.
-- **Self-repetition**: how often an edit exactly undoes or repeats one
-  from the last *k* edits.
+Because every move is legal and the built-in performer draws from the
+same move space, performers can be compared on equal terms. We propose
+four groups of measures, all computable from the engine's logs.
 
-### 4.3 Coherence: do the ideas fit together?
+### 12.1 Competence: can it play at all?
 
-- **Phase fit**: in `breakdown`, does it strip back? In `build`, does it
-  add? Score each edit against the phase brief.
-- **Motivic development**: do melody edits change one or two degrees of
-  the previous pattern (development) or replace it completely (a jump)?
-  Edit distance between successive values of the same slot measures
-  this.
-- **Reason and action consistency**: an LLM judge, or a human, checks
-  whether `reason` actually describes the edit ("darken the keys" should
-  lower `lpf`, not raise it).
+- **Validity rate**: the share of LLM replies that parse and pass
+  `apply_edit` (count the `LLM edit unusable` lines in the session log).
+  Below about 70%, the fallback does most of the playing and the other
+  measures describe the baseline, not the model.
+- **Punctuality**: the share of replies that arrive before their bar.
+  Measure with `--show-llm` timings, or wrap `llm.complete`.
 
-### 4.4 Taste: is it any good?
+### 12.2 Divergence: does it produce ideas?
 
-This measure needs ears. Run blind A/B listening sessions: the same
-style, seed and duration, one set played by the built-in performer and
-one by the model under test. Listeners pick the one they would keep
-listening to. A 24/7 stream adds a naturally occurring signal on top:
-how long viewers stay, broken down by which performer is live.
+- **Operation entropy**: Shannon entropy over `op`. A performer that
+  only rides `lpf` scores near 0; one that uses all eleven operations
+  evenly scores about 3.46 bits.
+- **Novel material**: distinct pattern values the model writes that
+  appear neither in the block library nor earlier in its own history.
+- **Self-repetition**: the share of edits that repeat an identical
+  `(op, role, name, value)` from the previous *k* edits, or undo one
+  (A→B→A).
 
-### 4.5 A minimal scorer
+### 12.3 Coherence: do the ideas fit together?
+
+- **Phase fit**: does it strip back in the breakdown and add during the
+  build? Score each edit against its phase brief with a simple rule
+  table.
+- **Motivic development**: the edit distance between successive values
+  of the same melodic slot. Small distances mean development, large ones
+  mean replacement. A musical performer shows both, and mostly the first.
+- **Reason consistency**: does `reason` match the edit? "Darken" should
+  lower `lpf`, "open the acid" should raise `acid`. Check with rules for
+  the common verbs, and with an LLM judge or a human for the rest.
+- **Breadth of attention**: the distribution of edits over roles. A
+  performer that edits only the lead is ignoring the ensemble.
+
+### 12.4 Taste: is it any good?
+
+Taste needs ears. Run **blind A/B listening sessions**: the same style,
+seed and duration, one set played by the built-in performer and one by
+the model under test (or two models against each other). Listeners pick
+the one they would keep listening to. A 24/7 stream adds a naturally
+occurring signal on top: how long viewers stay, broken down by which
+performer was live.
+
+### 12.5 A minimal scorer
 
 ```python
 import json, math
@@ -435,61 +969,86 @@ def score(history_path="runtime/history.jsonl", k=6):
             "reasoned": round(reasons / total, 2)}
 ```
 
-Run each performer on the same style and seed for the same simulated
-time (`--dry-run` uses a simulated clock, so an hour-long set runs in
-seconds with the built-in performer, or as fast as the model can reply
-with an LLM), score each run, and compare. The built-in performer sets
-the **random baseline**. A model is only *creative* in the sense tested
-here if it beats that baseline on coherence and taste without losing on
-divergence.
+### 12.6 Running an experiment
+
+`--dry-run` replaces the audio stack with a printer and the clock with a
+simulated one. With the built-in performer, an hour-long set runs in
+seconds. With an LLM, it runs as fast as the model can reply. Fix the
+style and seed, run each performer for the same number of tracks, score
+each run, and listen to the interesting ones live:
 
 ```bash
 # baseline: the built-in random performer
 python orchestrator.py --dry-run --style lofi --llm none --seed 7 --pieces 3
 # candidate: a local model served by llama.cpp on :8080
 python orchestrator.py --dry-run --style lofi --llm local --model qwen-agentworld-35b --seed 7 --pieces 3
+# the same model, live, with its raw replies printed
+python orchestrator.py --style lofi --llm local --show-llm
 ```
+
+A model counts as **creative in the sense tested here** when it beats the
+built-in baseline on coherence and taste without falling behind on
+divergence. Beating the baseline on divergence alone is easy (random
+choices are diverse) and proves nothing.
 
 ---
 
-## 5. Observations and design lessons
+## 13. Design lessons
 
-- **Constrain the vocabulary, not the imagination.** Scale-degree
-  patterns, curated blocks and ranged effects remove whole classes of
-  errors while leaving thousands of distinct musical moves open. Local
-  models that could not write a valid Tidal track can still perform
-  sensibly in this setup.
-- **Code is the right artefact.** Earlier versions had the LLM pick
-  high-level arrangement plans ("verse, energy 0.5, pad + keys") that an
-  engine rendered. The music was correct but lifeless, and the same
-  sustained synth dominated every piece. Making the *program itself* the
-  thing the model grows and revises, one audible change at a time, made
-  both the music and the model's decisions legible.
-- **One small edit at a time.** Small edits keep each decision
-  attributable, which is what makes evaluation possible, and they sound
-  like a human performer instead of a playlist.
-- **Always have a fallback.** A stream that stops when the model fails
-  is useless for testing a model over long runs. With a fallback, model
-  failures become data points instead of outages.
-- **Ask for reasons.** A one-line `reason` costs a few tokens, makes the
-  model state an intention before it acts, and is the most useful single
-  artefact for judging whether a model "meant" what it played.
+- **Constrain the vocabulary, not the imagination.** Scale-degree slots,
+  curated blocks and ranged effects remove whole classes of errors while
+  leaving thousands of distinct musical moves open. Models that could
+  not write a valid Tidal track on their own can perform sensibly inside
+  this frame.
+- **Make the code the artefact.** Coarse planning roles (the Director)
+  produced correct but lifeless music. Making the program itself the
+  thing the model grows and revises made both the music and the model's
+  decisions legible.
+- **Frequent, small, attributable decisions.** They sound like
+  performance and make evaluation possible.
+- **Fallbacks turn failures into data.** Continuity is what makes
+  long-horizon testing possible at all.
+- **Ask for reasons.** One line of intent costs a few tokens and is the
+  most useful single artefact for judging whether a model "meant" what
+  it played.
+- **The validator is also the security boundary.** When model output
+  drives a live interpreter, whitelists are not optional.
 
-## 6. Limitations
+## 14. Limitations and extensions
 
-- The palette is curated, so the test measures *compositional and
-  performative* creativity within a sound world, not sound design.
-- The phase machine imposes a track arc. Models are tested on how they
-  fill that arc, not on whether they would invent one. A variant that
-  lets the model choose phase transitions is a natural extension.
-- Metrics of divergence can be gamed by randomness, which is why the
-  random built-in performer is the required baseline and why listening
-  tests stay the final judge.
+- **Curated palette.** The test measures compositional and performative
+  creativity within a given sound world, not sound design. An extension
+  could expose a few SynthDef parameters as additional controls.
+- **Imposed arc.** The phase machine proposes each track's shape. Letting
+  the model decide phase transitions ("I think it's time for a
+  breakdown") would test structural creativity too.
+- **Single-move replies.** One edit per call keeps things attributable
+  but prevents coordinated moves (mute the beat *and* open the filter).
+  A small "combo" operation is a natural next step.
+- **Memory.** The model sees only the current program and phase. Giving
+  it a short summary of its recent edits would help long-range
+  development, and should be tested for its effect on repetition.
+- **Gameable metrics.** Divergence measures reward randomness, which is
+  why the random baseline is required and why listening remains the
+  final judge.
+
+## Glossary
+
+- **Cycle**: Tidal's unit of musical time; here one 4-beat bar. `cps` is
+  cycles per second (`bpm / 60 / 4`).
+- **Mini-notation**: Tidal's compact pattern strings, e.g. `"bd ~ [sn sn]"`,
+  `"<0 2 4>"`, `"hh*8"`.
+- **Orbit**: a SuperDirt effect bus; each channel `dN` uses its own.
+- **Wrapper**: a higher-order function applied to a whole line, e.g.
+  `jux rev`.
+- **Scale degree**: a step within the current scale; with `scale "minor"`,
+  degree 2 is the minor third.
 
 ## See also
 
 - TidalCycles documentation: <https://tidalcycles.org/docs/>
-- Reference implementation: `music/livecode.py`, `music/blocks.py`,
-  `music/performer.py`, `music/live_engine.py` and `prompts/performer.md`
-  in [`jsemrau/ystreamer`](https://github.com/jsemrau/ystreamer)
+- Reference implementation, [`jsemrau/ystreamer`](https://github.com/jsemrau/ystreamer):
+  `music/livecode.py`, `music/blocks.py`, `music/performer.py`,
+  `music/live_engine.py`, `music/llm.py`, `prompts/performer.md`,
+  `tidal/synthdefs.scd`
 - The 24/7 stream: YouTube **@sleeplesscomposer**
