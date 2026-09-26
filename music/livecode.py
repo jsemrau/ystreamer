@@ -50,7 +50,7 @@ MELODIC_WRAPPERS = [
     "whenmod 8 6 (# lpf 800)", "every 2 (# room 0.5)",
 ]
 DRUM_WRAPPERS = [
-    "every 4 (fast 2)", "sometimesBy 0.15 (# speed 2)", "degradeBy 0.1", "every 8 (0.25 <~)",
+    "every 4 (fast 2)", "degradeBy 0.1", "every 8 (0.25 <~)",
     "whenmod 8 7 (# crush 6)", "swingBy (1/8) 4", "swingBy (1/12) 4", "every 3 (# lpf 1500)",
     "sometimesBy 0.1 (echo 3 0.125 0.5)",
 ]
@@ -72,7 +72,6 @@ WRAPPER_NOTES = {
     "degradeBy 0.1": "randomly drops 1 in 10 notes: human, less mechanical",
     "whenmod 8 6 (# lpf 800)": "last 2 bars of every 8 go muffled: a dip before the next phrase",
     "every 2 (# room 0.5)": "every other bar gets more reverb: the space pulses",
-    "sometimesBy 0.15 (# speed 2)": "occasional hits an octave up: sparkle",
     "every 8 (0.25 <~)": "every 8th bar shifts early: a turnaround",
     "whenmod 8 7 (# crush 6)": "last bar of every 8 is bitcrushed: a gritty fill",
     "swingBy (1/8) 4": "strong swing: laid-back hip-hop feel",
@@ -325,6 +324,52 @@ def check_pattern(value: str) -> str:
     return value
 
 
+_SOUND_RE = re.compile(r"[a-z][a-z0-9]*(?::\d+)?")
+
+# Harmony. Melodic slots are scale degrees relative to the current chord's
+# root, so every note is in the key, but not every note is in the chord:
+# degrees 1, 3 and 5 (2nd, 4th, 6th) clash with the chord that is sounding,
+# e.g. degree 5 in minor is a semitone above the chord's fifth. So:
+# - bass, acid and fast repeating lines (a "*" in the pattern) play chord
+#   tones only (root, 3rd, 5th, 7th in any octave);
+# - melodies land on a chord tone on every strong step and may pass through
+#   other scale notes only on the weak steps in between.
+CHORD_TONES = {0, 2, 4, 6}
+_DEGREE_RE = re.compile(r"(?<![*!/@%\d.:])-?\d+")
+_STRICT_ROLES = ("bass", "acid")
+
+
+def harmony_problem(role: str, value: str) -> str | None:
+    """Why a melodic pattern would clash with the chords, or None if it fits."""
+    degrees = [int(d) for d in _DEGREE_RE.findall(value)]
+    if not degrees:
+        return None
+    off = sorted({d for d in degrees if d % 7 not in CHORD_TONES})
+    if not off:
+        return None
+    tokens = value.split()
+    flat = not re.search(r"[\[\]<>*!{}(),|]", value)
+    if role in _STRICT_ROLES or not flat:
+        return (f"degrees {off} are not in the chord; {role} lines and repeating patterns play chord "
+                "tones only (0, 2, 4, 6, 7, 9 ... and below: -1, -3, -5)")
+    strong = [t for i, t in enumerate(tokens) if i % 2 == 0 and _DEGREE_RE.fullmatch(t)]
+    clash = sorted({int(t) for t in strong if int(t) % 7 not in CHORD_TONES})
+    if clash:
+        return (f"degrees {clash} fall on strong steps but aren't in the chord; put chord tones "
+                "(0, 2, 4, 6, 7 ...) on the strong steps and other notes only in between")
+    return None
+
+
+def kit_sounds(style: str, block_name: str, slot: str) -> set[str]:
+    """The sample names a drum slot may use: those in its block's variants."""
+    from .blocks import find_block
+
+    block = find_block(style, block_name)
+    if block is None or slot not in block.patterns:
+        return set()
+    return {m for variant in block.patterns[slot] for m in _SOUND_RE.findall(variant)}
+
+
 def gain_range(line: LineSpec) -> tuple[float, float]:
     """Gain edits balance a line, they don't blow up the mix: at most about
     +/-3 dB (gain x0.92..x1.09, SuperDirt's curve is amplitude ~ gain^4)
@@ -397,6 +442,18 @@ def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
         value = check_pattern(edit.value)
         if not line.drums and re.search(r"[a-z]", value.replace("~", "")):
             raise EditError("melodic patterns are scale degrees (numbers), not names")
+        if not line.drums:
+            problem = harmony_problem(line.role, value)
+            if problem:
+                raise EditError(problem)
+        if line.drums:
+            # Drum lines keep their kit: only the sounds the block defines for
+            # this slot (any other sample could be pitched, out of key, or
+            # simply not belong to the track).
+            allowed = kit_sounds(program.track.style, line.block, edit.name)
+            used = set(_SOUND_RE.findall(value))
+            if allowed and not used <= allowed:
+                raise EditError(f"{sorted(used - allowed)} not in this line's kit; use {sorted(allowed)}")
         line.patterns[edit.name] = value
     elif op == "wrap":
         allowed = allowed_wrappers(line)

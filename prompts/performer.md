@@ -36,9 +36,16 @@ you just made, and don't make the same kind of move three times in a row.
   the time; `[a, b]` plays together; `_` holds the previous note.
 - Melodic patterns are scale degrees relative to the current chord's root:
   0 = root, 2 = third, 4 = fifth, 6 = seventh, 7 = octave, negatives go below.
-  Any numbers stay in key. Fewer notes and rests (`~`) = calmer; more notes,
-  higher degrees = more energy.
-- Drum patterns use sample names, e.g. `"bd ~ ~ bd ~ ~ bd ~"`.
+  Every number is in the key, but only the chord tones (0, 2, 4, 6 and their
+  octaves: 7, 9, 11, 13, -1, -3, -5) are in harmony with the chord. The
+  others (1, 3, 5 ...) clash with it. So bass and acid lines, and any
+  repeating pattern (with `*`), use chord tones only; melodies put chord
+  tones on the strong steps (1st, 3rd, 5th, 7th) and other notes only in
+  between. Fewer notes and rests (`~`) = calmer; more notes, higher degrees
+  = more energy.
+- Drum patterns use sample names, e.g. `"bd ~ ~ bd ~ ~ bd ~"`, but only the
+  sounds listed for that slot (`sounds`): the kit is fixed, so the track
+  keeps one coherent sound. Vary rhythm and density, not the samples.
 
 What the wrappers and effects below do (only the ones you can use now):
 {wrapper_notes}
@@ -68,6 +75,9 @@ Operations (exactly one per reply):
 - `{{"op": "wrap" | "unwrap", "role": "<role>", "name": "<wrapper>"}}`
 - `{{"op": "tempo", "value": "<bpm>"}}`, at most +/-12 BPM from now
 
+Harmony and a coherent sound come first: everything must sit together and
+stay consonant. Never make the track harsher or busier just to change
+something.
 Make each edit count: something a listener will notice, but not a jolt.
 Prefer revising what's there over adding more. Vary what you touch.
 

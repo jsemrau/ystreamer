@@ -745,6 +745,10 @@ class Performer:
                                                                if k not in LOCKED_SLOTS}}
             if line.muted:
                 entry["muted"] = True
+            if line.drums:
+                from .livecode import kit_sounds
+
+                entry["sounds"] = {slot: sorted(kit_sounds(self.style, line.block, slot)) for slot in line.patterns}
             entry["fx"] = dict((n, v) for n, v in line.fx)
             if line.pfs:
                 entry["controls"] = dict((n, v) for n, v in line.pfs)

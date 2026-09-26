@@ -1,3 +1,4 @@
+import re
 import random
 
 import pytest
@@ -582,3 +583,49 @@ def test_gain_edits_stay_near_the_lines_level():
     edit = performer._edit_from_json({"op": "set_fx", "role": "chords", "name": "gain", "value": "1.0"}, program)
     apply_edit(program, edit)                                                     # clamped, playable
     assert float(edit.value) <= base * 1.09 + 1e-3
+
+
+def test_drum_lines_keep_their_kit():
+    program = _program_with("trance", "trance_beat")
+    ok = apply_edit(program, Edit("set_pattern", role="beat", name="hats", value="[~ 808oh]*4, hh*16"))
+    assert "808oh" in ok.statement("beat")
+    for foreign in ("[~ arpy]*4", "cp*4", "[~ superpiano]*4", "[~ 808oh:7]*4"):
+        with pytest.raises(EditError, match="kit"):
+            apply_edit(program, Edit("set_pattern", role="beat", name="hats", value=foreign))
+    performer = Performer(random.Random(0), style="trance", model_id="local", log=lambda *_: None)
+    assert '"sounds":{' in performer._prompt(program)
+
+
+def test_no_random_pitching_of_drums():
+    from music.livecode import DRUM_WRAPPERS
+
+    assert not any("speed" in w for w in DRUM_WRAPPERS)
+
+
+def test_every_melodic_variant_and_pool_is_in_harmony():
+    from music.livecode import CHOICE_SLOTS, harmony_problem
+
+    for style, blocks in BLOCKS.items():
+        for block in blocks:
+            if block.drums:
+                continue
+            for slot, variants in block.patterns.items():
+                if slot in CHOICE_SLOTS or slot == "synth":
+                    continue
+                for v in variants:
+                    assert harmony_problem(block.role, v) is None, (style, block.name, v)
+            if block.role in ("bass", "acid"):
+                assert all(d % 7 in (0, 2, 4, 6) for d in block.pool), (style, block.name, block.pool)
+
+
+def test_clashing_notes_are_rejected():
+    from music.livecode import harmony_problem
+
+    program = _program_with("trance", "acid")
+    with pytest.raises(EditError, match="not in the chord"):          # the edit from the log
+        apply_edit(program, Edit("set_pattern", role="acid", name="motif", value="0 5 0 9 7 0 5 12"))
+    assert apply_edit(program, Edit("set_pattern", role="acid", name="motif", value="0 4 0 9 7 11"))
+    assert harmony_problem("lead", "0 1 2 3 4 5 7 ~") is None           # passing notes on weak steps
+    assert harmony_problem("lead", "3 ~ 2 ~ 0 ~ ~ ~") is not None       # a 4th on the downbeat
+    assert harmony_problem("lead", "[0 3]*2") is not None               # repeating: chord tones only
+    assert harmony_problem("bass", "0 ~ -1 ~") is None                   # -1 = the 7th below
