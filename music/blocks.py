@@ -190,6 +190,54 @@ BLOCKS: dict[str, list[Block]] = {
     ],
 }
 
+
+
+def _techno_blocks(hard: bool) -> list[Block]:
+    """Techno (hard=False) or hardcore/gabber (hard=True): the kick is the
+    lead instrument, distorted harder for hardcore."""
+    pump = '(|* gain "[0.67 0.91 1 1]*4")'
+    if hard:
+        kick = Block("gabber_kick", "beat", 's "{kick}"',
+                     {"kick": ["ys_kick*4", "ys_kick*4", "ys_kick ys_kick ys_kick [ys_kick ys_kick]"]},
+                     fx=[["gain", "1.0"], ["shape", "0.45"], ["lpf", "6000"]], drums=True)
+    else:
+        kick = Block("techno_kick", "beat", 's "{kick}"',
+                     {"kick": ["ys_kick*4", "ys_kick*4", "ys_kick ys_kick ys_kick [ys_kick ~ ~ ys_kick]"]},
+                     fx=[["gain", "1.0"], ["shape", "0.2"], ["lpf", "5000"]], drums=True)
+    return [
+        kick,
+        Block("hats", "perc", 's "[{hats}, {clap}]"',
+              {"hats": ["hh*16", "[~ 808oh]*4, hh*16", "[~ hh]*8", "[~ 808oh]*4"],
+               "clap": ["~ cp ~ cp", "~", "~ ~ ~ cp"]},
+              fx=[["gain", "0.82"], ["hpf", "400"], ["room", "0.15"]],
+              wrappers=['(|* gain "[0.8 1]*8")'], drums=True),
+        _melodic("rumble", "bass", "ys_tbass", "rhythm",
+                 ["[~ 0]*4", "[~ 0 0 0]*4", "[~ 0 ~ 0]*4", "[~ 0 0 ~]*4"],
+                 [["gain", "1.05"], ["lpf", "450"], ["legato", "0.4"]], octave=" - 24", pool=[0, 7, -2],
+                 wrappers=[pump]),
+        Block("acid", "acid",
+              'n (scale "{mode}" ("<{motif}>*16" |+ "<{roots}>") {root} - 12) # s "ys_acid"',
+              {"motif": ["0 0 3 0 7 0 5 0", "0 12 0 10 0 7", "0 3 0 0 7 3", "0 0 12 0 0 10 7 5"]},
+              fx=[["gain", "0.95"], ["legato", "0.5"]], pfs=[["acid", "0.45" if not hard else "0.6"],
+                                                          ["acidres", "0.25"]],
+              wrappers=[pump], pool=[0, 3, 5, 7, 10, 12]),
+        Block("stab", "chords",
+              'struct "{stab}" $ n (scale "{mode}" "<{chords}>" {root}) # s "ys_supersaw" # pF "beattime" {beat}',
+              {"stab": ["~ ~ t ~ ~ ~ ~ ~", "~ t ~ ~ ~ ~ t ~", "~ ~ ~ t ~ ~ t ~", "[~ t]*4"]},
+              fx=[["gain", "0.78"], ["legato", "0.25"], ["lpf", "2200"], ["room", "0.35"]],
+              pfs=[["duckdepth", "0.6"]]),
+        _melodic("hoover", "lead", "ys_supersaw", "melody",
+                 ["0 ~ ~ 0 ~ ~ 3 ~", "7 ~ 5 ~ 3 ~ 0 ~", "0 ~ 12 ~ 10 ~ 7 ~"],
+                 [["gain", "0.9"], ["lpf", "3500"], ["room", "0.3"]], octave="",
+                 pfs=[["duckdepth", "0.7"]], pool=[0, 3, 5, 7, 10, 12]),
+        Block("noise", "texture", 'n (scale "{mode}" "<{roots}>" {root} - 12) # s "ys_air"', {},
+              fx=[["gain", "0.85"], ["hpf", "500"], ["legato", "1.3"], ["room", "0.8"]]),
+    ]
+
+
+BLOCKS["techno"] = _techno_blocks(hard=False)
+BLOCKS["hardcore"] = _techno_blocks(hard=True)
+
 # Per style: bars between edits, how many lines a track builds up to, and
 # which roles open a track.
 STYLE_SETTINGS = {
@@ -199,6 +247,8 @@ STYLE_SETTINGS = {
     "ambient": {"edit_bars": 4, "max_lines": 5, "openers": [["chords"], ["texture"], ["keys"]]},
     "piano": {"edit_bars": 4, "max_lines": 4, "openers": [["keys"]]},
     "downtempo": {"edit_bars": 4, "max_lines": 5, "openers": [["beat"], ["keys"]]},
+    "techno": {"edit_bars": 8, "max_lines": 6, "openers": [["beat"], ["beat", "perc"]]},
+    "hardcore": {"edit_bars": 8, "max_lines": 5, "openers": [["beat"]]},
 }
 
 

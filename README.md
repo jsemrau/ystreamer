@@ -81,7 +81,16 @@ Set `ANTHROPIC_MODEL=claude-haiku-4-5` in `.env` to make it the default.
 
 ## Choosing the style and mood
 
-There are two options, and you can combine them.
+There are two options, and you can combine them:
+
+- **Style** (`--style`) is the *genre*: it fixes the tempo range, the keys
+  and modes, and the instruments (blocks) the performer can use. It is a
+  hard rule the engine enforces.
+- **Theme** (`--theme`) is a free-text *brief* for the LLM: mood, imagery,
+  titles, and which of the style's moves it prefers. It is a suggestion the
+  model interprets. If the theme names a genre ("hardcore techno"), it also
+  picks the style (table below); if it doesn't, the stream rotates between
+  the chill styles.
 
 **`--style`** fixes the musical style for the whole run:
 
@@ -89,7 +98,10 @@ There are two options, and you can combine them.
 ./venv/bin/python orchestrator.py --style lofi
 ```
 
-The choices are `lofi`, `ambient`, `downtempo`, `piano`, `deephouse` and `trance`.
+The choices are `lofi`, `ambient`, `downtempo`, `piano`, `deephouse`, `trance`,
+`techno` (138-150 BPM: pounding kick, offbeat rumble bass, 16th hats, acid,
+short supersaw stabs) and `hardcore` (160-185 BPM: the same kit with a
+distorted gabber kick).
 Each sets a tempo range, the modes it uses (e.g. minor or dorian for lofi),
 the default instruments and which layers come in first. `deephouse` is
 118-124 BPM with a four-on-the-floor kick, off-beat hats, short chord stabs
@@ -143,6 +155,8 @@ used for the whole run, even with the built-in planner:
 
 | Theme words | Style |
 |---|---|
+| hardcore, gabber, speedcore, frenchcore, terrorcore, rotterdam | `hardcore` |
+| techno, hard techno, acid techno, industrial, rave, berghain | `techno` |
 | trance, switch angel, uplifting, psytrance, supersaw | `trance` |
 | deep house, house, garage, club, dance | `deephouse` |
 | lofi, lo-fi, hip hop, study, beats | `lofi` |

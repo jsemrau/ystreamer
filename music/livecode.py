@@ -275,7 +275,7 @@ def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
     if op not in EDIT_OPS:
         raise EditError(f"unknown op {op!r}")
     if op == "tempo":
-        lo, hi = 50, 150
+        lo, hi = 50, 200
         bpm = float(_check_number(edit.value, lo, hi))
         if abs(bpm - program.track.bpm) > 12:
             raise EditError("tempo changes must be gradual (at most 12 BPM at a time)")

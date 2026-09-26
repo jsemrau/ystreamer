@@ -102,6 +102,16 @@ def test_theme_selects_style():
     assert style_from_theme("ambient music for sleep") == "ambient"
     assert style_from_theme("warehouse party") is None  # "house" only as a word
     assert style_from_theme("rainy evening") is None
+    assert style_from_theme("hardcore techno") == "hardcore"
+    assert style_from_theme("dark techno in a berlin basement") == "techno"
+    assert style_from_theme("rotterdam gabber") == "hardcore"
+
+
+def test_fast_styles_plan_fast_tempos():
+    for style, lo in (("techno", 138), ("hardcore", 160)):
+        for seed in range(10):
+            piece = plan_piece(random.Random(seed), style=style)
+            assert lo <= piece.bpm <= STYLES[style]["bpm"][1]
 
 
 def test_deephouse_starts_with_the_groove_and_is_not_in_the_chill_rotation():
