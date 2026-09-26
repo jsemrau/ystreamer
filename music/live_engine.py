@@ -353,6 +353,10 @@ class LiveEngine:
                 self._record_track_start(program)
                 self._announce(program)
                 self._publish(program, None, "")
+            # Move the arc on now (e.g. build -> groove once the last line is
+            # in), so the wait until the next edit already uses the new phase's
+            # pace, the same one the performer's deadline uses.
+            self.performer.advance_phase(program)
             next_cycle += self.performer.edit_bars_now()
         self.performer.report_stats()
         self._pool.shutdown(wait=False, cancel_futures=True)
