@@ -92,8 +92,10 @@ def test_local_llm_status_and_wait(monkeypatch):
     monkeypatch.setattr(audio_stack, "log", logs.append)
     monkeypatch.setattr(audio_stack.time, "sleep", lambda s: None)
     monkeypatch.setattr(config, "LOCAL_LLM_API_BASE", "http://127.0.0.1:8080/v1")
+    monkeypatch.setattr(audio_stack, "llama_load_progress", lambda since: (None, ""))
     assert audio_stack.wait_for_local_llm(timeout=30)
-    assert logs == ["[llama-server] loading the model, waiting...", "[llama-server] ready"]
+    assert logs[0] == "[llama-server] loading the model, waiting..."
+    assert logs[-1].startswith("[llama-server] ready after ")
 
 
 def test_local_llm_status_down(monkeypatch):
@@ -104,3 +106,42 @@ def test_local_llm_status_down(monkeypatch):
 
     monkeypatch.setattr(requests, "get", refuse)
     assert audio_stack.local_llm_status() == "down"
+
+
+def test_wait_for_local_llm_shows_progress(monkeypatch):
+    import config
+
+    statuses = iter(["loading", "loading", "loading", "ready"])
+    progress = iter([(5, "5% (0.8/16.5 GB) · loading weights"), (7, "7% (1.2/16.5 GB) · loading weights"),
+                     (100, "100% (16.5/16.5 GB) · warming up")])
+    logs = []
+    monkeypatch.setattr(audio_stack, "local_llm_status", lambda: next(statuses))
+    monkeypatch.setattr(audio_stack, "llama_load_progress", lambda since: next(progress))
+    monkeypatch.setattr(audio_stack, "log", logs.append)
+    monkeypatch.setattr(audio_stack.time, "sleep", lambda s: None)
+    monkeypatch.setattr(config, "LLAMA_SERVER_LOG", "/nonexistent/llama.log")
+    assert audio_stack.wait_for_local_llm(timeout=30)
+    shown = [line for line in logs if "%" in line]
+    assert len(shown) == 2          # 7% is in the same 10% band and stage as 5%
+    assert "5% (0.8/16.5 GB) · loading weights · 0:00" in shown[0]
+    assert "warming up" in shown[1]
+
+
+def test_llama_load_progress_from_proc_and_log(monkeypatch, tmp_path):
+    import os
+    import time as _time
+
+    import config
+
+    model = tmp_path / "m.gguf"
+    model.write_bytes(b"x" * 1000)
+    log_file = tmp_path / "llama.log"
+    log_file.write_text("llama_model_loader: loaded meta data\nload_tensors: offloaded 65/65 layers to GPU\n")
+    monkeypatch.setattr(config, "LLAMA_GGUF_MODEL", str(model))
+    monkeypatch.setattr(config, "LLAMA_SERVER_LOG", str(log_file))
+    monkeypatch.setattr(audio_stack, "_llama_pid", lambda: os.getpid())
+    monkeypatch.setattr(audio_stack, "_llama_bytes_loaded", lambda pid: 430)
+    pct, text = audio_stack.llama_load_progress(_time.time() - 60)
+    assert pct == 43
+    assert text == "43% (0.0/0.0 GB) · offloaded 65/65 layers to GPU"
+    assert audio_stack._llama_bytes_loaded(os.getpid()) is not None   # real /proc read works
