@@ -3,6 +3,19 @@
 Endless, AI-directed chill music made with [TidalCycles](https://tidalcycles.org),
 built to run 24/7 as a YouTube live stream.
 
+**The code is the artefact.** Like a live coder on stage (think Switch
+Angel), a performer builds a short Tidal program up line by line (drums,
+then bass, keys, a melody, a texture) and then keeps *revising* it: one
+small, audible edit every few bars. It changes a rhythm, rides a filter,
+wraps a line in `jux rev` or `off 0.25 (|+ n 12)`, opens the acid knob,
+mutes the beat for a breakdown, brings it back, and strips the program
+down again for the outro before the next track starts. The program shows
+on screen with the line just edited marked `▶` and the performer's reason
+as a `--` comment. See [Live coding](#live-coding) below.
+
+The older section-based engine is still there (`--engine arranger`), and
+the description below applies to it:
+
 **The LLM directs, the engine plays.** An LLM Director makes musical
 decisions (next piece, key, tempo, progression, and which instruments play in
 each section) as validated JSON. A deterministic harmony engine turns those
@@ -139,7 +152,43 @@ Flags on the command line override the `.env` values. Use these two
 settings rather than putting `--theme` into `YS_ENGINE_ARGS`: systemd splits
 that at spaces and ignores quotes, which would break a multi-word theme.
 
-## How a piece develops
+## Live coding
+
+This is the default engine (`--engine live`, or `YS_ENGINE=live`). Each track goes through phases:
+
+| Phase | What happens |
+|---|---|
+| build | lines are added one at a time, in the style's order (lofi: beat, keys, bass, melody, vinyl, percussion) |
+| groove | the running lines are revised: rhythms and melodies, filters (also slow `sine` sweeps), reverb and delay, wrappers, acid knob, tempo nudges |
+| breakdown | the beat and bass are muted |
+| rebuild / groove2 | they come back, and the revising continues |
+| outro | lines are removed one by one, then the next track starts in a new key |
+
+Every edit is validated before it is sent: numbers stay in range,
+melodies are scale degrees so they are always in key, bass stays dry, at
+most 3 wrappers per line and 4-6 lines at once, depending on the style.
+Only the changed line is re-evaluated, just like a live coder pressing
+Ctrl-Enter on one line.
+
+With an LLM (`--llm local|claude|jevtypesafe`), the model sees the whole
+program and picks each edit itself (prompt: `prompts/performer.md`), with
+a short reason and sometimes a line of narration. If a reply is unusable,
+the built-in performer makes that edit, so the music never stops.
+
+Lofi has no sustained pad; its harmony comes from Rhodes and felt-piano
+comping. Trance is the Switch Angel acid setup: acid line, ducking kick,
+gated saw and supersaw lead.
+
+```
+./venv/bin/python orchestrator.py --style lofi              # live-coded lofi, local LLM
+./venv/bin/python orchestrator.py --style trance --llm none # built-in performer only
+./venv/bin/python orchestrator.py --dry-run --style lofi --llm none   # print the edits, no audio
+./venv/bin/python orchestrator.py --engine arranger         # the older section engine
+```
+
+Without `--style` the stream rotates between lofi, ambient, downtempo and piano, one style per track.
+
+## How a piece develops (arranger engine)
 
 A piece is about 10-20 minutes long and moves through intro, verse, build,
 chorus, breakdown, verse, chorus and outro. It changes as it goes:
@@ -283,6 +332,10 @@ Tunables such as the layer cap, timeouts and paths live in `.env` (see
 
 | Path | Purpose |
 |---|---|
+| `music/livecode.py` | the live program: lines, edits, validation, rendering |
+| `music/blocks.py` | per-style building blocks the performer adds |
+| `music/performer.py`, `prompts/performer.md` | the performer (built-in and LLM) and its phases |
+| `music/live_engine.py` | plays the program and applies one edit every few bars |
 | `music/theory.py` | keys, modes, progression library, voice leading |
 | `music/templates.py`, `music/melody.py` | role templates (pad, keys, bass, melody, arp, drums, texture) that render in-key Tidal code |
 | `music/presets.py` | curated, gain-balanced sound palette |

@@ -2,9 +2,10 @@
 """
 Headless driver for ystreamer.
 
-Default mode runs the harmony engine forever: the Director (LLM or
-deterministic) plans pieces and sections, the engine renders in-key Tidal
-code and schedules it on phrase boundaries.
+Default mode is live coding: a performer (LLM or built-in) builds a short
+Tidal program up line by line and keeps revising it, one small edit every few
+bars, while the code is shown on screen. `--engine arranger` runs the older
+section-based harmony engine instead.
 
     python orchestrator.py                                   # local llama.cpp model (default)
     python orchestrator.py --llm claude --free-layer         # Claude (Anthropic API)
@@ -56,6 +57,9 @@ def parse_args():
     parser.add_argument("--legacy", action="store_true", help="Run the old free-form composer agent loop.")
 
     engine = parser.add_argument_group("engine mode")
+    engine.add_argument("--engine", choices=["live", "arranger"], default=os.getenv("YS_ENGINE") or "live",
+                        help="live = a live-coded program built up and revised edit by edit (default, or "
+                             "YS_ENGINE); arranger = the older section-based engine.")
     engine.add_argument("--llm", choices=["none", "claude", "local", "jevtypesafe"],
                         default=os.getenv("YS_LLM", "local"),
                         help="Which LLM directs the music (default: local, or YS_LLM; 'none' = deterministic director).")
@@ -93,6 +97,8 @@ def parse_args():
     legacy.add_argument("--director-interval", type=int, default=config.LEGACY_DIRECTOR_INTERVAL)
     legacy.add_argument("--test-mode", action="store_true")
     args = parser.parse_args()
+    if args.engine not in ("live", "arranger"):
+        parser.error(f"YS_ENGINE={args.engine!r} is not one of live, arranger")
     if args.style and args.style not in STYLE_CHOICES:  # defaults (YS_STYLE) aren't checked by argparse
         parser.error(f"YS_STYLE={args.style!r} is not one of {', '.join(STYLE_CHOICES)}")
     return args
@@ -151,10 +157,8 @@ def director_model_id(args) -> str | None:
     return None
 
 
-def build_director(args, rng):
+def _style_and_model(args, role: str) -> str | None:
     from music import llm
-    from music.director import Director
-
     from music.plan import style_from_theme
 
     if not args.style:
@@ -165,9 +169,23 @@ def build_director(args, rng):
     model_id = director_model_id(args)
     if model_id:
         provider, model = llm.resolve(model_id)
-        print(f"[orchestrator] Director LLM: {provider} / {model}")
+        print(f"[orchestrator] {role} LLM: {provider} / {model}")
     else:
-        print("[orchestrator] Director LLM: none (deterministic director)")
+        print(f"[orchestrator] {role} LLM: none (built-in)")
+    return model_id
+
+
+def build_performer(args, rng):
+    from music.performer import Performer
+
+    model_id = _style_and_model(args, "Performer")
+    return Performer(rng, style=args.style, model_id=model_id, theme=args.theme, show_llm=args.show_llm)
+
+
+def build_director(args, rng):
+    from music.director import Director
+
+    model_id = _style_and_model(args, "Director")
     return Director(model_id, rng, theme=args.theme, show_llm=args.show_llm,
                     target_minutes=args.piece_minutes, style=args.style)
 
@@ -196,6 +214,14 @@ def run_dry(args) -> None:
     from music.narrator import Narrator
 
     narrator = Narrator(mode=args.narrate, speak=False)
+    if args.engine == "live":
+        from music.live_engine import LiveEngine
+
+        engine = LiveEngine(send, build_performer(args, rng), narrator=narrator,
+                            now=sim.now, sleep=sim.sleep, max_tracks=args.pieces or 1)
+        engine.run()
+        print(f"[dry-run] simulated {sim.t / 60:.1f} minutes, {engine.edits} edits")
+        return
     engine = MusicEngine(send, build_director(args, rng), narrator=narrator,
                          use_custom_synths=not args.no_custom_synths,
                          free_layer=args.free_layer, now=sim.now, sleep=sim.sleep,
@@ -259,6 +285,32 @@ def run_selftest(args) -> int:
         if out is None or "error" in out.lower():
             failures += 1
             print(f"[selftest] FAIL missing {fn}: {out}")
+    # Live-coding blocks: every block of every style, plus every wrapper and a
+    # modulated effect on each, in a major and a minor key.
+    from music.blocks import BLOCKS
+    from music.livecode import ROLE_FX, Track, allowed_wrappers
+
+    for style, blocks in BLOCKS.items():
+        for key, degrees in (("A major", [0, 5, 3, 4]), ("E minor", [0, 5, 2, 6])):
+            harmony = Track("selftest", style, key, 120, degrees, 2).harmony()
+            for block in blocks:
+                line = block.make(random.Random(0))
+                variants = [line.render(harmony)]
+                for wrapper in allowed_wrappers(line):
+                    line.wrappers = [wrapper]
+                    variants.append(line.render(harmony))
+                line.wrappers = []
+                line.fx = [[name, "(slow 8 $ range 0.2 0.4 sine)"] for name in ROLE_FX.get(line.role, [])]
+                variants.append(line.render(harmony))
+                for expr in variants:
+                    if expr in seen:
+                        continue
+                    seen.add(expr)
+                    checked += 1
+                    error = checker.check(f"({expr}) # orbit {line.channel - 1}")
+                    if error:
+                        failures += 1
+                        print(f"[selftest] FAIL live {style}/{block.name}: {expr}\n{error}\n")
     checker.close()
     print(f"[selftest] checked {checked} patterns, {failures} failures")
     return 1 if failures else 0
@@ -271,7 +323,8 @@ def run_engine(args) -> None:
 
     audio_stack.set_logger(print)
     rng = random.Random(args.seed)
-    director = build_director(args, rng)
+    live = args.engine == "live"
+    director = build_performer(args, rng) if live else build_director(args, rng)
     from music import llm
 
     model_id = director_model_id(args)
@@ -296,7 +349,7 @@ def run_engine(args) -> None:
         print(audio_stack.start_recording()[0])
 
     type_checker = None
-    if args.free_layer:
+    if args.free_layer or (live and director.model_id):
         from music.validator import TidalTypeChecker
 
         type_checker = TidalTypeChecker()
@@ -313,8 +366,14 @@ def run_engine(args) -> None:
     narrator = Narrator(duck=tidal_ducker(send), mode=args.narrate)
     if narrator.available:
         print(f"[orchestrator] Narration: {narrator.mode}, {narrator.style} voice ({os.path.basename(narrator.voice)})")
-    engine = MusicEngine(send, director, use_custom_synths=not args.no_custom_synths, narrator=narrator,
-                         free_layer=args.free_layer, type_checker=type_checker, max_pieces=args.pieces)
+    if live:
+        from music.live_engine import LiveEngine
+
+        engine = LiveEngine(send, director, narrator=narrator, type_checker=type_checker,
+                            max_tracks=args.pieces)
+    else:
+        engine = MusicEngine(send, director, use_custom_synths=not args.no_custom_synths, narrator=narrator,
+                             free_layer=args.free_layer, type_checker=type_checker, max_pieces=args.pieces)
 
     def shutdown(signum, _frame):
         print(f"\n[orchestrator] Received signal {signum}, stopping...")
@@ -326,6 +385,9 @@ def run_engine(args) -> None:
     resume_state = runtime.load_state() if args.resume else None
     if args.resume and not resume_state:
         print("[orchestrator] --resume given but no runtime/state.json found; starting fresh")
+    if resume_state and live != (resume_state.get("mode") == "live"):
+        print("[orchestrator] saved state belongs to the other engine; starting fresh")
+        resume_state = None
 
     worker = threading.Thread(target=engine.run, kwargs={"resume_state": resume_state}, daemon=True)
     worker.start()

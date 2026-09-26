@@ -1,0 +1,229 @@
+import random
+
+import pytest
+
+from music import llm
+from music.blocks import BLOCKS, STYLE_SETTINGS, blocks_for, find_block
+from music.live_engine import LiveEngine
+from music.livecode import (Edit, EditError, LineSpec, Program, Track, allowed_wrappers, apply_edit,
+                            changed_statements, check_pattern)
+from music.performer import Performer
+
+
+def _track(style="lofi", key="A minor", bpm=80):
+    return Track("Test", style, key, bpm, [0, 5, 3, 4], 2)
+
+
+def _program_with(style, *names, key="A minor"):
+    program = Program(_track(style, key))
+    rng = random.Random(0)
+    for name in names:
+        block = find_block(style, name)
+        program = apply_edit(program, Edit("add", role=block.role, line=block.make(rng)))
+    return program
+
+
+# ------------------------------------------------------------------ rendering
+
+def test_harmony_root_sign_and_chords():
+    h = _track(key="A minor").harmony()
+    assert h["mode"] == "minor"
+    assert h["root"] == " - 3"
+    assert "+ -" not in h["root"]
+    assert _track(key="D major").harmony()["root"] == " + 2"
+    assert _track(key="C major").harmony()["root"] == ""
+    assert h["chords"].startswith("[0,2,4,6]!2")
+
+
+@pytest.mark.parametrize("style", sorted(BLOCKS))
+def test_every_block_renders(style):
+    harmony = _track(style).harmony()
+    for block in BLOCKS[style]:
+        line = block.make(random.Random(1))
+        code = line.render(harmony)
+        assert "{" not in code and "}" not in code, (block.name, code)
+        assert code.count("(") == code.count(")"), code
+        assert code.count("[") == code.count("]"), code
+        assert "+ -" not in code
+
+
+def test_lofi_has_no_pad():
+    lofi = BLOCKS["lofi"]
+    assert all("ys_pad" not in b.body for b in lofi)
+    assert all(b.role != "chords" for b in lofi)
+
+
+def test_statement_and_mute():
+    program = _program_with("lofi", "dusty_beat")
+    assert program.statement("beat").startswith("d1 $ ")
+    muted = apply_edit(program, Edit("mute", role="beat"))
+    assert muted.statement("beat") == "d1 $ silence"
+    assert any(line.strip().startswith("-- d1") for line in muted.code_lines())
+    assert program.tempo_statement() == "setcps (80/60/4)"
+
+
+def test_code_lines_highlight():
+    program = _program_with("lofi", "dusty_beat", "sub_walk")
+    lines = program.code_lines(highlight="bass")
+    assert sum("▶" in line for line in lines) == 1
+
+
+# ----------------------------------------------------------------- validation
+
+def test_apply_edit_returns_copy():
+    program = _program_with("lofi", "dusty_beat")
+    new = apply_edit(program, Edit("set_fx", role="beat", name="lpf", value="3000"))
+    assert new is not program
+    assert ["lpf", "3000"] not in [list(p) for p in program.lines["beat"].fx]
+    assert "# lpf 3000" in new.statement("beat")
+    assert changed_statements(program, new) == [new.statement("beat")]
+
+
+@pytest.mark.parametrize("edit", [
+    Edit("set_fx", role="beat", name="lpf", value="99999"),
+    Edit("set_fx", role="beat", name="lpf", value="1; hush"),
+    Edit("set_fx", role="bass", name="room", value="0.5"),
+    Edit("set_fx", role="beat", name="nonsense", value="1"),
+    Edit("set_pattern", role="bass", name="rhythm", value="0 1 [2"),
+    Edit("set_pattern", role="bass", name="rhythm", value="c e g"),
+    Edit("wrap", role="bass", name="jux rev"),
+    Edit("remove", role="lead"),
+    Edit("tempo", value="140"),
+    Edit("explode", role="beat"),
+])
+def test_invalid_edits_rejected(edit):
+    program = _program_with("lofi", "dusty_beat", "sub_walk")
+    with pytest.raises(EditError):
+        apply_edit(program, edit)
+
+
+def test_modulated_fx_allowed():
+    program = _program_with("lofi", "dusty_beat")
+    new = apply_edit(program, Edit("set_fx", role="beat", name="lpf", value="(slow 8 $ range 1500 4000 sine)"))
+    assert "# lpf (slow 8 $ range 1500 4000 sine)" in new.statement("beat")
+
+
+def test_max_lines_and_duplicate_add():
+    program = _program_with("lofi", "dusty_beat")
+    block = find_block("lofi", "dusty_beat")
+    with pytest.raises(EditError):
+        apply_edit(program, Edit("add", role="beat", line=block.make(random.Random(0))))
+    other = find_block("lofi", "sub_walk")
+    with pytest.raises(EditError):
+        apply_edit(program, Edit("add", role="bass", line=other.make(random.Random(0))), max_lines=1)
+
+
+def test_wrappers_by_role():
+    program = _program_with("lofi", "dusty_beat", "vinyl", "rhodes_comp")
+    assert allowed_wrappers(program.lines["texture"]) == []
+    for role in ("beat", "keys"):
+        wrapper = allowed_wrappers(program.lines[role])[0]
+        new = apply_edit(program, Edit("wrap", role=role, name=wrapper))
+        assert f"{wrapper} $ " in new.statement(role)
+        back = apply_edit(new, Edit("unwrap", role=role, name=wrapper))
+        assert back.statement(role) == program.statement(role)
+    assert not any("stut" in w for w in allowed_wrappers(program.lines["beat"]))
+
+
+def test_gate_choice_slot():
+    program = _program_with("trance", "gated_saw", key="A minor")
+    role = find_block("trance", "gated_saw").role
+    assert apply_edit(program, Edit("set_pattern", role=role, name="gate", value="2"))
+    with pytest.raises(EditError):
+        apply_edit(program, Edit("set_pattern", role=role, name="gate", value="7"))
+
+
+def test_check_pattern():
+    assert check_pattern(" 0 ~ 2 4 ") == "0 ~ 2 4"
+    with pytest.raises(EditError):
+        check_pattern('0" # s "x')
+
+
+def test_program_roundtrip():
+    program = _program_with("trance", "acid")
+    again = Program.from_dict(program.to_dict())
+    assert again.statement("acid") == program.statement("acid")
+    assert LineSpec.from_dict(program.lines["acid"].to_dict()).render(program.track.harmony())
+
+
+# ------------------------------------------------------------------ performer
+
+def test_settings_for_every_style():
+    for style in BLOCKS:
+        assert style in STYLE_SETTINGS
+        assert blocks_for(style)
+
+
+class _SimClock:
+    def __init__(self):
+        self.t = 0.0
+
+    def now(self):
+        return self.t
+
+    def sleep(self, seconds):
+        self.t += seconds
+
+
+def _run(style, seed=0, tracks=1, performer=None):
+    clock = _SimClock()
+    sent: list[str] = []
+    performer = performer or Performer(random.Random(seed), style=style, log=lambda *_: None)
+    engine = LiveEngine(lambda lines: sent.extend(lines), performer, log=lambda *_: None,
+                        now=clock.now, sleep=clock.sleep, max_tracks=tracks)
+    engine.run()
+    return engine, sent, clock
+
+
+@pytest.mark.parametrize("style", sorted(BLOCKS))
+def test_builtin_set_builds_up_and_ends(style):
+    engine, sent, clock = _run(style, seed=3)
+    assert engine.edits >= 10
+    statements = [s for s in sent if s.startswith("d") and not s.endswith("silence")]
+    assert len({s.split(" ")[0] for s in statements}) >= 3   # at least three lines built up
+    assert 60 < clock.t < 60 * 30
+    assert all("ys_pad" not in s for s in sent) or style != "lofi"
+
+
+def test_rotation_changes_tracks():
+    performer = Performer(random.Random(9), style=None, log=lambda *_: None)
+    engine, sent, _ = _run(None, tracks=2, performer=performer)
+    assert sum(s.startswith("setcps") for s in sent) >= 2
+
+
+def test_llm_edit_used_and_fallback(monkeypatch):
+    replies = iter(['{"op": "add", "block": "dusty_beat", "reason": "start with drums"}',
+                    "not json at all"])
+    monkeypatch.setattr(llm, "complete", lambda *a, **k: next(replies))
+    performer = Performer(random.Random(0), style="lofi", model_id="local", log=lambda *_: None)
+    program = Program(_track())
+    first = performer.next_edit(program)
+    assert first.op == "add" and first.role == "beat" and first.reason == "start with drums"
+    program = apply_edit(program, first)
+    second = performer.next_edit(program)       # garbage reply -> built-in edit
+    apply_edit(program, second)
+
+
+def test_llm_invalid_edit_falls_back(monkeypatch):
+    monkeypatch.setattr(llm, "complete",
+                        lambda *a, **k: '{"op": "set_fx", "role": "beat", "name": "lpf", "value": "999999"}')
+    performer = Performer(random.Random(0), style="lofi", model_id="local", log=lambda *_: None)
+    program = _program_with("lofi", "dusty_beat")
+    edit = performer.next_edit(program)
+    apply_edit(program, edit)
+    assert edit.value != "999999"
+
+
+def test_resume_from_saved_state():
+    from music import runtime
+
+    engine, _, _ = _run("lofi", seed=1)
+    state = runtime.load_state()
+    assert state["mode"] == "live"
+    clock = _SimClock()
+    sent: list[str] = []
+    performer = Performer(random.Random(2), style="lofi", log=lambda *_: None)
+    resumed = LiveEngine(lambda lines: sent.extend(lines), performer, log=lambda *_: None,
+                         now=clock.now, sleep=clock.sleep, max_tracks=1)
+    resumed.run(resume_state=state)
+    assert sent[0] == "hush"
