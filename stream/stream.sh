@@ -129,7 +129,10 @@ if [[ "$UI_MODE" == "browser" ]]; then
     UI_PORT="${YS_UI_PORT:-8765}"
     DISPLAY_NUM="${YS_XVFB_DISPLAY:-:99}"
     PY="$REPO/venv/bin/python"; [[ -x "$PY" ]] || PY=python3
-    (cd "$REPO" && exec "$PY" -m stream.ui_server) & PIDS+=($!)
+    # live.sh already serves the page; start it here only when run on its own.
+    if ! (exec 3<>"/dev/tcp/127.0.0.1/${UI_PORT}") 2>/dev/null; then
+        (cd "$REPO" && exec "$PY" -m stream.ui_server) & PIDS+=($!)
+    fi
     Xvfb "$DISPLAY_NUM" -screen 0 "${W}x${H}x24" -nolisten tcp & PIDS+=($!)
     sleep 1.5
     PROFILE="$(mktemp -d)"

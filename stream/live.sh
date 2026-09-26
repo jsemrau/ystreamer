@@ -6,6 +6,8 @@
 #   stream/live.sh --judge none            # ...and win over the defaults
 #
 # Runs, in this terminal, until Ctrl-C:
+#   - the stream page (stream/ui_server.py) on http://127.0.0.1:8765, to
+#     preview what the stream shows, even before YouTube is set up
 #   - the audio sink the stream captures (stream/setup_audio.sh)
 #   - the engine (orchestrator.py --resume ...); if it stops or crashes it is
 #     restarted and resumes the saved track
@@ -26,6 +28,12 @@ PIDFILE="$REPO/runtime/engine.pid"
 
 PIDS=()
 STOPPING=0
+
+# The stream page, served from the start: open it in a browser to preview
+# the stream (it shows the video only; the sound goes into the stream).
+UI_PORT="${YS_UI_PORT:-8765}"
+"$PY" -m stream.ui_server >> "$REPO/logs/ui.log" 2>&1 & PIDS+=($!)
+echo "[live] stream page: http://127.0.0.1:${UI_PORT}  (preview in a browser; log: logs/ui.log)"
 stop() {
     STOPPING=1
     echo; echo "[live] stopping..."
@@ -55,7 +63,16 @@ trap stop INT TERM
 # SuperCollider, Tidal and the local model need a moment before the stream.
 sleep 20
 echo "[live] starting the stream (log: logs/stream.log) and the watchdog (log: logs/watchdog.log)"
-"$REPO/stream/stream.sh" >> "$REPO/logs/stream.log" 2>&1 & PIDS+=($!)
+"$REPO/stream/stream.sh" >> "$REPO/logs/stream.log" 2>&1 & STREAM_PID=$!; PIDS+=($STREAM_PID)
+# If the stream part stops (no stream key, missing Chromium/Xvfb, ...), say
+# so here instead of only in its log.
+(
+    sleep 15
+    while kill -0 "$STREAM_PID" 2>/dev/null; do sleep 5; done
+    [[ "$STOPPING" == 1 ]] && exit 0
+    echo "[live] the stream stopped; the last lines of logs/stream.log:" >&2
+    tail -n 8 "$REPO/logs/stream.log" | sed 's/^/[live]   /' >&2
+) & PIDS+=($!)
 YS_ENGINE_PIDFILE="$PIDFILE" "$PY" -m stream.watchdog >> "$REPO/logs/watchdog.log" 2>&1 & PIDS+=($!)
 
 wait
