@@ -17,7 +17,7 @@ from typing import Callable
 
 from . import runtime
 from .engine import Clock
-from .livecode import ROLE_CHANNELS, EditError, Program, apply_edit, changed_statements, complexity
+from .livecode import ROLE_CHANNELS, Edit, EditError, Program, apply_edit, changed_statements, complexity
 from .performer import Performer, SetState
 
 
@@ -25,8 +25,10 @@ class LiveEngine:
     def __init__(self, send: Callable[[list[str]], str | None], performer: Performer,
                  log: Callable[[str], None] = print, narrator=None, type_checker=None,
                  now: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep,
-                 max_tracks: int | None = None):
+                 max_tracks: int | None = None, session_log=None):
         self.send = send
+        # Every change to the artefact, kept per session (music/sessionlog.py); optional.
+        self.session_log = session_log
         self.performer = performer
         self.log = log
         self.narrator = narrator
@@ -43,6 +45,51 @@ class LiveEngine:
         self._voice_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="narrator")
         self._last_reason = ""
         performer.on_arc = self._on_arc
+
+    # ------------------------------------------------------------ session log
+
+    def _record(self, type_: str, **data) -> None:
+        if self.session_log is not None:
+            self.session_log.write(type_, **data)
+
+    def _track_info(self, program: Program) -> dict:
+        t = program.track
+        return {"track": t.title, "style": t.style, "key": t.key, "bpm": t.bpm}
+
+    def _record_track_start(self, program: Program, resumed: bool = False) -> None:
+        self._stats_at_start = dict(self.performer.stats)
+        self._record("track_start", **self._track_info(program), degrees=list(program.track.degrees),
+                     bars_per_chord=program.track.bars_per_chord, mood=self.performer.track_mood,
+                     director=self.performer.track_narration, resumed=resumed,
+                     program=program.to_dict(), code=[program.statement(r) for r in program.lines])
+
+    def _record_edit(self, before: Program, after: Program, edit: Edit) -> None:
+        role = edit.role
+        self._record("edit", **self._track_info(after), cycle=round(self.clock.cycle(), 2),
+                     phase=self.performer.state.phase, edits_in_phase=self.performer.state.edits_in_phase,
+                     source=edit.source or "built-in", op=edit.op, role=role, name=edit.name, value=edit.value,
+                     block=edit.line.block if edit.line is not None else "",
+                     describe=edit.describe(), listening=edit.listening, reason=edit.reason,
+                     narration=edit.narration, judgement=edit.judgement or None,
+                     line_before=before.statement(role) if role in before.lines else None,
+                     line_after=after.statement(role) if role in after.lines else None,
+                     complexity_before=complexity(before), complexity_after=complexity(after),
+                     lines_playing=len(after.active_roles()),
+                     code=[after.statement(r) for r in after.lines])
+
+    def _record_rejected(self, program: Program, edit: Edit, why: str) -> None:
+        self._record("rejected", **self._track_info(program), phase=self.performer.state.phase,
+                     source=edit.source or "built-in", describe=edit.describe(), op=edit.op, role=edit.role,
+                     name=edit.name, value=edit.value, reason=edit.reason, listening=edit.listening, why=why)
+
+    def _record_track_end(self, program: Program) -> None:
+        values = self.groove_complexity
+        start = getattr(self, "_stats_at_start", {})
+        edits_by = {k: v - start.get(k, 0) for k, v in self.performer.stats.items() if v - start.get(k, 0)}
+        self._record("track_end", **self._track_info(program), edits_by=edits_by,
+                     groove_complexity=round(sum(values) / len(values), 2) if values else None,
+                     peak_complexity=max(values) if values else None,
+                     code=[program.statement(r) for r in program.lines], program=program.to_dict())
 
     def _report_complexity(self) -> None:
         values, self.groove_complexity = self.groove_complexity, []
@@ -172,6 +219,8 @@ class LiveEngine:
     def _on_arc(self, before: str, after: str, why: str) -> None:
         """The arc moved on (e.g. groove -> breakdown): have the Narrator
         say something about the moment, written in the background."""
+        if self.program is not None:
+            self._record("arc", **self._track_info(self.program), before=before, after=after, why=why)
         if self.narrator is None or not self.narrator.wants("section"):
             return
         program = self.program
@@ -215,6 +264,7 @@ class LiveEngine:
             self.log(f"[Live] Resuming '{program.track.title}' ({len(program.lines)} lines)")
         else:
             program = Program(self.performer.new_track(None))
+        self._record_track_start(program, resumed=bool(resume_state and "program" in resume_state))
         self.clock.reset(program.track.cps)
         self._send(["hush", program.tempo_statement(), "resetCycles"])
         self.clock.reset(program.track.cps)
@@ -248,14 +298,21 @@ class LiveEngine:
                 new = apply_edit(program, edit, self.performer.settings["max_lines"])
             except EditError as e:
                 self.log(f"[Live] skipped invalid edit ({edit.describe()}): {e}")
+                self._record_rejected(program, edit, f"invalid: {e}")
                 next_cycle += self.performer.edit_bars_now()
                 continue
             statements = changed_statements(program, new)
-            if not self._type_ok(statements) or not self._send(self._with_fades(statements, new, edit)):
+            if not self._type_ok(statements):
+                self._record_rejected(program, edit, "did not type check")
+                next_cycle += self.performer.edit_bars_now()
+                continue
+            if not self._send(self._with_fades(statements, new, edit)):
+                self._record_rejected(program, edit, "Tidal refused it")
                 next_cycle += self.performer.edit_bars_now()
                 continue
             if new.track.bpm != program.track.bpm:
                 self.clock.set_cps(new.track.cps)
+            self._record_edit(program, new, edit)
             program = self.program = new
             self.edits += 1
             highlight = edit.role if edit.role in program.lines else None
@@ -281,6 +338,7 @@ class LiveEngine:
                 self.narrator.say(edit.narration, kind="section")
 
             if self.performer.track_finished(program):
+                self._record_track_end(program)
                 self._report_complexity()
                 tracks += 1
                 if self.max_tracks is not None and tracks >= self.max_tracks:
@@ -292,6 +350,7 @@ class LiveEngine:
                 program = self.program = Program(track)
                 self._send(silence + [program.tempo_statement()])
                 self.clock.set_cps(track.cps)
+                self._record_track_start(program)
                 self._announce(program)
                 self._publish(program, None, "")
             next_cycle += self.performer.edit_bars_now()

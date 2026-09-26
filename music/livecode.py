@@ -281,6 +281,7 @@ class Edit:
     narration: str = ""
     source: str = ""        # who chose it: "LLM" or "built-in"
     listening: str = ""     # what the performer heard that led to it (LLM only)
+    judgement: dict = field(default_factory=dict)   # with a judge: the options it weighed and chose from
 
     def describe(self) -> str:
         if self.op == "add":
