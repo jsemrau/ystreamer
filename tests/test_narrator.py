@@ -110,4 +110,4 @@ def test_ducker():
     duck = N.tidal_ducker(sent.append)
     duck(True)
     duck(False)
-    assert sent == [["all (|* gain 0.9)"], ["all id"]]
+    assert sent == [["all (|* gain 0.85)"], ["all id"]]

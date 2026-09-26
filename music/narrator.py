@@ -76,7 +76,9 @@ class Narrator:
             self.style = "warm"
         self.length_scale = os.getenv("YS_TTS_LENGTH_SCALE", "1.25" if self.style == "warm" else "1.15")
         self.min_gap = float(os.getenv("YS_NARRATION_MIN_GAP", "60"))
-        self.volume_db = float(os.getenv("YS_NARRATION_VOLUME_DB", "0"))
+        # Voice is loudness-normalised to the stream's -14 LUFS target, then
+        # raised by this many dB so it sits clearly on top of the music.
+        self.volume_db = float(os.getenv("YS_NARRATION_VOLUME_DB", "2"))
         self.sink = os.getenv("YS_SINK_NAME", "ystream_sink")
         self._queue: queue.Queue[str] = queue.Queue(maxsize=1)
         self._last_spoken = -1e9
@@ -151,10 +153,16 @@ class Narrator:
             return (f"asetrate={int(sample_rate * pitch)},aresample={sample_rate},atempo={1 / pitch:.4f},"
                     "highpass=f=70,bass=g=4:f=160,treble=g=-3:f=5000,lowpass=f=9000,"
                     "acompressor=threshold=-20dB:ratio=2.5:attack=10:release=250:makeup=2,"
-                    f"aecho=0.8:0.4:40:0.07,apad=pad_dur=0.6,volume={self.volume_db}dB")
+                    f"aecho=0.8:0.4:40:0.07,{self._level()}")
         # calm: clean and soft, a little room
         return (f"highpass=f=90,lowpass=f=7500,aecho=0.8:0.5:60:0.12,"
-                f"apad=pad_dur=0.6,volume={self.volume_db}dB")
+                f"{self._level()}")
+
+    def _level(self) -> str:
+        """Same loudness as the stream (-14 LUFS), plus YS_NARRATION_VOLUME_DB,
+        with a limiter so the boost can't clip."""
+        return (f"apad=pad_dur=0.6,loudnorm=I=-14:TP=-2:LRA=7,volume={self.volume_db}dB,"
+                "alimiter=limit=0.95:level=disabled,aresample=48000")
 
     def _soften(self, src: str, dst: str) -> str:
         """Apply the voice style. Falls back to the raw clip if ffmpeg fails."""
@@ -206,7 +214,7 @@ class Narrator:
 
 def tidal_ducker(send: Callable[[list[str]], str | None]) -> Callable[[bool], None] | None:
     """Dip all Tidal patterns while the voice speaks (YS_NARRATION_DUCK, gain factor)."""
-    factor = float(os.getenv("YS_NARRATION_DUCK", "0.9"))
+    factor = float(os.getenv("YS_NARRATION_DUCK", "0.85"))
     if factor >= 1.0:
         return None
 

@@ -126,6 +126,16 @@ chorus, breakdown, verse, chorus and outro. It changes as it goes:
   the chorus hits harder.
 - **Movement:** pad, keys and arpeggio filters drift slowly ("gentle"), not
   at all ("still"), or more ("lively").
+- **Its own sound:** every piece picks its instruments from its style's
+  palette. Pads can be warm analog, strings, organ, choir, airy or piano,
+  plus several keys, leads and basses. Each piece also picks how it opens
+  (keys first, drums and bass first, an arpeggio, a lone pad...), and it
+  never repeats the previous piece's opening or pad.
+- **Mix:** every synth was rendered offline and measured. Levels put the
+  melody up front, then keys and bass, with pads well in the background.
+  Pads are level-matched for chord size and back off 2.5 dB when four or
+  more other parts are playing. `eval/synth_levels.sh` re-measures the synths
+  after you change `tidal/synthdefs.scd`.
 - **Melodies:** short loops get a two-loop phrase (a statement and an
   answer). When a section comes back, its melody keeps its opening but
   answers differently.
@@ -179,7 +189,9 @@ intimate late-night radio voice, and shown as a subtitle on the stream:
 - `--narrate sections|pieces|off` (or `YS_NARRATION`) sets how often it
   speaks. `YS_VOICE_STYLE=calm` gives a cleaner, brighter voice. Speed,
   loudness and the music dip are in `.env` (`YS_TTS_LENGTH_SCALE`,
-  `YS_NARRATION_VOLUME_DB`, `YS_NARRATION_DUCK`).
+  `YS_NARRATION_VOLUME_DB`, `YS_NARRATION_DUCK`). The voice is
+  loudness-matched to the stream (-14 LUFS) and sits 2 dB above it by
+  default, while the music dips about 5.6 dB.
 - Only LLM-directed pieces have narration (plus "Now playing: <title>");
   the built-in planner only announces titles.
 

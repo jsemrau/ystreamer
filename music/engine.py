@@ -124,6 +124,7 @@ class MusicEngine:
             variation=variation,
             fills=arrangement.fills if arrangement else True,
             movement=arrangement.movement if arrangement else "gentle",
+            busy=max(0, len(arrangement.active_roles()) - 1) if arrangement else 0,
         )
 
     def render_section(self, piece: Piece, index: int, arrangement: Arrangement,

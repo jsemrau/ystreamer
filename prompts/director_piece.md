@@ -36,6 +36,10 @@ that was used recently.
 - `color`: "ninths" for lusher, jazzier chords, "sevenths" for plainer ones.
 - `key_lift`: true to lift the final chorus a whole step (a classic lift for
   the last peak; needs at least two choruses).
+- Give each piece its own sound: pick `instruments` (role -> preset, from the
+  style's palette in the vocabulary above) and an `opening`: the one or two
+  roles that start the piece alone (e.g. ["keys", "texture"] or
+  ["drums", "bass"]). Don't reuse the previous piece's pad or opening.
 - `reason`: one or two sentences, in plain words, on why this piece follows
   the previous one well (key, tempo, mood). It is shown to the audience.
 - `narration`: ONE sentence (under 25 words) that a warm, intimate late-night
@@ -51,6 +55,7 @@ that was used recently.
   "progression": "i-VI-III-VII", "mood": "late-night, cozy",
   "section_progressions": {{"chorus": "i-VI-iv-VII", "breakdown": "i-iv-i-VI"}},
   "color": "ninths", "key_lift": true,
+  "instruments": {{"pad": "strings_pad", "keys": "felt", "melody": "glass"}}, "opening": ["keys", "texture"],
   "sections": [{{"name": "intro", "bars": 16, "energy": 0.2}}, {{"name": "verse", "bars": 32, "energy": 0.45}}],
   "reason": "Moving to the relative minor keeps the warmth of the last piece but makes it more intimate.",
   "narration": "Stay a little longer. Let the night slow down with you."}}

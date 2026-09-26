@@ -23,26 +23,45 @@ from .theory import CHORD_COLORS, MODES, PROGRESSIONS_BY_NAME, Key, progressions
 
 STYLES = {
     "lofi": {
+        "palette": {"pad": ["warm_pad", "strings_pad", "organ_pad", "choir_pad"],
+                    "keys": ["rhodes", "felt", "piano"], "bass": ["sub", "pluck_bass"],
+                    "melody": ["felt_lead", "epiano_lead", "glass", "mandolin"],
+                    "arp": ["pluck_arp", "glass_arp"]},
+        "openers": [["keys", "texture"], ["pad", "texture"], ["drums", "keys"], ["arp", "texture"]],
         "bpm": (70, 88), "modes": ["minor", "dorian", "major"], "cycles_per_chord": 1,
         "presets": {"pad": "warm_pad", "keys": "rhodes", "bass": "sub", "melody": "felt_lead",
                     "arp": "pluck_arp", "drums": "lofi_kit", "texture": "vinyl"},
     },
     "ambient": {
+        "palette": {"pad": ["air_pad", "strings_pad", "choir_pad", "warm_pad"],
+                    "keys": ["felt", "piano"], "melody": ["glass", "felt_lead"],
+                    "arp": ["glass_arp", "pluck_arp"], "texture": ["air", "vinyl"]},
+        "openers": [["pad", "texture"], ["arp", "texture"], ["keys", "texture"], ["texture", "melody"]],
         "bpm": (60, 76), "modes": ["lydian", "major", "minor"], "cycles_per_chord": 2,
         "presets": {"pad": "air_pad", "keys": "felt", "bass": "sub", "melody": "glass",
                     "arp": "glass_arp", "drums": "soft_pulse", "texture": "air"},
     },
     "downtempo": {
+        "palette": {"pad": ["warm_pad", "strings_pad", "organ_pad"], "keys": ["felt", "rhodes"],
+                    "bass": ["pluck_bass", "sub"], "melody": ["epiano_lead", "glass", "felt_lead"],
+                    "texture": ["vinyl", "air"]},
+        "openers": [["keys", "bass"], ["drums", "bass"], ["pad", "texture"], ["arp", "bass"]],
         "bpm": (80, 96), "modes": ["minor", "dorian", "mixolydian"], "cycles_per_chord": 1,
         "presets": {"pad": "warm_pad", "keys": "felt", "bass": "pluck_bass", "melody": "epiano_lead",
                     "arp": "pluck_arp", "drums": "downtempo_kit", "texture": "vinyl"},
     },
     "piano": {
+        "palette": {"pad": ["piano_pad", "strings_pad", "choir_pad"], "keys": ["piano", "felt"],
+                    "melody": ["felt_lead", "glass"]},
+        "openers": [["keys", "texture"], ["pad", "keys"], ["melody", "keys"]],
         "bpm": (64, 80), "modes": ["major", "minor", "lydian"], "cycles_per_chord": 2,
         "presets": {"pad": "piano_pad", "keys": "piano", "bass": "sub", "melody": "felt_lead",
                     "arp": "glass_arp", "drums": "soft_pulse", "texture": "air"},
     },
     "deephouse": {
+        "palette": {"pad": ["warm_pad", "strings_pad", "choir_pad", "organ_pad"],
+                    "keys": ["deep_stab", "organ_stab"], "melody": ["epiano_lead", "glass"]},
+        "openers": [["drums", "bass"], ["drums", "keys"], ["keys", "drums"], ["drums", "arp"]],
         "bpm": (118, 124), "modes": ["minor", "dorian"], "cycles_per_chord": 2,
         "presets": {"pad": "warm_pad", "keys": "deep_stab", "bass": "deep_bass", "melody": "epiano_lead",
                     "arp": "pluck_arp", "drums": "house_kit", "texture": "vinyl"},
@@ -116,6 +135,18 @@ class Piece:
     # harmony; sections not listed use `progression`.
     section_progressions: dict[str, str] = field(default_factory=dict)
     color: str = "sevenths"  # chord colour: sevenths | ninths
+    # This piece's own sound: role -> preset, and which roles open the track.
+    instruments: dict[str, str] = field(default_factory=dict)
+    opening: list[str] = field(default_factory=list)
+
+    def energy_order(self) -> list[str]:
+        """Order in which layers come in as energy rises, starting with the opening."""
+        base = STYLES.get(self.style, {}).get("energy_order", P.ENERGY_ORDER)
+        first = [r for r in self.opening if r in base]
+        return first + [r for r in base if r not in first]
+
+    def instrument(self, role: str) -> str:
+        return self.instruments.get(role) or STYLES[self.style]["presets"][role]
 
     def progression_for(self, section_name: str) -> str:
         return self.section_progressions.get(section_name, self.progression)
@@ -215,7 +246,7 @@ def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | N
         seed=rng.randrange(1_000_000),
     )
     piece.sections = _default_sections(piece, target_minutes)
-    _add_variety(piece, rng, avoid | disliked)
+    _add_variety(piece, rng, avoid | disliked, previous)
     return piece
 
 
@@ -224,7 +255,8 @@ _LIFT_STYLES = {"lofi", "downtempo", "deephouse"}
 _NINTH_CHANCE = {"lofi": 0.6, "deephouse": 0.7, "downtempo": 0.5, "ambient": 0.5, "piano": 0.4}
 
 
-def _add_variety(piece: Piece, rng: random.Random, avoid: set[str] | None = None) -> None:
+def _add_variety(piece: Piece, rng: random.Random, avoid: set[str] | None = None,
+                 previous: Piece | None = None) -> None:
     """Give choruses and breakdowns their own progressions, pick a chord
     colour, and sometimes lift the final chorus a whole step."""
     mode = Key.parse(piece.key).mode
@@ -237,8 +269,27 @@ def _add_variety(piece: Piece, rng: random.Random, avoid: set[str] | None = None
         piece.section_progressions["breakdown"] = preferred[1] if len(preferred) > 1 else preferred[0]
         piece.section_progressions["bridge"] = piece.section_progressions["breakdown"]
     piece.color = "ninths" if rng.random() < _NINTH_CHANCE.get(piece.style, 0.5) else "sevenths"
+    choose_instruments(piece, rng, previous)
     if piece.style in _LIFT_STYLES and rng.random() < 0.5:
         apply_key_lift(piece)
+
+
+def choose_instruments(piece: Piece, rng: random.Random, previous: Piece | None = None) -> None:
+    """Pick this piece's sound from the style's palette, and how it opens.
+    Avoids reusing the previous piece's opening and pad when there's a choice."""
+    cfg = STYLES[piece.style]
+    palette = cfg.get("palette", {})
+    piece.instruments = {}
+    for role in P.ENERGY_ORDER:
+        options = palette.get(role) or [cfg["presets"][role]]
+        if previous is not None and len(options) > 1:
+            fresh = [o for o in options if o != previous.instruments.get(role)]
+            options = fresh or options
+        piece.instruments[role] = rng.choice(options)
+    openers = cfg.get("openers") or [cfg.get("energy_order", P.ENERGY_ORDER)[:2]]
+    if previous is not None and len(openers) > 1:
+        openers = [o for o in openers if list(o) != previous.opening] or openers
+    piece.opening = list(rng.choice(openers))
 
 
 def apply_key_lift(piece: Piece, semitones: int = 2) -> bool:
@@ -261,10 +312,9 @@ def _default_sections(piece: Piece, target_minutes: float) -> list[Section]:
 
 
 def arrange(piece: Piece, section: Section, rng: random.Random, max_layers: int = 6) -> Arrangement:
-    """Energy decides how many layers play; the style decides which presets."""
-    cfg = STYLES[piece.style]
+    """Energy decides how many layers play; the piece's instruments decide which presets."""
     energy = section.energy
-    order = cfg.get("energy_order", P.ENERGY_ORDER)
+    order = piece.energy_order()
     count = 1 + int(round(energy * (len(order) - 1)))
     if section.name == "breakdown":
         count = min(count, 2)
@@ -275,7 +325,7 @@ def arrange(piece: Piece, section: Section, rng: random.Random, max_layers: int 
     # In a breakdown keep the pad and let the melody float over it.
     if section.name == "breakdown" and "melody" not in roles:
         roles = ["pad", "melody"]
-    layers = {role: (cfg["presets"][role] if role in roles else None) for role in P.ENERGY_ORDER}
+    layers = {role: (piece.instrument(role) if role in roles else None) for role in P.ENERGY_ORDER}
     return Arrangement(layers=layers, melody_character=None, variation_seed=rng.randrange(1_000_000))
 
 
@@ -380,6 +430,27 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
         # Style/tempo may have changed: rebuild the default arc to fit.
         piece.sections = _default_sections(piece, target_minutes)
 
+    raw_instruments = data.get("instruments")
+    if isinstance(raw_instruments, dict):
+        for role, name in raw_instruments.items():
+            if role in P.ENERGY_ORDER and isinstance(name, str) and name in P.PRESETS.get(role, {}):
+                piece.instruments[role] = name
+            else:
+                notes.append(f"instrument {role}={name!r} rejected")
+    opening = data.get("opening")
+    if isinstance(opening, list):
+        roles = [r for r in opening if r in P.ENERGY_ORDER][:3]
+        if roles:
+            piece.opening = roles
+        else:
+            notes.append("opening rejected")
+    if piece.style != fallback.style:
+        # Instruments from another style's palette would clash; re-pick.
+        keep = {r: n for r, n in piece.instruments.items()
+                if isinstance(raw_instruments, dict) and raw_instruments.get(r) == n}
+        choose_instruments(piece, random.Random(piece.seed))
+        piece.instruments.update(keep)
+
     fallback_lift = any(s.key_shift for s in fallback.sections)
     lift = data.get("key_lift", fallback_lift)
     if lift is True or (lift and str(lift).lower() == "true"):
@@ -442,5 +513,6 @@ def describe_options() -> dict:
         "progressions": {p.name: {"modes": list(p.modes), "mood": p.mood} for p in PROGRESSIONS_BY_NAME.values()},
         "section_types": SECTION_TYPES,
         "chord_colors": list(CHORD_COLORS),
+        "palettes": {name: cfg.get("palette", {}) for name, cfg in STYLES.items()},
         "presets": {role: {n: pr.description for n, pr in P.PRESETS[role].items()} for role in P.ENERGY_ORDER},
     }
