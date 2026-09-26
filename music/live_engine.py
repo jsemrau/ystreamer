@@ -143,7 +143,8 @@ class LiveEngine:
             highlight = edit.role if edit.role in program.lines else None
             self.log(f"✎ {edit.describe()}" + (f"   -- {edit.reason}" if edit.reason else ""))
             runtime.append_thought(f"✎ {edit.describe()}  -- {edit.reason}")
-            runtime.append_history({"edit": edit.describe(), "reason": edit.reason,
+            runtime.append_history({"edit": edit.describe(), "op": edit.op, "role": edit.role,
+                                    "name": edit.name, "value": edit.value, "reason": edit.reason,
                                     "program": program.to_dict()})
             self._publish(program, highlight, edit.reason)
             if edit.narration and self.narrator is not None:
