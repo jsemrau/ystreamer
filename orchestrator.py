@@ -82,7 +82,7 @@ def parse_args():
     engine.add_argument("--edit-bars", type=int, default=int(os.getenv("YS_EDIT_BARS") or 0) or None,
                         help="Live engine: bars between edits (default: YS_EDIT_BARS, else per style, "
                              "8 for slow styles and 16 for club styles, about 20-30 s).")
-    engine.add_argument("--judge", choices=["jevtypesafe"], default=os.getenv("YS_JUDGE") or None,
+    engine.add_argument("--judge", choices=["jevtypesafe", "none"], default=os.getenv("YS_JUDGE") or None,
                         help="Live engine: the LLM proposes 3 edits and this decision model picks one blind "
                              "(also among built-in candidates). Default: YS_JUDGE, else off.")
     engine.add_argument("--piece-minutes", type=float, default=12.0)
@@ -201,6 +201,8 @@ def build_performer(args, rng):
     text_model = model_id and not (llm.resolve(model_id)[0] == "jevtypesafe" and llm.jev_style() == "decide")
     director = Director(model_id if text_model else None, rng, theme=args.theme, show_llm=args.show_llm,
                         target_minutes=args.piece_minutes, style=args.style)
+    if args.judge == "none":
+        args.judge = None
     judge = args.judge if text_model else None
     if args.judge and not text_model:
         print("[orchestrator] --judge needs a text model to propose edits (e.g. --llm local); ignoring it")

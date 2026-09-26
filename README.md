@@ -421,6 +421,12 @@ intimate late-night radio voice, and shown as a subtitle on the stream:
 | `ystreamer-watchdog` | restarts the engine on sustained silence or a stale heartbeat, sends a push via ntfy |
 | `ystreamer-quality` | every 10 min: loudness, clipping and key-conformance check on a clip; bad harmony → automatic thumbs-down |
 
+The engine unit runs `orchestrator.py --resume --llm local --judge jevtypesafe`: the
+local model performs and jevtypesafe judges its ideas, so the stream needs
+`LLAMA_GGUF_MODEL` and `YS_JEV_API_KEY` in `.env`. Anything in
+`YS_ENGINE_ARGS` comes last and overrides it, e.g.
+`YS_ENGINE_ARGS=--judge none` or `YS_ENGINE_ARGS=--llm claude --model claude-haiku-4-5`.
+
 Run `loginctl enable-linger $USER` so the units keep running after you log out.
 Test the whole thing on an **unlisted** stream for a few days before going public.
 
