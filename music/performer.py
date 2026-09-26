@@ -15,6 +15,8 @@ import json
 import os
 import random
 import re
+import time
+from collections import Counter
 from dataclasses import dataclass, field
 
 import config
@@ -76,10 +78,24 @@ class Performer:
         self.state = SetState()
         self._llm_failures = 0
         self._skip_llm = 0
+        # Per track: how many edits the LLM made, and why the built-in performer
+        # had to step in ("late", "invalid", "error", "resting").
+        self.stats: Counter[str] = Counter()
 
     # ------------------------------------------------------------- tracks
 
+    def _report_stats(self) -> None:
+        if not self.model_id or not self.stats:
+            return
+        total = sum(self.stats.values())
+        fallbacks = ", ".join(f"{n} {why}" for why, n in self.stats.most_common() if why != "llm")
+        self.log(f"[Performer] last track: {self.stats['llm']}/{total} edits by the LLM"
+                 + (f" (built-in: {fallbacks})" if fallbacks else ""))
+        self.stats.clear()
+
     def new_track(self, previous: Track | None) -> Track:
+        if previous is not None:
+            self._report_stats()
         if self.locked_style is None:
             rotation = ["lofi", "ambient", "downtempo", "piano"]
             if previous is None or self.rng.random() > 0.6:
@@ -130,6 +146,9 @@ class Performer:
             edit = self._llm_edit(program)
         elif self._skip_llm > 0:
             self._skip_llm -= 1
+            self.stats["resting"] += 1
+        if edit is not None:
+            self.stats["llm"] += 1
         if edit is None:
             edit = self._builtin_edit(program)
             edit.source = "built-in"
@@ -297,33 +316,105 @@ class Performer:
     # ------------------------------------------------------------------ LLM
 
     def _llm_edit(self, program: Program) -> Edit | None:
+        # The reply must arrive before the next edit is due (the edit window
+        # at the current tempo), with a little margin for applying it.
+        window = self.settings["edit_bars"] / program.track.cps
+        deadline = time.monotonic() + max(4.0, window * 0.85)
         prompt = self._prompt(program)
-        try:
-            asks = (f"next edit for '{program.track.title}' ({self.state.phase}, "
-                    f"{len(program.active_roles())} line{'' if len(program.active_roles()) == 1 else 's'} playing)")
-            reply = llm.converse("Performer", self.model_id,
-                                 "You are a live coder performing TidalCycles. Reply with JSON only.", prompt,
-                                 log=self.log, asks=asks, show_full=self.show_llm, max_tokens=500)
-            data = llm.extract_json(reply)
-            edit = self._edit_from_json(data, program)
-            apply_edit(program, edit, self.settings["max_lines"])
-            self._llm_failures = 0
-            edit.source = "LLM"
-            return edit
-        except (llm.LLMError, EditError, ValueError, TypeError, KeyError) as e:
-            self._llm_failures += 1
-            self.log(f"[Performer] LLM edit unusable ({e}); built-in performer takes this one")
-            if self._llm_failures >= 3:
-                self._skip_llm, self._llm_failures = 5, 0
-                self.log("[Performer] too many LLM failures; the built-in performer plays the next 5 edits")
-            return None
+        schema = self._edit_schema(program)
+        asks = (f"next edit for '{program.track.title}' ({self.state.phase}, "
+                f"{len(program.active_roles())} line{'' if len(program.active_roles()) == 1 else 's'} playing)")
+        system = "You are a live coder performing TidalCycles. Reply with JSON only."
+        for attempt in (1, 2):
+            remaining = deadline - time.monotonic()
+            try:
+                reply = llm.converse("Performer", self.model_id, system, prompt, log=self.log,
+                                     asks=asks if attempt == 1 else "corrected edit", show_full=self.show_llm,
+                                     max_tokens=300, temperature=0.7, timeout=max(2.0, remaining),
+                                     schema=schema)
+                if time.monotonic() > deadline + 1:
+                    raise llm.LLMError("reply came after the edit was due")
+                edit = self._edit_from_json(llm.extract_json(reply), program)
+                apply_edit(program, edit, self.settings["max_lines"])
+                self._llm_failures = 0
+                edit.source = "LLM"
+                return edit
+            except (EditError, ValueError, TypeError, KeyError) as e:
+                # A usable-looking reply that broke a rule: if there's time,
+                # say what was wrong and let the model correct itself once.
+                if attempt == 1 and deadline - time.monotonic() > 3.0:
+                    self.log(f"[Performer] edit rejected ({e}); asking the model to correct it")
+                    prompt = (f"{prompt}\n\n## Your previous reply was rejected\n\n{reply.strip()[:400]}\n\n"
+                              f"Reason: {e}. Reply with a corrected edit (one JSON object).")
+                    continue
+                return self._llm_failed(f"edit unusable ({e})", "invalid")
+            except llm.LLMError as e:
+                late = "timed out" in str(e) or "after the edit was due" in str(e)
+                return self._llm_failed(f"LLM {'too slow' if late else 'failed'} ({e})",
+                                        "late" if late else "error")
+        return None
+
+    def _llm_failed(self, why: str, kind: str) -> None:
+        self.stats[kind] += 1
+        self._llm_failures += 1
+        self.log(f"[Performer] {why}; built-in performer takes this one")
+        if self._llm_failures >= 3:
+            self._skip_llm, self._llm_failures = 5, 0
+            self.log("[Performer] too many LLM failures; the built-in performer plays the next 5 edits")
+        return None
+
+    def _edit_schema(self, program: Program) -> dict:
+        """JSON schema of every edit that is legal right now. A local server
+        decodes under it, so only real block, role, slot, effect and wrapper
+        names can come out; numbers are still range-checked afterwards."""
+        text = {"type": "string", "maxLength": 80}
+        extra = {"reason": {"type": "string", "maxLength": 80},
+                 "narration": {"type": "string", "maxLength": 160}}
+
+        def variant(op: str, **props) -> dict:
+            properties = {"reason": text, "op": {"const": op}, **props, "narration": extra["narration"]}
+            return {"type": "object", "properties": properties,
+                    "required": ["reason", "op", *props], "additionalProperties": False}
+
+        options = []
+        addable = [b.name for b in blocks_for(self.style) if b.role not in program.lines]
+        if addable and len(program.active_roles()) < self.settings["max_lines"]:
+            options.append(variant("add", block={"enum": addable}))
+        active = program.active_roles()
+        muted = [r for r, line in program.lines.items() if line.muted]
+        if program.lines:
+            options.append(variant("remove", role={"enum": list(program.lines)}))
+        if len(active) > 1:
+            options.append(variant("mute", role={"enum": active}))
+        if muted:
+            options.append(variant("unmute", role={"enum": muted}))
+        for role, line in program.lines.items():
+            slots = [k for k in line.patterns if k not in LOCKED_SLOTS]
+            for slot in slots:
+                value = {"enum": CHOICE_SLOTS[slot]} if slot in CHOICE_SLOTS else {"type": "string", "maxLength": 60}
+                options.append(variant("set_pattern", role={"const": role}, name={"const": slot}, value=value))
+            fx = [n for n in ROLE_FX.get(role, list(FX_RANGES)) if n in FX_RANGES]
+            if fx:
+                options.append(variant("set_fx", role={"const": role}, name={"enum": fx}, value=text))
+            if line.pfs:
+                options.append(variant("set_pf", role={"const": role}, name={"enum": [n for n, _ in line.pfs]},
+                                       value=text))
+            wraps = [w for w in allowed_wrappers(line) if w not in line.wrappers]
+            if wraps and len(line.wrappers) < 3:
+                options.append(variant("wrap", role={"const": role}, name={"enum": wraps}))
+            if line.wrappers:
+                options.append(variant("unwrap", role={"const": role}, name={"enum": list(line.wrappers)}))
+        options.append(variant("tempo", value=text))
+        return {"anyOf": options}
 
     def _edit_from_json(self, data: dict, program: Program) -> Edit:
         op = str(data.get("op", "")).strip()
         if op not in EDIT_OPS:
             raise EditError(f"unknown op {op!r}")
         role = str(data.get("role", "")).strip()
-        edit = Edit(op, role=role, name=str(data.get("name", "")), value=str(data.get("value", "")),
+        name = str(data.get("name", "")).strip()
+        value = _clamp_value(op, name, str(data.get("value", "")).strip(), program)
+        edit = Edit(op, role=role, name=name, value=value,
                     reason=" ".join(str(data.get("reason", "")).split())[:160],
                     narration=clean_narration(data.get("narration")))
         if op == "add":
@@ -356,6 +447,30 @@ class Performer:
             fx=json.dumps({k: list(v) for k, v in FX_RANGES.items()}),
             controls=json.dumps({k: list(v) for k, v in PF_RANGES.items()}),
         )
+
+
+_NUM_RE = re.compile(r"^-?\d+(\.\d+)?$")
+_RANGE_RE = re.compile(r"^\(slow (\d+) \$ range (-?[\d.]+) (-?[\d.]+) (sine|saw|tri)\)$")
+
+
+def _clamp_value(op: str, name: str, value: str, program: Program) -> str:
+    """Pull a slightly-out-of-range number back into range instead of
+    throwing the whole edit away (e.g. lpf 12000 -> 9000, a tempo jump of
+    +20 -> +12). Anything that isn't a number is left for the validator."""
+    if op == "tempo" and _NUM_RE.match(value):
+        bpm = program.track.bpm
+        return f"{max(50.0, min(200.0, bpm - 12 if float(value) < bpm - 12 else min(bpm + 12, float(value)))):g}"
+    ranges = FX_RANGES if op == "set_fx" else PF_RANGES if op == "set_pf" else None
+    if not ranges or name not in ranges:
+        return value
+    lo, hi = ranges[name]
+    if _NUM_RE.match(value):
+        return f"{max(lo, min(hi, float(value))):g}"
+    m = _RANGE_RE.match(value)
+    if m:
+        a, b = (max(lo, min(hi, float(x))) for x in (m.group(2), m.group(3)))
+        return f"(slow {max(1, min(64, int(m.group(1))))} $ range {a:g} {b:g} {m.group(4)})"
+    return value
 
 
 PHASE_HELP = {

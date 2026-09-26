@@ -60,6 +60,29 @@ python orchestrator.py --llm jevtypesafe --model my-model
 
 Claude requests enable the API's server-side refusal fallback (`fallbacks="default"`), so a declined request is retried on a fallback model instead of failing. Whatever the provider, a failed, slow or invalid answer just means the Director uses its deterministic plan for that decision.
 
+### How the local model is kept on track
+
+- **Constrained decoding:** every request to llama-server carries a JSON
+  schema built from the current program (addable blocks, playing roles,
+  each line's pattern slots, effects, controls and wrappers). llama.cpp
+  decodes under it, so the model cannot produce broken JSON or made-up
+  names. Servers that don't support schemas get a plain request.
+- **Reason first:** the schema puts `reason` before the operation, so the
+  model states its intention before choosing the move.
+- **Clamping:** a number slightly out of range (`lpf 12000`, a tempo jump of
+  +20) is pulled into range instead of throwing the edit away.
+- **One corrected retry:** if an edit still breaks a rule (e.g. a melody
+  written as note names), the model is told why and gets one retry, if
+  there is time before the edit is due.
+- **Deadline:** each call has to finish before its edit is due (8 bars at
+  138 BPM = ~14 s, 4 bars at 80 BPM = 12 s). A late reply is dropped and the
+  built-in performer plays that edit.
+- After each track, the terminal shows how it went, e.g.
+  `[Performer] last track: 27/31 edits by the LLM (built-in: 3 late, 1 invalid)`.
+  Mostly `late` means the model is too slow at this tempo (try a faster
+  model or a lower `LLAMA_CTX_SIZE`); mostly `invalid` means it is struggling
+  with the task.
+
 ### Cheapest Claude model for the performer
 
 The performer's calls are small (about 1,500 input tokens and 80 output
