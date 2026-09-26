@@ -30,6 +30,12 @@ that was used recently.
   `bars` (a multiple of 8, 8-64) and `energy` (0.05-1.0). Start low (intro),
   rise, contrast with a breakdown, and end low (outro). Chill music: peak
   energy about 0.8, never several peaks in a row.
+- Make the piece develop, not loop: give `section_progressions` for the
+  chorus and the breakdown (different progressions from `progression`, valid
+  for the key's mode) so the harmony changes between sections.
+- `color`: "ninths" for lusher, jazzier chords, "sevenths" for plainer ones.
+- `key_lift`: true to lift the final chorus a whole step (a classic lift for
+  the last peak; needs at least two choruses).
 - `reason`: one or two sentences, in plain words, on why this piece follows
   the previous one well (key, tempo, mood). It is shown to the audience.
 - `narration`: ONE sentence (under 25 words) that a warm, intimate late-night
@@ -43,6 +49,8 @@ that was used recently.
 ```json
 {{"title": "Two or three evocative words", "style": "lofi", "key": "D minor", "bpm": 78,
   "progression": "i-VI-III-VII", "mood": "late-night, cozy",
+  "section_progressions": {{"chorus": "i-VI-iv-VII", "breakdown": "i-iv-i-VI"}},
+  "color": "ninths", "key_lift": true,
   "sections": [{{"name": "intro", "bars": 16, "energy": 0.2}}, {{"name": "verse", "bars": 32, "energy": 0.45}}],
   "reason": "Moving to the relative minor keeps the warmth of the last piece but makes it more intimate.",
   "narration": "Stay a little longer. Let the night slow down with you."}}

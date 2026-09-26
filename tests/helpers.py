@@ -1,6 +1,6 @@
 import re
 
-_SEQ_RE = re.compile(r'note "<(.*?)>"')
+_SEQ_RE = re.compile(r'note (?:\(slow \d+ )?"<(.*?)>"')
 
 
 def top_level_entries(seq: str) -> list[str]:
@@ -24,7 +24,7 @@ def top_level_entries(seq: str) -> list[str]:
 
 def note_numbers(expr: str) -> list[int]:
     notes = []
-    for body in re.findall(r'note "([^"]*)"', expr):
+    for body in re.findall(r'note (?:\(slow \d+ )?"([^"]*)"', expr):
         notes.extend(int(n) for n in re.findall(r"-?\d+", body))
     return notes
 

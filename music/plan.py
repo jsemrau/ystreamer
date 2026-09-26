@@ -19,7 +19,7 @@ import re
 from dataclasses import asdict, dataclass, field
 
 from . import presets as P
-from .theory import MODES, PROGRESSIONS_BY_NAME, Key, progressions_for
+from .theory import CHORD_COLORS, MODES, PROGRESSIONS_BY_NAME, Key, progressions_for
 
 STYLES = {
     "lofi": {
@@ -97,6 +97,7 @@ class Section:
     name: str
     bars: int
     energy: float
+    key_shift: int = 0  # semitones above the piece key (e.g. +2 for a lifted final chorus)
 
 
 @dataclass
@@ -111,6 +112,13 @@ class Piece:
     sections: list[Section]
     seed: int = 0
     narration: str = ""  # spoken to listeners when the piece starts
+    # Section name -> progression, so choruses and breakdowns get their own
+    # harmony; sections not listed use `progression`.
+    section_progressions: dict[str, str] = field(default_factory=dict)
+    color: str = "sevenths"  # chord colour: sevenths | ninths
+
+    def progression_for(self, section_name: str) -> str:
+        return self.section_progressions.get(section_name, self.progression)
 
     @property
     def cps(self) -> float:
@@ -140,6 +148,8 @@ class Arrangement:
     melody_character: str | None = None
     variation_seed: int = 0
     narration: str = ""  # spoken to listeners when the section starts
+    fills: bool = True        # drum fills / variations at phrase ends
+    movement: str = "gentle"  # filter movement on pads and keys: still | gentle | lively
 
     def active_roles(self) -> list[str]:
         return [r for r, p in self.layers.items() if p]
@@ -157,7 +167,11 @@ class Arrangement:
 # ---------------------------------------------------------------------------
 
 def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | None = None,
-               avoid_progressions: set[str] | None = None, target_minutes: float = 12.0) -> Piece:
+               avoid_progressions: set[str] | None = None, target_minutes: float = 12.0,
+               disliked: set[str] | None = None) -> Piece:
+    """avoid_progressions: soft preference (e.g. recently used);
+    disliked: excluded whenever any alternative exists."""
+    disliked = set(disliked or ())
     rotation = [name for name, cfg in STYLES.items() if cfg.get("rotate", True)]
     style = style if style in STYLES else (previous.style if previous and rng.random() < 0.6 else rng.choice(rotation))
     cfg = STYLES[style]
@@ -184,7 +198,9 @@ def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | N
     avoid = set(avoid_progressions or ())
     if previous is not None:
         avoid.add(previous.progression)
-    candidates = [p for p in progressions_for(key.mode) if p.name not in avoid] or progressions_for(key.mode)
+    pool = progressions_for(key.mode)
+    candidates = ([p for p in pool if p.name not in avoid and p.name not in disliked]
+                  or [p for p in pool if p.name not in disliked] or pool)
     progression = rng.choice(candidates)
 
     piece = Piece(
@@ -199,7 +215,41 @@ def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | N
         seed=rng.randrange(1_000_000),
     )
     piece.sections = _default_sections(piece, target_minutes)
+    _add_variety(piece, rng, avoid | disliked)
     return piece
+
+
+# Styles where a lifted final chorus fits; chance of ninth chords per style.
+_LIFT_STYLES = {"lofi", "downtempo", "deephouse"}
+_NINTH_CHANCE = {"lofi": 0.6, "deephouse": 0.7, "downtempo": 0.5, "ambient": 0.5, "piano": 0.4}
+
+
+def _add_variety(piece: Piece, rng: random.Random, avoid: set[str] | None = None) -> None:
+    """Give choruses and breakdowns their own progressions, pick a chord
+    colour, and sometimes lift the final chorus a whole step."""
+    mode = Key.parse(piece.key).mode
+    options = [p.name for p in progressions_for(mode) if p.name != piece.progression]
+    preferred = [p for p in options if p not in (avoid or ())] or options
+    rng.shuffle(preferred)
+    piece.section_progressions = {}
+    if preferred:
+        piece.section_progressions["chorus"] = preferred[0]
+        piece.section_progressions["breakdown"] = preferred[1] if len(preferred) > 1 else preferred[0]
+        piece.section_progressions["bridge"] = piece.section_progressions["breakdown"]
+    piece.color = "ninths" if rng.random() < _NINTH_CHANCE.get(piece.style, 0.5) else "sevenths"
+    if piece.style in _LIFT_STYLES and rng.random() < 0.5:
+        apply_key_lift(piece)
+
+
+def apply_key_lift(piece: Piece, semitones: int = 2) -> bool:
+    """Lift the last chorus (only when there are at least two)."""
+    choruses = [i for i, s in enumerate(piece.sections) if s.name == "chorus"]
+    if len(choruses) < 2:
+        return False
+    for s in piece.sections:
+        s.key_shift = 0
+    piece.sections[choruses[-1]].key_shift = semitones
+    return True
 
 
 def _default_sections(piece: Piece, target_minutes: float) -> list[Section]:
@@ -288,6 +338,27 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
     if 0 < len(mood) <= 40:
         piece.mood = mood
 
+    color = str(data.get("color", "")).strip().lower()
+    if color in CHORD_COLORS:
+        piece.color = color
+    elif color:
+        notes.append(f"unknown chord color {color!r}")
+
+    # Per-section progressions must suit the (possibly new) mode.
+    section_progs = {name: prog for name, prog in piece.section_progressions.items()
+                     if key.mode in PROGRESSIONS_BY_NAME[prog].modes}
+    raw_progs = data.get("section_progressions")
+    if isinstance(raw_progs, dict):
+        for name, prog in raw_progs.items():
+            name = str(name).strip().lower()
+            if name in SECTION_TYPES and prog in PROGRESSIONS_BY_NAME and key.mode in PROGRESSIONS_BY_NAME[prog].modes:
+                section_progs[name] = prog
+            else:
+                notes.append(f"section progression {name}={prog!r} rejected")
+    piece.section_progressions = section_progs
+    if not piece.section_progressions and key.mode != Key.parse(fallback.key).mode:
+        _add_variety(piece, random.Random(piece.seed))
+
     raw_sections = data.get("sections")
     if isinstance(raw_sections, list) and 3 <= len(raw_sections) <= 12:
         sections = []
@@ -308,6 +379,14 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
     else:
         # Style/tempo may have changed: rebuild the default arc to fit.
         piece.sections = _default_sections(piece, target_minutes)
+
+    fallback_lift = any(s.key_shift for s in fallback.sections)
+    lift = data.get("key_lift", fallback_lift)
+    if lift is True or (lift and str(lift).lower() == "true"):
+        apply_key_lift(piece)
+    else:
+        for s in piece.sections:
+            s.key_shift = 0
     return piece, notes
 
 
@@ -339,6 +418,14 @@ def validate_arrangement(data: dict, piece: Piece, fallback: Arrangement, max_la
                     break
         arrangement.layers = layers
 
+    if isinstance(data.get("fills"), bool):
+        arrangement.fills = data["fills"]
+    movement = data.get("movement")
+    if movement in ("still", "gentle", "lively"):
+        arrangement.movement = movement
+    elif movement:
+        notes.append(f"unknown movement {movement!r}")
+
     character = data.get("melody_character")
     if character in ("sparse", "flowing", "lively"):
         arrangement.melody_character = character
@@ -354,5 +441,6 @@ def describe_options() -> dict:
         "modes": list(MODES),
         "progressions": {p.name: {"modes": list(p.modes), "mood": p.mood} for p in PROGRESSIONS_BY_NAME.values()},
         "section_types": SECTION_TYPES,
+        "chord_colors": list(CHORD_COLORS),
         "presets": {role: {n: pr.description for n, pr in P.PRESETS[role].items()} for role in P.ENERGY_ORDER},
     }

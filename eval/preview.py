@@ -52,15 +52,15 @@ def _split_top(body: str) -> list[str]:
 
 def parse_statement(line: str) -> dict | None:
     """Extract the pitched pattern from one engine statement."""
-    m = re.search(r'note "<(.*?)>"', line)
+    m = re.search(r'note (?:\(slow \d+ )?"<(.*?)>"', line)
     if not m or "ys_vinyl" in line:
         return None
-    slow = re.search(r"slow (\d+) \$ note", line)
+    slow = re.search(r"slow (\d+) \$ note|note \(slow (\d+) ", line)
     legato = re.search(r"# legato ([\d.]+)", line)
     gain = re.search(r"# gain ([\d.]+)", line)
     return {
         "entries": _split_top(m.group(1)),
-        "slow": int(slow.group(1)) if slow else 1,
+        "slow": int(slow.group(1) or slow.group(2)) if slow else 1,
         "legato": float(legato.group(1)) if legato else 1.0,
         "gain": float(gain.group(1)) if gain else 0.9,
     }
@@ -150,9 +150,11 @@ def preview_piece(style: str | None, seed: int, max_cycles_per_section: int = 8)
     engine = MusicEngine(lambda lines: None, director, log=lambda m: None)
     sections = []
     active: dict[str, str] = {}
+    start = 0
     for idx, section in enumerate(piece.sections):
         arrangement = director.arrange_section(piece, idx, None)
-        rendered = engine.render_section(piece, idx, arrangement, active)
+        rendered = engine.render_section(piece, idx, arrangement, active, start=start)
+        start += section.bars
         active = rendered.statements
         cycles = min(section.bars, max_cycles_per_section)
         cycles -= cycles % piece.period or 0

@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from eval.analyze import analyze, verdict  # noqa: E402
 from music import feedback, runtime  # noqa: E402
+from music.theory import Key, transpose_key  # noqa: E402
 
 INTERVAL = float(os.getenv("YS_QUALITY_INTERVAL", "600"))
 CLIP_SECONDS = float(os.getenv("YS_QUALITY_CLIP_SECONDS", "45"))
@@ -52,7 +53,9 @@ def check_once() -> dict | None:
         if not state or not state_before or state.get("start_cycle") != state_before.get("start_cycle"):
             print("[quality] section changed during the clip; skipping", flush=True)
             return None
-        key = state["piece"]["key"]
+        # The section's actual key (a lifted final chorus is a whole step up).
+        section = state["piece"]["sections"][state["section_index"]]
+        key = transpose_key(Key.parse(state["piece"]["key"]), section.get("key_shift", 0)).name
         metrics = analyze(clip, key)
     problems = verdict(metrics)
     record = {"ts": time.time(), "piece": state["piece"]["title"], "section_index": state["section_index"],

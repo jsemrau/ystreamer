@@ -18,6 +18,7 @@ code and schedules it on phrase boundaries.
 """
 
 import argparse
+import itertools
 import os
 import random
 import signal
@@ -216,20 +217,36 @@ def run_selftest(args) -> int:
     rng = random.Random(0)
     failures = 0
     checked = 0
+    seen: set[str] = set()
+    variants_done: set[str] = set()  # modes whose ninths/fills/builds were checked
     for prog in PROGRESSIONS:
         for mode in prog.modes:
             key = Key(rng.randrange(12), mode)
-            for cpc in (1, 2):
-                ctx = HarmonyContext(key, progression_chords(key, prog), cpc, seed=rng.randrange(1000))
+            # The new constructs are the same for every progression, so check
+            # them on the first progression of each mode only.
+            full = mode not in variants_done
+            variants_done.add(mode)
+            # Plain; a mid-phrase verse (fills, turnarounds, movement); and a
+            # build into a chorus (roll, kick/bass drop, filter rise).
+            contexts = ({}, {"start": 12, "bars": 16, "section": "verse", "variation": 1, "movement": "lively"},
+                        {"start": 40, "bars": 16, "section": "build", "next_section": "chorus"})
+            for cpc, color, extra in itertools.product((1, 2), ("sevenths", "ninths"), contexts):
+                if not full and (color != "sevenths" or extra):
+                    continue
+                ctx = HarmonyContext(key, progression_chords(key, prog, color=color), cpc,
+                                     seed=rng.randrange(1000), **extra)
                 for role, presets in P.PRESETS.items():
                     for preset in presets.values():
                         for energy in (0.2, 0.6, 0.9):
                             kwargs = {"notes_by_cycle": ["[0 _ ~ 2 ~ ~ 4 _]"] * (4 * cpc)} if role == "free" else {}
                             for custom in (True, False):
                                 expr = render_layer(role, ctx, preset, energy, custom, **kwargs)
-                                if expr is None:
+                                if expr is None or expr in seen:
                                     continue
+                                seen.add(expr)
                                 checked += 1
+                                if checked % 500 == 0:
+                                    print(f"[selftest] {checked} patterns checked...", flush=True)
                                 error = checker.check(with_orbit(role, expr))
                                 if error:
                                     failures += 1

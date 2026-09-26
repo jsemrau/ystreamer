@@ -35,6 +35,10 @@ in the next section**.
 - Prefer continuity: change at most 2 presets relative to what's playing,
   unless the section type changes dramatically.
 - `melody_character` is one of "sparse", "flowing", "lively" (or null).
+- `fills`: true for drum fills and small variations at the end of phrases
+  (keeps grooves alive), false for a steady, hypnotic loop.
+- `movement`: how much the pad and keys filters drift: "still", "gentle" or
+  "lively". Builds always open the filter and roll into the next peak.
 - Listener feedback says avoid: {avoid}
 - `reason`: one or two sentences, in plain words, on what you changed and why.
 - `narration`: ONE short sentence (under 20 words) a warm, intimate late-night
@@ -48,7 +52,7 @@ in the next section**.
 ```json
 {{"layers": {{"pad": "warm_pad", "texture": "vinyl", "bass": "sub", "keys": "rhodes",
               "drums": "lofi_kit", "melody": null, "arp": null}},
-  "melody_character": "flowing",
+  "melody_character": "flowing", "fills": true, "movement": "gentle",
   "reason": "The build needs more drive, so the drums come in while the pad keeps the harmony steady.",
   "narration": "Here comes a soft little pulse. Just let it carry you."}}
 ```

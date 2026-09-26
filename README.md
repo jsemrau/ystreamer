@@ -107,6 +107,34 @@ Flags on the command line override the `.env` values. Use these two
 settings rather than putting `--theme` into `YS_ENGINE_ARGS`: systemd splits
 that at spaces and ignores quotes, which would break a multi-word theme.
 
+## How a piece develops
+
+A piece is about 10-20 minutes long and moves through intro, verse, build,
+chorus, breakdown, verse, chorus and outro. It changes as it goes:
+
+- **Harmony:** the chorus and the breakdown each get their own chord
+  progression, so the harmony moves between sections. Chords are sevenths,
+  or lusher ninths. Sometimes the final chorus lifts a whole step for the
+  last peak.
+- **Phrases:** the drums add a small turnaround on every 4th bar and a
+  proper fill on every 8th bar, counted from the start of the section.
+  Hits vary slightly in loudness, and lofi and downtempo drums sit slightly
+  behind the beat, like a real player.
+- **Builds:** a build that leads into a chorus opens the filters from dark
+  to bright across the whole section. The snare or clap starts rolling two
+  bars before the chorus, and in the last bar the kick and bass drop out so
+  the chorus hits harder.
+- **Movement:** pad, keys and arpeggio filters drift slowly ("gentle"), not
+  at all ("still"), or more ("lively").
+- **Melodies:** short loops get a two-loop phrase (a statement and an
+  answer). When a section comes back, its melody keeps its opening but
+  answers differently.
+
+With an LLM, the Director chooses the chorus and breakdown progressions,
+the chord colour, the key lift, and per section whether to use fills and
+how much movement. The built-in planner makes the same kinds of choices
+at random.
+
 ## Watching the Director think
 
 Every decision prints in the terminal with the model's reason:
