@@ -60,6 +60,25 @@ python orchestrator.py --llm jevtypesafe --model my-model
 
 Claude requests enable the API's server-side refusal fallback (`fallbacks="default"`), so a declined request is retried on a fallback model instead of failing. Whatever the provider, a failed, slow or invalid answer just means the Director uses its deterministic plan for that decision.
 
+### Cheapest Claude model for the performer
+
+The performer's calls are small (about 1,500 input tokens and 80 output
+tokens, roughly 320 calls an hour for lofi), and every edit is validated, so
+**Claude Haiku 4.5** is enough and also the fastest:
+
+```bash
+./venv/bin/python orchestrator.py --style lofi --llm claude --model claude-haiku-4-5
+```
+
+| Model | $ / 1M tokens in / out | Approx. per hour of lofi |
+|---|---|---|
+| `claude-haiku-4-5` | 1 / 5 | ~$0.60 |
+| `claude-sonnet-5` | 2 / 10 | ~$1.20 (+ thinking) |
+| `claude-opus-5` (default) | 5 / 25 | ~$3 (+ thinking) |
+
+If many edits show `[built-in]` or `LLM edit unusable`, move up to `claude-sonnet-5`.
+Set `ANTHROPIC_MODEL=claude-haiku-4-5` in `.env` to make it the default.
+
 ## Choosing the style and mood
 
 There are two options, and you can combine them.

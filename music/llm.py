@@ -61,6 +61,11 @@ def resolve(model_id: str) -> tuple[str, str]:
 _claude_client = None
 
 
+# Models whose safety classifiers can decline a request; they get the
+# server-side refusal fallback.
+_FALLBACK_MODELS = ("claude-opus-5", "claude-fable-5", "claude-mythos-5")
+
+
 def _claude(model: str, system: str, user: str, timeout: float, max_tokens: int) -> str:
     import anthropic
 
@@ -76,18 +81,17 @@ def _claude(model: str, system: str, user: str, timeout: float, max_tokens: int)
     effort = os.getenv("YS_CLAUDE_EFFORT")  # low | medium | high (API default) | xhigh | max
     if effort:
         kwargs["output_config"] = {"effort": effort}
+    client = _claude_client.with_options(timeout=timeout)
+    request = dict(model=model, max_tokens=max(max_tokens, 16000), system=system,
+                   messages=[{"role": "user", "content": user}], **kwargs)
     try:
-        response = _claude_client.with_options(timeout=timeout).beta.messages.create(
-            model=model,
-            max_tokens=max(max_tokens, 16000),
-            system=system,
-            messages=[{"role": "user", "content": user}],
+        if model.startswith(_FALLBACK_MODELS):
             # If a request is declined by a safety classifier, let the API
             # retry it on a suitable fallback model within the same call.
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            **kwargs,
-        )
+            response = client.beta.messages.create(**request, betas=["server-side-fallback-2026-07-01"],
+                                                   fallbacks="default")
+        else:  # Sonnet, Haiku: a plain request
+            response = client.messages.create(**request)
     except anthropic.APIStatusError as e:
         raise LLMError(f"Claude API error {e.status_code}: {e.message}") from e
     except anthropic.APIConnectionError as e:
