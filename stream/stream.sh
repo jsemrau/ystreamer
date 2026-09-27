@@ -192,7 +192,9 @@ if [[ "$UI_MODE" == "browser" ]]; then
               -i "${DISPLAY_NUM}.0")
     FILTER="[0:a]alimiter=limit=0.89:level=disabled,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout];\
 [1:v]fps=${FPS},format=yuv420p[vout]"
-    TUNE=(-tune zerolatency)
+    # No zerolatency: x264's frame threads, lookahead and B-frames give a
+    # better picture for the bitrate; a few frames of delay don't matter.
+    TUNE=()
 else
     VIDEO_IN=("${BG_IN[@]}")
     TUNE=(-tune stillimage)
@@ -213,26 +215,39 @@ fontsize=$(( H / 48 )):line_spacing=4:fontcolor=0xCFC6B8@0.75:x=40:y=$(( H / 24 
 fontsize=$(( H / 30 )):fontcolor=0xF4EEE4@0.9:x=(w-text_w)/2:y=H-${WAVE_H}-$(( H / 10 )):\
 shadowcolor=black@0.7:shadowx=2:shadowy=2[vout]"
 
-# Is the encoder keeping up? ffmpeg reports its speed every 10 s; below
-# real time for 30 s, viewers see buffering, so say so in the log (and
-# every 5 minutes while it lasts). Only with an ffmpeg that has -stats_period.
+# Is the stream keeping up? ffmpeg reports every 10 s how far the output has
+# got and how much it has written. Measured per interval (ffmpeg's own speed
+# is an average since the start, so after an hour a 20 s stall barely moves
+# it): below real time for 20 s, the platform isn't getting the stream fast
+# enough and viewers see buffering, whether the machine or the upload is
+# behind; say so in the log with the upload rate (and every 5 minutes while
+# it lasts). Only with an ffmpeg that has -stats_period.
 PROGRESS=()
 if ffmpeg -hide_banner -h full 2>/dev/null | grep -q -- "-stats_period"; then
     PROGRESS=(-stats_period 10 -progress pipe:1)
 fi
 watch_speed() {
     awk -F= -v size="$SIZE" -v rate="$VBITRATE" -v fps="$FPS" '
-        $1 == "speed" {
-            s = $2; sub(/x/, "", s); s += 0
-            if (s > 0 && s < 0.95) {
-                slow++
-                if (slow % 30 == 3)
-                    printf "[stream] WARNING: the encoder runs at %.2fx real time (%s, %s fps, %s): the machine can'"'"'t keep up, so viewers see buffering. Lower YS_VIDEO_SIZE (e.g. 1280x720), YS_FPS (e.g. 24) or YS_VIDEO_BITRATE\n", s, size, fps, rate > "/dev/stderr"
-            } else {
-                if (slow >= 3) printf "[stream] the encoder is back to real time (%.2fx)\n", s > "/dev/stderr"
-                slow = 0
+        function now() { srand(); return srand() }        # epoch seconds, in any awk
+        $1 == "out_time_us" { out = $2 + 0 }
+        $1 == "total_size" { bytes = $2 + 0 }
+        $1 == "progress" {
+            t = now()
+            if (prev_t && t > prev_t && out > 0) {
+                dt = t - prev_t
+                sp = (out - prev_out) / 1e6 / dt
+                kbps = (bytes - prev_bytes) * 8 / 1000 / dt
+                if (sp < 0.85) {
+                    slow++
+                    if (slow % 30 == 2)
+                        printf "[stream] WARNING: only %.2fx real time over the last %d s, %d kbit/s sent (%s, %s fps, %s): the upload or the machine is falling behind, so viewers see buffering. If ffmpeg'"'"'s CPU is low it is the upload: lower YS_VIDEO_BITRATE, or pause other uploads\n", sp, dt * 2, kbps, size, fps, rate > "/dev/stderr"
+                } else {
+                    if (slow >= 2) printf "[stream] back to real time (%.2fx, %d kbit/s sent)\n", sp, kbps > "/dev/stderr"
+                    slow = 0
+                }
+                fflush("/dev/stderr")
             }
-            fflush("/dev/stderr")
+            prev_t = t; prev_out = out; prev_bytes = bytes
         }'
 }
 
