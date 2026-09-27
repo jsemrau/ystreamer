@@ -128,14 +128,6 @@ def test_wrappers_by_role():
     assert not any("stut" in w for w in allowed_wrappers(program.lines["beat"]))
 
 
-def test_gate_choice_slot():
-    program = _program_with("trance", "gated_saw", key="A minor")
-    role = find_block("trance", "gated_saw").role
-    assert apply_edit(program, Edit("set_pattern", role=role, name="gate", value="2"))
-    with pytest.raises(EditError):
-        apply_edit(program, Edit("set_pattern", role=role, name="gate", value="7"))
-
-
 def test_check_pattern():
     assert check_pattern(" 0 ~ 2 4 ") == "0 ~ 2 4"
     with pytest.raises(EditError):

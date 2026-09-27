@@ -151,12 +151,13 @@ s("tbd:2!4").duck("3:4:5:6").duckdepth(.8).duckattack(.16)
   duck inside the synth on every beat (depth 0.8, recovering over 0.16 s),
   and 16th-note layers get the same shape per step.
 - **Around it:** a 136-140 BPM pitch-swept synth kick with off-beat hats and
-  claps, a second higher acid line or a gated arp, and supersaw chords
-  through a real trance gate. Pieces go groove → breakdown → build (roll,
+  claps, a second higher acid line or a gated arp, and sustained supersaw
+  chords pumping on the kick. Pieces go groove → breakdown → build (roll,
   filter rise, kick drop) → drop, twice.
 
-The supersaw pad's trance gate chops sustained chords inside the synth
-(`ys_gatesaw`). The gate is remapped to 0…1 so "closed" is silent, and
+A gated supersaw (`ys_gatesaw`) is still defined but no longer played: the
+chopped chords weren't liked. Its gate chops sustained chords inside the
+synth. The gate is remapped to 0…1 so "closed" is silent, and
 `gatetime` (one bar in seconds) locks it to the tempo. It's either a
 straight 16th chopper (`PulseDPW(freq, mul: 2).range(0, 1)`, or a smoothed
 `LFPulse` without sc3-plugins) or a stutter envelope built from a 16-step

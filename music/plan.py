@@ -76,9 +76,9 @@ STYLES = {
         "bpm": (134, 140), "modes": ["minor"], "cycles_per_chord": 2,
         # The acid line is the heart of it (Switch Angel's Strudel acid trance):
         # a squelchy 16th saw line, a kick, and everything pumping on the kick.
-        "presets": {"pad": "gated_saw", "keys": "piano", "bass": "acid_line", "melody": "saw_lead",
+        "presets": {"pad": "saw_pad", "keys": "piano", "bass": "acid_line", "melody": "saw_lead",
                     "arp": "acid_hi", "drums": "trance_kit", "texture": "air"},
-        "palette": {"pad": ["gated_saw", "gated_saw", "saw_pad"], "keys": ["piano", "felt"],
+        "palette": {"pad": ["saw_pad"], "keys": ["piano", "felt"],
                     "bass": ["acid_line"],
                     "arp": ["acid_hi", "trance_gate"], "melody": ["saw_lead", "glass"]},
         "energy_order": ["bass", "drums", "arp", "pad", "texture", "melody", "keys"],

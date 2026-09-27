@@ -151,12 +151,13 @@ BLOCKS: dict[str, list[Block]] = {
                  [["gain", "1.05"], ["lpf", "(slow 16 $ range 800 1600 sine)"], ["legato", "0.85"]], octave=" - 24",
                  pool=[0, 7],
                  wrappers=['(|* gain "[0.67 0.91 1 1]*4")']),
-        Block("gated_saw", "chords",
-              'n (scale "{mode}" "<{chords}>" {root}) # s "ys_gatesaw" # pI "gatepat" {gate}'
-              ' # pF "gatetime" {bar} # pF "beattime" {beat}',
-              {"gate": ["1", "2", "3", "0"]},
-              fx=[["gain", "0.88"], ["legato", "1"], ["lpf", "(slow 16 $ range 2000 4500 sine)"], ["room", "0.35"]],
-              pfs=[["gatedepth", "0.95"], ["duckdepth", "0.8"]]),
+        # Sustained supersaw chords, pumping on the kick (no trance gate: the
+        # chopped ys_gatesaw was taken out of the live rotation).
+        Block("saw_chords", "chords",
+              'n (scale "{mode}" "<{chords}>" {root}) # s "ys_supersaw" # pF "beattime" {beat}',
+              {},
+              fx=[["gain", "0.88"], ["legato", "1"], ["lpf", "(slow 16 $ range 2000 4500 sine)"], ["room", "0.45"]],
+              pfs=[["duckdepth", "0.8"]]),
         _melodic("saw_lead", "lead", "ys_supersaw", "melody",
                  ["0 ~ ~ 2 ~ ~ 4 ~", "4 ~ 2 ~ 0 ~ ~ ~", "7 ~ ~ 4 ~ 2 ~ 0",
                   "<[0 ~ ~ 2 ~ ~ 4 ~] [4 ~ ~ 2 ~ ~ 7 ~]>", "<[7 ~ 4 ~ 2 ~ 0 ~] [4 ~ 2 ~ 0 ~ -1 ~]>",
