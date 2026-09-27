@@ -51,7 +51,11 @@ def test_trance_kit_uses_synth_kick_with_sample_fallback():
 
 
 def test_trance_piece_has_breakdown_build_drop():
+    from music.plan import Section
+
+    # The trance arc itself (the built-in planner also picks other shapes).
     piece = plan_piece(random.Random(5), style="trance")
+    piece.sections = [Section(n, bars=m * piece.period, energy=e) for n, e, m in STYLES["trance"]["arc"]]
     names = [s.name for s in piece.sections]
     i = names.index("breakdown")
     assert names[i + 1:i + 3] == ["build", "chorus"]

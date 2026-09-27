@@ -120,6 +120,66 @@ SynthDef(\ys_strings, { |out, sustain = 4, pan, freq = 440, speed = 1|
     OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
 }).add;
 
+// Soft pad, no saws and no organ: three slightly detuned triangles (odd
+// harmonics that fall away fast, so it's round, never buzzy), a sine an
+// octave up and one below, and a faint drifting fifth-above shimmer. Slow
+// swell, gently low-passed.
+SynthDef(\ys_softpad, { |out, sustain = 4, pan, freq = 440, speed = 1|
+    var f = freq * speed;
+    var env = EnvGen.ar(Env([0, 1, 0.85, 0], [0.35, 0.35, 0.3] * sustain.max(0.8), \sine), doneAction: 2);
+    var detune = [-0.08, 0, 0.07];
+    var tri = Mix(LFTri.ar(f * detune.midiratio, { Rand(0, 4) } ! 3)) / 3;
+    var sines = SinOsc.ar(f * 2, 0, 0.16) + SinOsc.ar(f * 0.5, 0, 0.22);
+    var shimmer = SinOsc.ar(f * 3.003, 0, 0.04) * LFNoise1.kr(0.2).range(0.2, 1);
+    var sig = LPF.ar(tri + sines + shimmer, (f * 3).clip(400, 2400));
+    sig = sig * 0.29;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
+// --- 1990s trance and house (no saws, no organ) ---------------------------
+
+// Juno-style pad: two pulse waves whose widths drift slowly (PWM), detuned
+// against each other like the Juno's chorus, through a soft resonant
+// low-pass, with a sine sub. The early-90s trance / house pad.
+SynthDef(\ys_pulsepad, { |out, sustain = 4, pan, freq = 440, speed = 1|
+    var f = freq * speed;
+    var env = EnvGen.ar(Env([0, 1, 0.85, 0], [0.3, 0.4, 0.3] * sustain.max(0.8), \sine), doneAction: 2);
+    var widths = [LFTri.kr(Rand(0.25, 0.4), Rand(0, 2)).range(0.2, 0.5), LFTri.kr(Rand(0.2, 0.35), Rand(0, 2)).range(0.25, 0.5)];
+    var osc = Mix(Pulse.ar(f * [-0.07, 0.07].midiratio, widths)) / 2;
+    var sig = RLPF.ar(osc, (f * 3).clip(400, 1600), 0.8) + SinOsc.ar(f * 0.5, 0, 0.12);
+    sig = LPF.ar(LPF.ar(sig, 1800), 2200) * 0.34;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
+// M1-style house piano: bright additive partials that die away faster the
+// higher they are, slightly stretched like a real string, a second voice a
+// few cents off, and a short hammer "ding". The 90s house piano stab.
+SynthDef(\ys_housepiano, { |out, sustain = 1, pan, freq = 440, speed = 1|
+    var f = freq * speed;
+    var len = (sustain * 1.5).clip(0.4, 2.5);
+    var env = EnvGen.ar(Env([0, 1, 0], [0.002, len + 0.3], [0, -4]), doneAction: 2);
+    var ratios = [1, 2, 3, 4.02, 5.04, 6.08], amps = [1, 0.55, 0.32, 0.22, 0.14, 0.09];
+    var partials = Mix(ratios.collect { |r, i|
+        SinOsc.ar(f * r * [1, 1.0015], 0, amps[i]).sum * EnvGen.ar(Env.perc(0.002, len / (1 + (i * 0.6)), 1, -4))
+    });
+    var ding = BPF.ar(WhiteNoise.ar, (f * 6).clip(800, 6000), 0.3) * EnvGen.ar(Env.perc(0.001, 0.03)) * 0.3;
+    var sig = LPF.ar(LPF.ar(partials + ding, 3500), 4000) * 0.16;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
+// Square lead: two pulse waves a few cents apart with a light vibrato, a
+// filter that opens on each note and settles. The 90s trance lead, hollow
+// and bright rather than buzzy.
+SynthDef(\ys_pulselead, { |out, sustain = 1, pan, freq = 440, speed = 1|
+    var f = freq * speed;
+    var env = EnvGen.ar(Env.linen(0.01, sustain.max(0.1) * 0.9, 0.15), doneAction: 2);
+    var vib = SinOsc.kr(5.2, 0, 0.003, 1);
+    var osc = Pulse.ar(f * vib, 0.4) + (Pulse.ar(f * 1.004 * vib, 0.45) * 0.6);
+    var cutoff = EnvGen.kr(Env([f * 3, f * 1.4], [0.25], -3)).clip(300, 1800);
+    var sig = LPF.ar(LPF.ar(RLPF.ar(osc, cutoff, 0.7), 2000), 2400) * 0.17;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
 // Soft drawbar organ with a slow rotary-speaker shimmer.
 SynthDef(\ys_organ, { |out, sustain = 2, pan, freq = 440, speed = 1|
     var f = freq * speed;

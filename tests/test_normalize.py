@@ -27,7 +27,7 @@ def test_fixes_invalid_bare_names():
 
 def test_replaces_harsh_synths():
     code, notes = replace_harsh_instruments('d1 $ n "0" # s "supersaw" # sound "superzow:2 bd"')
-    assert code == 'd1 $ n "0" # s "ys_organ" # sound "ys_organ bd"'
+    assert code == 'd1 $ n "0" # s "ys_softpad" # sound "ys_softpad bd"'
 
 
 def test_key_usage_error():

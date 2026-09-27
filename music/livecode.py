@@ -186,6 +186,8 @@ class Track:
     # chord (Tidal's <...> otherwise picks the chord by cycle number).
     progressions: dict = field(default_factory=dict)
     start_cycle: int = 0
+    # The Director's sound per part for this track (blocks.LIVE_SOUNDS).
+    sounds: dict = field(default_factory=dict)
 
     @property
     def cps(self) -> float:

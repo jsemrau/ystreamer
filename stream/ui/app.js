@@ -109,10 +109,12 @@ function renderTop() {
 
   // The Director's plan: bars per phase (build and rebuild end early once
   // their lines are in), and how far into the current phase we are.
-  const phases = ui.phases || Object.keys(PHASE_NAMES);
-  const at = phases.indexOf(ui.phase), arc = ui.arc || {};
-  $("arc").innerHTML = phases.map((p, i) => {
-    const bars = arc[p] ? `<span class="bars">${p === "build" || p === "rebuild" ? "≤" : ""}${arc[p]}</span>` : "";
+  const plan = ui.plan || (ui.phases || Object.keys(PHASE_NAMES)).map((p) => ({ phase: p }));
+  const at = ui.plan ? (ui.step || 0) : plan.findIndex((s) => s.phase === ui.phase);
+  $("arc").style.gridTemplateColumns = `repeat(${plan.length}, 1fr)`;
+  $("arc").innerHTML = plan.map((s, i) => {
+    const p = s.phase;
+    const bars = s.bars ? `<span class="bars">${p === "build" || p === "rebuild" ? "≤" : ""}${s.bars}</span>` : "";
     return `<div class="step ${i < at ? "done" : i === at ? "now" : ""}">${PHASE_NAMES[p] || p}${bars}</div>`;
   }).join("");
 
@@ -126,7 +128,8 @@ function renderTop() {
 
 // How far into the current phase we are, against the bars planned for it.
 function updateArcFill() {
-  const el = document.querySelector("#arc .step.now"), bars = ui && ui.arc && ui.arc[ui.phase];
+  const step = ui && ui.plan && ui.plan[ui.step || 0];
+  const el = document.querySelector("#arc .step.now"), bars = step && step.bars;
   if (!el || !bars) return;
   const done = Math.max(0, beatPhase().bar - (ui.phase_start || 0));
   el.style.setProperty("--p", Math.min(1, done / bars).toFixed(3));
@@ -219,6 +222,7 @@ function card(ev, old, fresh) {
            (ev.review ? `<div class="why">${esc(ev.review)}</div>` : "");
   } else if (kind === "track") {
     body = `<div class="why"><b>${esc(ev.title)}</b> · ${esc(ev.style)} · ${esc(ev.key)} · ${Math.round(ev.bpm || 0)} bpm</div>` +
+           (ev.sounds ? `<div class="note">${esc(ev.sounds)}</div>` : "") +
            (ev.arc ? `<div class="note">${esc(ev.arc)}</div>` : "");
   }
   return `<div class="card ${old ? "old" : ""} ${fresh ? "new" : ""}" style="--c:${colour}" data-id="${ev.id}">` +

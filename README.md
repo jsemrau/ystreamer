@@ -125,8 +125,8 @@ The choices are `lofi`, `ambient`, `downtempo`, `piano`, `deephouse`, `trance`,
 `techno` (138-150 BPM: pounding kick, offbeat rumble bass, 16th hats, acid,
 short electric-piano stabs), `hardcore` (160-185 BPM: the same kit with a
 distorted gabber kick) and `darkwave` (110-128 BPM cold electro / coldwave:
-a stiff 808 drum machine, a 16th-note sequencer bass, a cold organ or air pad,
-choir or organ bed, pluck arpeggios lost in delay and a sparse glass line).
+a stiff 808 drum machine, a 16th-note sequencer bass, cold electric-piano
+or bell chords, pluck arpeggios lost in delay and a sparse glass line).
 Each sets a tempo range, the modes it uses (e.g. minor or dorian for lofi),
 the default instruments and which layers come in first. `deephouse` is
 118-124 BPM with a four-on-the-floor kick, off-beat hats, short chord stabs
@@ -150,18 +150,21 @@ s("tbd:2!4").duck("3:4:5:6").duckdepth(.8).duckattack(.16)
 - **Sidechain:** while the kick plays, everything pumps: every layer gets
   the same gain shape on each beat.
 - **Around it:** a 136-140 BPM pitch-swept synth kick with off-beat hats and
-  claps, a second higher acid line, organ chords and a glass lead, pumping
+  claps, a second higher acid line, offbeat M1 piano stabs and a glass lead, pumping
   on the kick. Pieces go groove → breakdown → build (roll,
   filter rise, kick drop) → drop, twice.
 
-**No saw sounds.** The synths built on detuned saws (`ys_supersaw`,
+**No saw or organ sounds.** The synths built on detuned saws (`ys_supersaw`,
 `ys_gatesaw`, `ys_pad`, `ys_strings`, `ys_choir`) are still defined but never
 played: not in the live blocks, the styles' defaults or palettes, or the
-Director's choices (`SAW_PRESETS` in `music/plan.py`). Chords and pads use
-organ, air, piano or electric piano; leads use glass. The acid lines
-(`ys_acid`, `ys_tbass`) stay. The gated saw's gate chops sustained chords
-inside the synth. The gate is remapped to 0…1 so "closed" is silent, and
-`gatetime` (one bar in seconds) locks it to the tempo. It's either a
+Director's choices (`UNWANTED_PRESETS` in `music/plan.py`). Chords are
+pianos (M1 house piano, DX7/Rhodes electric piano) or bell; a pad is never
+the main instrument: the soft pad (`ys_softpad`: triangles and sines) and
+air only play as a quiet bed far behind (texture); leads use glass. The
+organ (`ys_organ`) is out too. The acid lines (`ys_acid`, `ys_tbass`) stay.
+The gated saw's gate chops sustained chords inside the synth. The gate is
+remapped to 0…1 so "closed" is silent, and `gatetime` (one bar in seconds)
+locks it to the tempo. It's either a
 straight 16th chopper (`PulseDPW(freq, mul: 2).range(0, 1)`, or a smoothed
 `LFPulse` without sc3-plugins) or a stutter envelope built from a 16-step
 pattern, retriggered every bar.
@@ -238,7 +241,7 @@ the built-in performer makes that edit, so the music never stops.
 
 Lofi has no sustained pad; its harmony comes from Rhodes and felt-piano
 comping. Trance is the Switch Angel acid setup: acid line, ducking kick,
-organ chords and a glass lead (no saws).
+M1 piano stabs and a glass lead (no saws, no organ).
 
 ```
 ./venv/bin/python orchestrator.py --style lofi              # live-coded lofi, local LLM
@@ -260,18 +263,25 @@ about +/-3 dB of a line's level, so no edit can blow up the mix.
 Three agents take part in the live engine:
 
 - **Director:** plans each track (key, tempo, progression, mood, title,
-  and its sections in bars), shown as `🧠 Next piece: ...` with its reason.
+  its sections in bars, and a sound per part in the spirit of 1990s trance
+  and house: M1 house piano, DX7 electric piano and
+  bell, square-wave lead, plucks; `🎹 Sounds: ...`), shown as
+  `🧠 Next piece: ...` with its reason.
   Its spoken intro plays when the track starts.
 - **Performer:** makes one edit every `--edit-bars` bars (default: 8 bars
   for the slow styles, 16 for the club styles, about 20-30 s; set
   `YS_EDIT_BARS` in `.env` to change it).
 - **The arc** is decided before the track starts, from the Director's
-  sections (`🧭 Arc plan: build ≤32 · groove 64 · breakdown 32 · rebuild ≤32
-  · peak 96 · outro 32 bars`): the intro is the build, what comes before the
-  breakdown the groove, a build after it the rebuild, the rest the peak.
-  Each phase lasts its bars, however often the Performer edits; build and
-  rebuild end early once their lines are in. When the outro's bars are over,
-  whatever still plays fades out and the next track starts.
+  sections in its order (`🧭 Arc plan: build ≤16 · groove 64 · peak 32 ·
+  breakdown 32 · rebuild ≤16 · peak 64 · outro 16 bars`): intro -> build,
+  verse and bridge -> groove, chorus -> peak, breakdown -> breakdown, a build
+  after a breakdown -> rebuild, outro -> outro. So a track can peak early,
+  break down twice, or never. Every breakdown is followed by a rebuild, and
+  the Director is shown the previous track's shape and told not to repeat
+  it (the built-in planner also picks between several shapes). Each step
+  lasts its bars, however often the Performer edits; build and rebuild end
+  early once their lines are in. When the outro's bars are over, whatever
+  still plays fades out and the next track starts.
 - **Narrator:** at each turn of the arc (`🧭 Arc: groove → breakdown`),
   writes one warm spoken line about the moment, in the background so the
   music never waits.
@@ -319,7 +329,7 @@ chorus, breakdown, verse, chorus and outro. It changes as it goes:
 - **Movement:** pad, keys and arpeggio filters drift slowly ("gentle"), not
   at all ("still"), or more ("lively").
 - **Its own sound:** every piece picks its instruments from its style's
-  palette. Pads can be organ, airy or piano (no saw pads),
+  palette. Pads can be soft, airy or piano (no saw or organ pads),
   plus several keys, leads and basses. Each piece also picks how it opens
   (keys first, drums and bass first, an arpeggio, a lone pad...), and it
   never repeats the previous piece's opening or pad.
@@ -511,8 +521,8 @@ What viewers see is a web page, `stream/ui/`, rendered by Chromium in a
 virtual display (Xvfb) and captured by ffmpeg:
 
 - **Top:** LIVE badge, channel name, track title, style / key / BPM / mood,
-  and the track's arc (build → groove → breakdown → rebuild → peak → outro)
-  with each phase's planned bars; the current one fills as it plays.
+  and the track's arc as the Director planned it, each step with its bars;
+  the current one fills as it plays.
 - **Left, the artefact:** the live Tidal program, syntax-highlighted. The
   line just edited types itself in and glows, muted lines are struck
   through, and the reason for the last move is shown as a `--` comment.

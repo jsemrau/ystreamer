@@ -71,6 +71,10 @@ PRESETS: dict[str, dict[str, Preset]] = {
                           {"hpf": 150, "lpf": 2800, "room": 0.5, "size": 0.9},
                           legato=1.05, register=(-10, 14), description="soft bowed string ensemble",
                           fallback_synth="superpiano"),
+        "soft_pad": _p("soft_pad", "pad", "ys_softpad", 0.83,
+                       {"hpf": 140, "lpf": 2600, "room": 0.45, "size": 0.8},
+                       legato=1.05, register=(-10, 12), description="soft round pad (triangles and sines)",
+                       fallback_synth="superpiano"),
         "organ_pad": _p("organ_pad", "pad", "ys_organ", 0.8,
                         {"hpf": 140, "lpf": 2600, "room": 0.35, "size": 0.7},
                         legato=1.0, register=(-10, 12), description="warm drawbar organ chords",
@@ -282,19 +286,21 @@ LOOSE_KITS = {"lofi_kit", "downtempo_kit"}
 # softer equivalents by the normaliser.
 LEGACY_INSTRUMENT_WHITELIST = {
     "superpiano", "superfm", "supermandolin", "superhammond", "supervibe", "superpwm",
-    "ys_organ", "ys_epiano", "ys_keys", "ys_sub", "ys_pluck", "ys_glass", "ys_air", "ys_vinyl",
+    "ys_softpad", "ys_epiano", "ys_keys", "ys_sub", "ys_pluck", "ys_glass", "ys_air", "ys_vinyl",
     "bd", "sn", "hh", "hh27", "cp", "808bd", "808sd", "808hc", "808oh", "pad", "padlong", "arpy",
 }
 LEGACY_INSTRUMENT_REPLACEMENTS = {
-    "supersaw": "ys_organ",      # no saw sounds (ys_pad is detuned saws too)
-    "ys_pad": "ys_organ",
-    "ys_strings": "ys_organ",
-    "ys_supersaw": "ys_organ",
-    "ys_gatesaw": "ys_organ",
-    "superzow": "ys_organ",
+    "supersaw": "ys_softpad",    # no saw or organ sounds (ys_pad is detuned saws too)
+    "ys_pad": "ys_softpad",
+    "ys_strings": "ys_softpad",
+    "ys_supersaw": "ys_softpad",
+    "ys_gatesaw": "ys_softpad",
+    "ys_organ": "ys_softpad",
+    "superhammond": "ys_softpad",
+    "superzow": "ys_softpad",
     "superchip": "ys_glass",
-    "superhoover": "ys_organ",
-    "hoover": "ys_organ",
+    "superhoover": "ys_softpad",
+    "hoover": "ys_softpad",
     "superstatic": "ys_air",
     "supersquare": "ys_epiano",
     "superreese": "ys_sub",

@@ -19,6 +19,7 @@ that was used recently.
 
 - Previous piece: {previous}
 - Recently used progressions (avoid): {recent_progressions}
+- Previous piece's shape (don't repeat it): {previous_shape}
 - Listener feedback says avoid: {avoid}
 - Stream theme: {theme}
 
@@ -26,10 +27,20 @@ that was used recently.
 
 - `key` is "<Root> <mode>", e.g. "A minor", "F lydian". The mode must be one
   the chosen style allows, and the progression must list that mode.
-- `sections` is an arc of 5-10 sections. Each has `name` (a section type),
-  `bars` (a multiple of 8, 8-64) and `energy` (0.05-1.0). Start low (intro),
-  rise, contrast with a breakdown, and end low (outro). Chill music: peak
-  energy about 0.8, never several peaks in a row.
+- `sections` is the piece's shape, 4-10 sections, played in your order.
+  Each has `name` (a section type), `bars` (a multiple of 8, 8-64) and
+  `energy` (0.05-1.0). Start with an intro and end with an outro; what
+  happens between is yours, and it must NOT repeat the previous piece's
+  shape. Vary where the peaks and the breakdown fall, how many there are,
+  and how long each part is. Some shapes to choose from or mix:
+  - classic: intro, verse, build, chorus, breakdown, build, chorus, outro
+  - early drop: intro, chorus, breakdown, build, chorus, chorus, outro
+  - double breakdown: intro, verse, breakdown, build, chorus, breakdown,
+    build, chorus, outro
+  - slow burn, no breakdown: intro, verse, verse, bridge, chorus, outro
+  - long peak: intro, verse, breakdown, build, chorus, chorus, chorus, outro
+  - two moods: intro, verse, chorus, bridge, verse, chorus, outro
+  Chill music: peak energy about 0.8.
 - Make the piece develop, not loop: give `section_progressions` for the
   chorus and the breakdown (different progressions from `progression`, valid
   for the key's mode) so the harmony changes between sections.
@@ -40,6 +51,15 @@ that was used recently.
   style's palette in the vocabulary above) and an `opening`: the one or two
   roles that start the piece alone (e.g. ["keys", "texture"] or
   ["drums", "bass"]). Don't reuse the previous piece's pad or opening.
+- `sounds`: the live sound for each part, from `sounds` in the vocabulary
+  (part -> sound name): `chords`, `keys`, `lead`, `arp`, `texture`. Think
+  1990s trance and house: M1 house piano or DX7 electric piano for the
+  chords (a pad is never the main instrument: the soft pad and air are only
+  atmosphere, as `texture`, far in the background), M1
+  piano or DX7 electric piano stabs for the keys, a square-wave or DX7 bell
+  lead, a plucked or bell arp. For the chill styles keep it soft (electric
+  piano, soft pad, felt piano, bell). Don't reuse all of the previous
+  piece's sounds.
 - `reason`: one or two sentences, in plain words, on why this piece follows
   the previous one well (key, tempo, mood). It is shown to the audience.
 - `narration`: ONE sentence (under 25 words) that a warm, intimate late-night
@@ -55,8 +75,10 @@ that was used recently.
   "progression": "i-VI-III-VII", "mood": "late-night, cozy",
   "section_progressions": {{"chorus": "i-VI-iv-VII", "breakdown": "i-iv-i-VI"}},
   "color": "ninths", "key_lift": true,
-  "instruments": {{"pad": "strings_pad", "keys": "felt", "melody": "glass"}}, "opening": ["keys", "texture"],
-  "sections": [{{"name": "intro", "bars": 16, "energy": 0.2}}, {{"name": "verse", "bars": 32, "energy": 0.45}}],
+  "instruments": {{"pad": "soft_pad", "keys": "felt", "melody": "glass"}}, "opening": ["keys", "texture"],
+  "sounds": {{"chords": "ys_housepiano", "keys": "ys_epiano", "lead": "ys_pulselead", "arp": "ys_pluck"}},
+  "sections": [{{"name": "intro", "bars": 24, "energy": 0.25}}, {{"name": "chorus", "bars": 48, "energy": 0.8}},
+               {{"name": "breakdown", "bars": 16, "energy": 0.3}}, "... (your shape)", {{"name": "outro", "bars": 24, "energy": 0.2}}],
   "reason": "Moving to the relative minor keeps the warmth of the last piece but makes it more intimate.",
   "narration": "Stay a little longer. Let the night slow down with you."}}
 ```
