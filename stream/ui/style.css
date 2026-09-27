@@ -67,7 +67,13 @@ body { color: var(--ink); font-family: var(--ui); }
 }
 #arc .step.done::before { background: color-mix(in srgb, var(--accent) 45%, transparent); }
 #arc .step.now { color: var(--ink); }
-#arc .step.now::before { background: var(--accent); box-shadow: 0 0 18px var(--accent); }
+#arc .step.now::before { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+/* The current phase fills as its planned bars play. */
+#arc .step.now::after {
+  content: ""; position: absolute; left: 0; top: 0; height: 4px; border-radius: 4px;
+  width: calc(var(--p, 1) * 100%); background: var(--accent); box-shadow: 0 0 18px var(--accent);
+}
+#arc .step .bars { margin-left: 8px; letter-spacing: 0.04em; color: var(--muted); opacity: 0.8; }
 
 /* ---------------------------------------------------------------- panels */
 main { display: grid; grid-template-columns: 1.55fr 1fr; gap: 22px; min-height: 0; }

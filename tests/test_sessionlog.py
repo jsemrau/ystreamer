@@ -85,7 +85,7 @@ def test_the_first_groove_edit_waits_the_grooves_interval_not_the_builds(tmp_pat
     # clock the performer's thread can finish just after the bar, and the
     # engine then (correctly) lands the edit one bar later.
     assert STYLE_SETTINGS["trance"]["edit_bars"] <= round(gap) <= STYLE_SETTINGS["trance"]["edit_bars"] + 1
-    assert round(edits[1]["cycle"] - edits[0]["cycle"]) == 4       # the build itself stays quick
+    assert 4 <= round(edits[1]["cycle"] - edits[0]["cycle"]) <= 5  # the build itself stays quick (same +1)
 
 
 def test_a_full_track_offers_no_blocks_to_add():

@@ -29,7 +29,7 @@ from .livecode import (ALL_WRAPPERS, BASS_WRAPPERS, CHOICE_SLOTS, DRUM_WRAPPERS,
                        WRAPPER_NOTES, Edit, EditError,
                        Program, Track, allowed_wrappers, apply_edit)
 from .narrator import clean_narration
-from .plan import plan_piece
+from .plan import DEFAULT_LIVE_ARC, arc_summary, live_arc, plan_piece
 
 # Which roles come in first, per style (after the opener).
 ROLE_ORDER = {
@@ -55,8 +55,12 @@ class SetState:
     edits_in_track: int = 0
     tracks_played: int = 0
     target_lines: int = 5
-    groove_edits: int = 8
     muted_for_breakdown: list[str] = field(default_factory=list)
+    # The Director's plan for this track: bars per phase (plan.live_arc),
+    # decided before it starts. Build and rebuild end once their lines are
+    # in; the others last their bars.
+    arc: dict[str, int] = field(default_factory=dict)
+    phase_start: float = 0.0   # the bar (Tidal cycle) the current phase began
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -92,6 +96,9 @@ class Performer:
         # Called as on_arc(before, after, why) when the arc moves on (the
         # engine narrates these moments).
         self.on_arc = None
+        # The current bar (Tidal cycle); the engine connects its clock. Without
+        # one, bars are counted from the edits.
+        self.bar_now = None
         self.settings = self._settings_for(self.style)
         self.state = SetState()
         self._llm_failures = 0
@@ -183,7 +190,8 @@ class Performer:
         self.state = SetState(tracks_played=self.state.tracks_played + (1 if previous else 0),
                               target_lines=self.rng.randint(max(3, self.settings["max_lines"] - 1),
                                                             self.settings["max_lines"]),
-                              groove_edits=self.rng.randint(6, 10))
+                              arc=live_arc(piece), phase_start=self.bar())
+        self.log("🧭 Arc plan: " + arc_summary(self.state.arc))
         return Track(title=piece.title, style=self.style, key=piece.key, bpm=piece.bpm,
                      degrees=degrees, bars_per_chord=piece.cycles_per_chord, progressions=progressions)
 
@@ -203,31 +211,58 @@ class Performer:
     def advance_phase(self, program: Program) -> None:
         self._advance_phase(program)
 
+    def bar(self) -> float:
+        """The current bar (Tidal cycle)."""
+        if self.bar_now is not None:
+            return self.bar_now()
+        return float(self.state.edits_in_track * self.settings["edit_bars"])
+
+    def phase_bars(self) -> float:
+        """Bars played in the current phase."""
+        return max(0.0, self.bar() - self.state.phase_start)
+
+    def phase_bars_left(self) -> float:
+        return max(0.0, self.planned_bars(self.state.phase) - self.phase_bars())
+
+    def planned_bars(self, phase: str) -> int:
+        return (self.state.arc or DEFAULT_LIVE_ARC).get(phase, DEFAULT_LIVE_ARC[phase])
+
     def _advance_phase(self, program: Program) -> None:
         st = self.state
         active = program.active_roles()
         before = st.phase
         why = ""
+        done, plan = self.phase_bars(), self.planned_bars(st.phase)
+        over = done >= plan
         if st.phase == "build" and len(active) >= st.target_lines:
             st.phase, why = "groove", f"{len(active)} lines playing, the target for this track"
-        elif st.phase == "groove" and st.edits_in_phase >= st.groove_edits:
-            st.phase, why = "breakdown", f"{st.edits_in_phase} edits of groove, time for contrast"
-        elif st.phase == "breakdown" and st.edits_in_phase >= 4:
-            st.phase, why = "rebuild", "the breakdown has had 4 edits"
+        elif st.phase == "build" and over:
+            st.phase, why = "groove", f"the planned {plan} bars of build are over"
+        elif st.phase == "groove" and over:
+            st.phase, why = "breakdown", f"{plan} bars of groove, as planned; time for contrast"
+        elif st.phase == "breakdown" and over:
+            st.phase, why = "rebuild", f"the planned {plan} bars of breakdown are over"
         elif st.phase == "rebuild" and not any(program.lines.get(r) and program.lines[r].muted
                                                for r in st.muted_for_breakdown):
             st.phase, why = "groove2", "everything muted for the breakdown is back"
-        elif st.phase == "groove2" and st.edits_in_phase >= st.groove_edits:
-            st.phase, why = "outro", f"{st.edits_in_phase} edits of the second peak"
+        elif st.phase == "rebuild" and over:
+            st.phase, why = "groove2", f"the planned {plan} bars of rebuild are over"
+        elif st.phase == "groove2" and over:
+            st.phase, why = "outro", f"{plan} bars of the second peak, as planned"
         if st.phase != before:
             st.edits_in_phase = 0
+            st.phase_start = self.bar()
             self.log(f"🧭 Arc: {before} → {st.phase} ({why})")
             runtime.ui_event("arc", before=before, after=st.phase, why=why)
             if self.on_arc is not None:
                 self.on_arc(before, st.phase, why)
 
     def track_finished(self, program: Program) -> bool:
-        return self.state.phase == "outro" and len(program.active_roles()) <= 1 and self.state.edits_in_phase > 0
+        """The outro is down to one line, or its planned bars are over (the
+        engine fades out whatever still plays)."""
+        st = self.state
+        return st.phase == "outro" and st.edits_in_phase > 0 and (
+            len(program.active_roles()) <= 1 or self.phase_bars() >= self.planned_bars("outro"))
 
     # ---------------------------------------------------------------- edits
 
@@ -663,7 +698,9 @@ class Performer:
             f"A live coder is performing a {self.style} set in TidalCycles for a 24/7 stream "
             f"(theme: {self.theme or 'chill, hypnotic, evolving'}).",
             f"Track: {program.track.title}, {program.track.key}, {program.track.bpm:g} BPM.",
-            f"Phase: {self.state.phase} ({self.state.edits_in_phase} edits so far). {PHASE_HELP[self.state.phase]}",
+            f"Phase: {self.state.phase} ({self.state.edits_in_phase} edits so far, about "
+            f"{self.phase_bars_left():.0f} of its planned {self.planned_bars(self.state.phase)} bars left). "
+            f"{PHASE_HELP[self.state.phase]}",
             "The program playing now:", *program.code_lines(),
             "Recent edits (oldest first):", *(self.recent or ["(none yet)"]),
         ])
@@ -958,6 +995,7 @@ class Performer:
             theme=self.theme or "chill, hypnotic, evolving", style=self.style,
             track=json.dumps(program.track.to_dict()), phase=self.state.phase,
             phase_help=PHASE_HELP[self.state.phase], edits_in_phase=self.state.edits_in_phase,
+            bars_left=round(self.phase_bars_left()), phase_bars=self.planned_bars(self.state.phase),
             code="\n".join(program.code_lines()),
             lines="\n".join(f'"{r}": {json.dumps(e, separators=(",", ":"))}' for r, e in editable.items())
             or "(no lines yet)",

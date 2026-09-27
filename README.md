@@ -256,12 +256,19 @@ about +/-3 dB of a line's level, so no edit can blow up the mix.
 
 Three agents take part in the live engine:
 
-- **Director:** plans each track (key, tempo, progression, mood, title),
-  shown as `🧠 Next piece: ...` with its reason. Its spoken intro plays when
-  the track starts.
+- **Director:** plans each track (key, tempo, progression, mood, title,
+  and its sections in bars), shown as `🧠 Next piece: ...` with its reason.
+  Its spoken intro plays when the track starts.
 - **Performer:** makes one edit every `--edit-bars` bars (default: 8 bars
   for the slow styles, 16 for the club styles, about 20-30 s; set
   `YS_EDIT_BARS` in `.env` to change it).
+- **The arc** is decided before the track starts, from the Director's
+  sections (`🧭 Arc plan: build ≤32 · groove 64 · breakdown 32 · rebuild ≤32
+  · peak 96 · outro 32 bars`): the intro is the build, what comes before the
+  breakdown the groove, a build after it the rebuild, the rest the peak.
+  Each phase lasts its bars, however often the Performer edits; build and
+  rebuild end early once their lines are in. When the outro's bars are over,
+  whatever still plays fades out and the next track starts.
 - **Narrator:** at each turn of the arc (`🧭 Arc: groove → breakdown`),
   writes one warm spoken line about the moment, in the background so the
   music never waits.
@@ -491,7 +498,8 @@ What viewers see is a web page, `stream/ui/`, rendered by Chromium in a
 virtual display (Xvfb) and captured by ffmpeg:
 
 - **Top:** LIVE badge, channel name, track title, style / key / BPM / mood,
-  and the track's arc (build → groove → breakdown → rebuild → peak → outro).
+  and the track's arc (build → groove → breakdown → rebuild → peak → outro)
+  with each phase's planned bars; the current one fills as it plays.
 - **Left, the artefact:** the live Tidal program, syntax-highlighted. The
   line just edited types itself in and glows, muted lines are struck
   through, and the reason for the last move is shown as a `--` comment.

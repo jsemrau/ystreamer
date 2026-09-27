@@ -19,7 +19,9 @@ from typing import Callable
 from . import runtime
 from .engine import Clock
 from .livecode import ROLE_CHANNELS, Edit, EditError, Program, apply_edit, changed_statements, complexity
+from .mix import FADE_OUT_BARS
 from .performer import Performer, SetState
+from .plan import LIVE_PHASES, arc_summary
 
 
 class LiveEngine:
@@ -46,6 +48,7 @@ class LiveEngine:
         self._voice_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="narrator")
         self._last_reason = ""
         performer.on_arc = self._on_arc
+        performer.bar_now = self.clock.cycle   # the arc moves on by bars
 
     # ------------------------------------------------------------ session log
 
@@ -192,6 +195,7 @@ class LiveEngine:
         runtime.write_overlay(now_playing, lines, width=120, max_lines=26)
         self._publish_ui(program, highlight, comment)
         runtime.save_state({"mode": "live", "program": program.to_dict(), "performer": st.to_dict(),
+                            "phase_elapsed": self.performer.phase_bars(),
                             "style": self.performer.style, "saved_at": time.time()})
 
     def _publish_ui(self, program: Program, highlight: str | None, comment: str) -> None:
@@ -217,7 +221,8 @@ class LiveEngine:
             channel="sleepless composer",
             track={"title": track.title, "style": track.style, "key": track.key, "bpm": track.bpm,
                    "mood": perf.track_mood},
-            phase=perf.state.phase, phases=["build", "groove", "breakdown", "rebuild", "groove2", "outro"],
+            phase=perf.state.phase, phases=list(LIVE_PHASES),
+            arc={p: perf.planned_bars(p) for p in LIVE_PHASES}, phase_start=perf.state.phase_start,
             clock={"ref_time": self.clock.ref_time, "ref_cycle": self.clock.ref_cycle, "cps": self.clock.cps,
                    "now": self.clock._now()},
             tempo_line=program.tempo_statement(), code=code, comment=comment,
@@ -232,7 +237,8 @@ class LiveEngine:
         self.log(f"\n♪ New track: {track.title}  ·  {track.key}  ·  {track.bpm:g} BPM  ·  {track.style}")
         runtime.append_thought(f"♪ {track.title} · {track.key} · {track.bpm:g} BPM · {track.style}")
         runtime.ui_event("track", title=track.title, style=track.style, key=track.key, bpm=track.bpm,
-                         mood=self.performer.track_mood)
+                         mood=self.performer.track_mood, arc=arc_summary(self.performer.state.arc)
+                         if self.performer.state.arc else "")
         if self.narrator is not None:
             from .narrator import clean_narration
 
@@ -295,6 +301,10 @@ class LiveEngine:
         self._send(["hush", program.tempo_statement(), "resetCycles"])
         self.clock.reset(program.track.cps)
         self._send([program.statement(r) for r in program.lines])
+        # The clock restarted at bar 0; a resumed track keeps how far into
+        # its phase it was.
+        self.performer.state.phase_start = -float((resume_state or {}).get("phase_elapsed", 0.0)) \
+            if resume_state and "program" in resume_state else 0.0
         self.program = program
         self._announce(program)
         self._publish(program, None, "")
@@ -372,7 +382,8 @@ class LiveEngine:
                     break
                 previous = program.track
                 track = self.performer.new_track(previous)
-                silence = [f"d{ROLE_CHANNELS[r]} $ silence" for r in program.lines]
+                # Whatever still plays when the planned outro ends fades out.
+                silence = [f"xfadeIn {ROLE_CHANNELS[r]} {FADE_OUT_BARS} $ silence" for r in program.lines]
                 track.start_cycle = math.floor(self.clock.cycle() + 0.25)   # first chord on this bar
                 program = self.program = Program(track)
                 self._send(silence + [program.tempo_statement()])

@@ -343,6 +343,54 @@ def apply_key_lift(piece: Piece, semitones: int = 2) -> bool:
     return True
 
 
+# The live engine's arc (music/performer.py), in the order it plays.
+LIVE_PHASES = ("build", "groove", "breakdown", "rebuild", "groove2", "outro")
+# Build and rebuild end once their lines are in; their bars are only a limit,
+# and never shorter than this (the performer needs a few edits for them).
+MIN_BUILD_BARS = 16
+# For a track resumed from a state saved before arcs were planned.
+DEFAULT_LIVE_ARC = {"build": 32, "groove": 64, "breakdown": 32, "rebuild": 32, "groove2": 64, "outro": 32}
+
+
+def arc_summary(arc: dict[str, int]) -> str:
+    """E.g. "build ≤32 · groove 64 · breakdown 32 · rebuild ≤16 · peak 96 · outro 16 bars"."""
+    names = {"groove2": "peak"}
+    return " · ".join(f"{names.get(p, p)} {'≤' if p in ('build', 'rebuild') else ''}{arc[p]}"
+                      for p in LIVE_PHASES if p in arc) + " bars"
+
+
+def live_arc(piece: Piece) -> dict[str, int]:
+    """The Director's sections as the live arc: bars per phase, decided
+    before the piece starts. Intro -> build, what comes before the first
+    breakdown -> groove, the breakdown -> breakdown, a build right after it
+    -> rebuild, the rest -> peak (groove2), the closing outro -> outro.
+    Without a breakdown in the middle, the style's own arc is used."""
+    sections = piece.sections
+    names = [s.name for s in sections]
+    if "breakdown" not in names[1:-1]:
+        sections = _default_sections(piece, max(4.0, piece.total_bars / piece.cps / 60) if sections else 12.0)
+        names = [s.name for s in sections]
+    bd = names.index("breakdown", 1)
+    before, rest = sections[:bd], sections[bd:]
+    n_break = next((i for i, s in enumerate(rest) if s.name != "breakdown"), len(rest))
+    breakdown, after = rest[:n_break], rest[n_break:]
+    n_intro = next((i for i, s in enumerate(before) if s.name != "intro"), len(before))
+    n_outro = next((i for i, s in enumerate(reversed(after)) if s.name != "outro"), len(after))
+    middle, outro = after[:len(after) - n_outro], after[len(after) - n_outro:]
+    n_rebuild = next((i for i, s in enumerate(middle) if s.name != "build"), len(middle))
+
+    def bars(part) -> int:
+        return sum(s.bars for s in part)
+
+    groove = bars(before[n_intro:]) or bars(before) // 2
+    return {"build": max(MIN_BUILD_BARS, bars(before[:n_intro]) or bars(before) - groove),
+            "groove": max(8, groove),
+            "breakdown": max(8, bars(breakdown)),
+            "rebuild": max(MIN_BUILD_BARS, bars(middle[:n_rebuild])),
+            "groove2": max(8, bars(middle[n_rebuild:])),
+            "outro": max(8, bars(outro))}
+
+
 def _default_sections(piece: Piece, target_minutes: float) -> list[Section]:
     period = piece.period
     arc = STYLES.get(piece.style, {}).get("arc", DEFAULT_ARC)
