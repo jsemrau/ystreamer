@@ -15,6 +15,10 @@
 # Audio = ystream_sink.monitor -> limiter -> loudness normalised to -14 LUFS.
 #
 # Required:   YT_STREAM_KEY           (or YS_STREAM_URL for any RTMP/file target)
+#             YS_STREAM_URL           one target, or several separated by spaces to stream
+#                                     to all at once (encoded once; each reconnects on its
+#                                     own). "youtube" = YouTube with YT_STREAM_KEY, e.g.
+#                                     YS_STREAM_URL=youtube rtmp://live.twitch.tv/app/<key>
 # Optional:   YS_STREAM_BG            background: image (png/jpg/webp), animated gif,
 #                                     or video (mp4/mov/webm/mkv, looped, sound ignored)
 #             YS_BG_DIM / YS_BG_BLUR  darken (0-1, default 0.35) / blur (pixels) the background
@@ -47,19 +51,39 @@ mkdir -p "$RUNTIME"
 [[ -f "$RUNTIME/code.txt" ]] || echo "" > "$RUNTIME/code.txt"
 [[ -f "$RUNTIME/narration.txt" ]] || echo "" > "$RUNTIME/narration.txt"
 
+YOUTUBE_URL="rtmp://a.rtmp.youtube.com/live2/${YT_STREAM_KEY:-}"
+TARGETS=()
 if [[ -n "${YS_STREAM_URL:-}" ]]; then
-    TARGET="$YS_STREAM_URL"
+    for t in $YS_STREAM_URL; do
+        if [[ "$t" == youtube ]]; then
+            [[ -n "${YT_STREAM_KEY:-}" ]] || { echo "YS_STREAM_URL says youtube, but YT_STREAM_KEY is empty" >&2; exit 1; }
+            t="$YOUTUBE_URL"
+        fi
+        TARGETS+=("$t")
+    done
 elif [[ -n "${YT_STREAM_KEY:-}" ]]; then
-    TARGET="rtmp://a.rtmp.youtube.com/live2/${YT_STREAM_KEY}"
-else
+    TARGETS=("$YOUTUBE_URL")
+fi
+if (( ${#TARGETS[@]} == 0 )); then
     echo "Set YT_STREAM_KEY (or YS_STREAM_URL)" >&2
     exit 1
 fi
+# A name for the log, without the stream key.
+target_name() {
+    case "$1" in
+        *youtube.com*) echo youtube ;;
+        *twitch.tv*|*live-video.net*) echo twitch ;;
+        *://*) local h="${1#*://}"; echo "${h%%/*}" ;;
+        *) echo "$1" ;;
+    esac
+}
+names=(); for t in "${TARGETS[@]}"; do names+=("$(target_name "$t")"); done
+echo "Streaming to: ${names[*]}" >&2
 
 # Twitch: most channels get no lower-quality versions, so every viewer
 # receives the stream as sent. 720p at 3 Mbit/s (Twitch's advice) plays
 # without buffering for far more of them, and is lighter to encode.
-if [[ "$TARGET" == *twitch.tv* ]]; then
+if [[ " ${names[*]} " == *" twitch "* ]]; then
     DEFAULT_SIZE=1280x720; DEFAULT_BITRATE=3000k
 else
     DEFAULT_SIZE=1920x1080; DEFAULT_BITRATE=4500k
@@ -132,7 +156,8 @@ fi
 
 PIDS=()
 FFMPEG_PID=""
-cleanup() { for p in $FFMPEG_PID "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; }
+RELAY_PIDS=()
+cleanup() { for p in $FFMPEG_PID ${RELAY_PIDS[@]+"${RELAY_PIDS[@]}"} "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; }
 # Exit on INT/TERM too: a trap that only cleans up would return into the
 # reconnect loop, retrying forever against the display it just stopped.
 trap cleanup EXIT
@@ -211,20 +236,55 @@ watch_speed() {
         }'
 }
 
+# Several targets: the stream is encoded once and sent over local UDP to one
+# relay per platform, which copies it there and reconnects on its own. So a
+# platform that drops (Twitch closing the connection, say) comes back by
+# itself while the others keep streaming. (ffmpeg's tee output alone would
+# leave it off until the next segment, hours later.)
+RELAY_PORT="${YS_RELAY_PORT:-23480}"
+relay() {   # relay <name> <udp port> <url>
+    local name=$1 port=$2 url=$3 child="" backoff=2 start status
+    trap '[[ -n "$child" ]] && kill "$child" 2>/dev/null; exit 0' INT TERM
+    while true; do
+        start=$(date +%s)
+        ffmpeg -nostdin -y -hide_banner -loglevel error \
+            -i "udp://127.0.0.1:${port}?fifo_size=1000000&overrun_nonfatal=1&timeout=10000000" \
+            -map 0 -c copy -bsf:a aac_adtstoasc -f flv "$url" &
+        child=$!; wait "$child"; status=$?; child=""
+        (( $(date +%s) - start > 300 )) && backoff=2
+        echo "[stream] ${name}: the connection ended (${status}); reconnecting in ${backoff}s" >&2
+        sleep "$backoff" & wait $!
+        backoff=$(( backoff < 60 ? backoff * 2 : 60 ))
+    done
+}
+
 run_once() {
+    local out=(-f "${YS_STREAM_FORMAT:-flv}" "${TARGETS[0]}")
+    if (( ${#TARGETS[@]} > 1 )); then
+        local i slaves=()
+        for i in "${!TARGETS[@]}"; do
+            relay "${names[$i]}" $(( RELAY_PORT + i )) "${TARGETS[$i]}" & RELAY_PIDS+=($!)
+            slaves+=("[f=mpegts:onfail=ignore]udp://127.0.0.1:$(( RELAY_PORT + i ))?pkt_size=1316")
+        done
+        local IFS='|'
+        out=(-f tee "${slaves[*]}")
+    fi
     ffmpeg -hide_banner -loglevel warning -nostats ${PROGRESS[@]+"${PROGRESS[@]}"} \
         "${AUDIO_IN[@]}" "${VIDEO_IN[@]}" \
         -filter_complex "$FILTER" -map "[vout]" -map "[aout]" \
         -c:v libx264 -preset veryfast "${TUNE[@]}" -b:v "$VBITRATE" -maxrate "$VBITRATE" \
         -bufsize "$VBITRATE" -g $(( FPS * 2 )) -keyint_min $(( FPS * 2 )) -pix_fmt yuv420p \
         -c:a aac -b:a 160k -ar 48000 -ac 2 \
-        -t "$SEGMENT_SECONDS" -f "${YS_STREAM_FORMAT:-flv}" "$TARGET" > >(watch_speed) &
+        -t "$SEGMENT_SECONDS" "${out[@]}" > >(watch_speed) &
     # In the background, so a stop signal runs the trap at once (bash defers
     # traps until a foreground command ends, here hours away).
     FFMPEG_PID=$!
     wait "$FFMPEG_PID"
     local status=$?
     FFMPEG_PID=""
+    for i in ${RELAY_PIDS[@]+"${RELAY_PIDS[@]}"}; do kill "$i" 2>/dev/null; done
+    for i in ${RELAY_PIDS[@]+"${RELAY_PIDS[@]}"}; do wait "$i" 2>/dev/null; done   # ports free again
+    RELAY_PIDS=()
     return "$status"
 }
 

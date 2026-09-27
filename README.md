@@ -483,8 +483,18 @@ and prints the end of `logs/stream.log`.
 | watchdog | restarts the engine on sustained silence or a stale heartbeat, optional push via ntfy (log: `logs/watchdog.log`) |
 
 **Twitch** instead of YouTube: put `YS_STREAM_URL=rtmp://live.twitch.tv/app/<your stream key>`
-in `.env` (the key is in the Twitch Creator Dashboard → Settings → Stream). For a
-Twitch target the stream defaults to 720p at 3 Mbit/s: most channels get no
+in `.env` (the key is in the Twitch Creator Dashboard → Settings → Stream).
+
+**YouTube and Twitch at once:** list several targets, separated by spaces;
+`youtube` stands for YouTube with `YT_STREAM_KEY`:
+`YS_STREAM_URL=youtube rtmp://live.twitch.tv/app/<your stream key>`. The
+stream is encoded once and sent (over local UDP, ports from 23480,
+`YS_RELAY_PORT`) to one relay per platform, which reconnects on its own: if
+Twitch drops, YouTube keeps streaming and Twitch comes back by itself
+(`[stream] twitch: the connection ended ...; reconnecting` in the log). Every
+platform gets the same resolution and bitrate, and the upload is their sum.
+
+With a Twitch target the stream defaults to 720p at 3 Mbit/s: most channels get no
 lower-quality versions, so every viewer receives the stream as sent, and 1080p
 at 4.5 Mbit/s buffers for many. If the machine can't encode in real time,
 `logs/stream.log` says so (`the encoder runs at 0.85x real time`) with what to
