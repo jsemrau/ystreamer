@@ -43,8 +43,9 @@ class WatchdogConfig:
     silence_db: float = float(os.getenv("YS_SILENCE_DB", "-55"))
     silence_seconds: float = float(os.getenv("YS_SILENCE_SECONDS", "20"))
     heartbeat_limit: float = float(os.getenv("YS_HEARTBEAT_LIMIT", "180"))
-    # Empty: stop the engine process from YS_ENGINE_PIDFILE (stream/live.sh
-    # restarts it). Or any command, e.g. for your own process supervisor.
+    # Any command, e.g. for your own process supervisor (systemd). Ignored
+    # under stream/live.sh (YS_ENGINE_PIDFILE set), which restarts the engine
+    # itself with the flags it was started with.
     restart_cmd: str = os.getenv("YS_RESTART_CMD", "")
     engine_pidfile: str = os.getenv("YS_ENGINE_PIDFILE", "")
     cooldown: float = float(os.getenv("YS_RESTART_COOLDOWN", "120"))
@@ -142,9 +143,11 @@ def main() -> None:
 
 
 def restart_engine(cfg: WatchdogConfig) -> None:
-    """Run YS_RESTART_CMD, or stop the engine from its pid file so the
-    supervisor (stream/live.sh) starts it again with --resume."""
-    if cfg.restart_cmd:
+    """Stop the engine from its pid file so the supervisor (stream/live.sh)
+    starts it again with --resume and its own flags, or run YS_RESTART_CMD.
+    The pid file wins: a YS_RESTART_CMD left in .env for systemd would start
+    a second engine next to live.sh's, without its --style."""
+    if cfg.restart_cmd and not cfg.engine_pidfile:
         result = subprocess.run(shlex.split(cfg.restart_cmd), capture_output=True, text=True)
         if result.returncode != 0:
             notify(cfg, f"restart command failed ({result.returncode}): {result.stderr.strip()[:300]}")

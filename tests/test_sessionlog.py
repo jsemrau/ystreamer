@@ -108,7 +108,7 @@ def test_a_full_track_offers_no_blocks_to_add():
     performer = Performer(_r.Random(0), style="hardcore", log=lambda *_: None)
     from test_livecode import _program_with
 
-    program = _program_with("hardcore", "gabber_kick", "hats", "rumble", "acid", "stab", "hoover")
+    program = _program_with("hardcore", "gabber_kick", "hats", "rumble", "acid", "stab", "glass_lead")
     assert len(program.active_roles()) == performer.settings["max_lines"]
     prompt = performer._prompt(program)
     assert "none right now: 6 lines play" in prompt

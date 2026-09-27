@@ -107,16 +107,34 @@ function renderTop() {
   if (t.mood) chips.push(`<span class="chip">${esc(t.mood)}</span>`);
   $("chips").innerHTML = chips.join("");
 
-  const phases = ui.phases || Object.keys(PHASE_NAMES);
-  const at = phases.indexOf(ui.phase);
-  $("arc").innerHTML = phases.map((p, i) =>
-    `<div class="step ${i < at ? "done" : i === at ? "now" : ""}">${PHASE_NAMES[p] || p}</div>`).join("");
+  // The Director's plan: bars per phase (build and rebuild end early once
+  // their lines are in), and how far into the current phase we are.
+  const plan = ui.plan || (ui.phases || Object.keys(PHASE_NAMES)).map((p) => ({ phase: p }));
+  const at = ui.plan ? (ui.step || 0) : plan.findIndex((s) => s.phase === ui.phase);
+  $("arc").style.gridTemplateColumns = `repeat(${plan.length}, 1fr)`;
+  $("arc").innerHTML = plan.map((s, i) => {
+    const p = s.phase;
+    const bars = s.bars ? `<span class="bars">${p === "build" || p === "rebuild" ? "≤" : ""}${s.bars}</span>` : "";
+    return `<div class="step ${i < at ? "done" : i === at ? "now" : ""}">${PHASE_NAMES[p] || p}${bars}</div>`;
+  }).join("");
+
+  updateArcFill();
 
   const st = STYLES[t.style] || STYLES.techno;
   document.documentElement.style.setProperty("--accent", st.accent);
   document.documentElement.style.setProperty("--accent2", st.accent2);
   targetIntensity = { build: 0.55, groove: 0.85, breakdown: 0.3, rebuild: 0.65, groove2: 1.0, outro: 0.35 }[ui.phase] ?? 0.7;
 }
+
+// How far into the current phase we are, against the bars planned for it.
+function updateArcFill() {
+  const step = ui && ui.plan && ui.plan[ui.step || 0];
+  const el = document.querySelector("#arc .step.now"), bars = step && step.bars;
+  if (!el || !bars) return;
+  const done = Math.max(0, beatPhase().bar - (ui.phase_start || 0));
+  el.style.setProperty("--p", Math.min(1, done / bars).toFixed(3));
+}
+setInterval(updateArcFill, 1000);
 
 function renderCode() {
   $("tempo").innerHTML = highlight(ui.tempo_line || "");
@@ -203,7 +221,9 @@ function card(ev, old, fresh) {
     body = `<div class="asked">${esc(ev.text)}</div>` + `<div class="move">${esc(ev.edit)}</div>` +
            (ev.review ? `<div class="why">${esc(ev.review)}</div>` : "");
   } else if (kind === "track") {
-    body = `<div class="why"><b>${esc(ev.title)}</b> · ${esc(ev.style)} · ${esc(ev.key)} · ${Math.round(ev.bpm || 0)} bpm</div>`;
+    body = `<div class="why"><b>${esc(ev.title)}</b> · ${esc(ev.style)} · ${esc(ev.key)} · ${Math.round(ev.bpm || 0)} bpm</div>` +
+           (ev.sounds ? `<div class="note">${esc(ev.sounds)}</div>` : "") +
+           (ev.arc ? `<div class="note">${esc(ev.arc)}</div>` : "");
   }
   return `<div class="card ${old ? "old" : ""} ${fresh ? "new" : ""}" style="--c:${colour}" data-id="${ev.id}">` +
          `<div class="who"><span class="av">${ICONS[kind] || ""}</span><b>${AGENT_NAMES[kind] || kind}</b>${meta}` +

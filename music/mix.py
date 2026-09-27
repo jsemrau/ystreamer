@@ -20,7 +20,8 @@ import re
 SYNTH_LUFS = {
     "ys_pad": -23.0, "ys_strings": -22.6, "ys_organ": -21.1, "ys_choir": -21.9, "ys_air": -30.0,
     "ys_epiano": -21.9, "ys_keys": -22.2, "ys_sub": -17.1, "ys_glass": -21.7, "ys_pluck": -31.5,
-    "ys_vinyl": -42.8,
+    "ys_vinyl": -42.8, "ys_softpad": -22.2,
+    "ys_pulsepad": -21.0, "ys_housepiano": -22.9, "ys_pulselead": -19.4,
 }
 # Chords measured as chords (3 voices), for synths that are only used that way.
 CHORD_LUFS = {"ys_gatesaw": -18.0, "ys_supersaw": -15.7}

@@ -123,10 +123,10 @@ There are two options, and you can combine them:
 
 The choices are `lofi`, `ambient`, `downtempo`, `piano`, `deephouse`, `trance`,
 `techno` (138-150 BPM: pounding kick, offbeat rumble bass, 16th hats, acid,
-short supersaw stabs), `hardcore` (160-185 BPM: the same kit with a
+short electric-piano stabs), `hardcore` (160-185 BPM: the same kit with a
 distorted gabber kick) and `darkwave` (110-128 BPM cold electro / coldwave:
-a stiff 808 drum machine, a 16th-note sequencer bass, a cold string-machine,
-choir or organ bed, pluck arpeggios lost in delay and a sparse glass line).
+a stiff 808 drum machine, a 16th-note sequencer bass, cold electric-piano
+or bell chords, pluck arpeggios lost in delay and a sparse glass line).
 Each sets a tempo range, the modes it uses (e.g. minor or dorian for lofi),
 the default instruments and which layers come in first. `deephouse` is
 118-124 BPM with a four-on-the-floor kick, off-beat hats, short chord stabs
@@ -147,17 +147,24 @@ s("tbd:2!4").duck("3:4:5:6").duckdepth(.8).duckattack(.16)
   knob is automated like a hand on the slider: drifting in the groove,
   opening across builds, turned down in breakdowns (where the line keeps
   going under the pad).
-- **Sidechain:** while the kick plays, everything pumps. Sustained supersaws
-  duck inside the synth on every beat (depth 0.8, recovering over 0.16 s),
-  and 16th-note layers get the same shape per step.
+- **Sidechain:** while the kick plays, everything pumps: every layer gets
+  the same gain shape on each beat.
 - **Around it:** a 136-140 BPM pitch-swept synth kick with off-beat hats and
-  claps, a second higher acid line or a gated arp, and supersaw chords
-  through a real trance gate. Pieces go groove → breakdown → build (roll,
+  claps, a second higher acid line, offbeat M1 piano stabs and a glass lead, pumping
+  on the kick. Pieces go groove → breakdown → build (roll,
   filter rise, kick drop) → drop, twice.
 
-The supersaw pad's trance gate chops sustained chords inside the synth
-(`ys_gatesaw`). The gate is remapped to 0…1 so "closed" is silent, and
-`gatetime` (one bar in seconds) locks it to the tempo. It's either a
+**No saw or organ sounds.** The synths built on detuned saws (`ys_supersaw`,
+`ys_gatesaw`, `ys_pad`, `ys_strings`, `ys_choir`) are still defined but never
+played: not in the live blocks, the styles' defaults or palettes, or the
+Director's choices (`UNWANTED_PRESETS` in `music/plan.py`). Chords are
+pianos (M1 house piano, DX7/Rhodes electric piano) or bell; a pad is never
+the main instrument: the soft pad (`ys_softpad`: triangles and sines) and
+air only play as a quiet bed far behind (texture); leads use glass. The
+organ (`ys_organ`) is out too. The acid lines (`ys_acid`, `ys_tbass`) stay.
+The gated saw's gate chops sustained chords inside the synth. The gate is
+remapped to 0…1 so "closed" is silent, and `gatetime` (one bar in seconds)
+locks it to the tempo. It's either a
 straight 16th chopper (`PulseDPW(freq, mul: 2).range(0, 1)`, or a smoothed
 `LFPulse` without sc3-plugins) or a stutter envelope built from a 16-step
 pattern, retriggered every bar.
@@ -234,7 +241,7 @@ the built-in performer makes that edit, so the music never stops.
 
 Lofi has no sustained pad; its harmony comes from Rhodes and felt-piano
 comping. Trance is the Switch Angel acid setup: acid line, ducking kick,
-gated saw and supersaw lead.
+M1 piano stabs and a glass lead (no saws, no organ).
 
 ```
 ./venv/bin/python orchestrator.py --style lofi              # live-coded lofi, local LLM
@@ -255,12 +262,26 @@ about +/-3 dB of a line's level, so no edit can blow up the mix.
 
 Three agents take part in the live engine:
 
-- **Director:** plans each track (key, tempo, progression, mood, title),
-  shown as `🧠 Next piece: ...` with its reason. Its spoken intro plays when
-  the track starts.
+- **Director:** plans each track (key, tempo, progression, mood, title,
+  its sections in bars, and a sound per part in the spirit of 1990s trance
+  and house: M1 house piano, DX7 electric piano and
+  bell, square-wave lead, plucks; `🎹 Sounds: ...`), shown as
+  `🧠 Next piece: ...` with its reason.
+  Its spoken intro plays when the track starts.
 - **Performer:** makes one edit every `--edit-bars` bars (default: 8 bars
   for the slow styles, 16 for the club styles, about 20-30 s; set
   `YS_EDIT_BARS` in `.env` to change it).
+- **The arc** is decided before the track starts, from the Director's
+  sections in its order (`🧭 Arc plan: build ≤16 · groove 64 · peak 32 ·
+  breakdown 32 · rebuild ≤16 · peak 64 · outro 16 bars`): intro -> build,
+  verse and bridge -> groove, chorus -> peak, breakdown -> breakdown, a build
+  after a breakdown -> rebuild, outro -> outro. So a track can peak early,
+  break down twice, or never. Every breakdown is followed by a rebuild, and
+  the Director is shown the previous track's shape and told not to repeat
+  it (the built-in planner also picks between several shapes). Each step
+  lasts its bars, however often the Performer edits; build and rebuild end
+  early once their lines are in. When the outro's bars are over, whatever
+  still plays fades out and the next track starts.
 - **Narrator:** at each turn of the arc (`🧭 Arc: groove → breakdown`),
   writes one warm spoken line about the moment, in the background so the
   music never waits.
@@ -308,7 +329,7 @@ chorus, breakdown, verse, chorus and outro. It changes as it goes:
 - **Movement:** pad, keys and arpeggio filters drift slowly ("gentle"), not
   at all ("still"), or more ("lively").
 - **Its own sound:** every piece picks its instruments from its style's
-  palette. Pads can be warm analog, strings, organ, choir, airy or piano,
+  palette. Pads can be soft, airy or piano (no saw or organ pads),
   plus several keys, leads and basses. Each piece also picks how it opens
   (keys first, drums and bass first, an arpeggio, a lone pad...), and it
   never repeats the previous piece's opening or pad.
@@ -472,12 +493,24 @@ and prints the end of `logs/stream.log`.
 | watchdog | restarts the engine on sustained silence or a stale heartbeat, optional push via ntfy (log: `logs/watchdog.log`) |
 
 **Twitch** instead of YouTube: put `YS_STREAM_URL=rtmp://live.twitch.tv/app/<your stream key>`
-in `.env` (the key is in the Twitch Creator Dashboard → Settings → Stream). For a
-Twitch target the stream defaults to 720p at 3 Mbit/s: most channels get no
+in `.env` (the key is in the Twitch Creator Dashboard → Settings → Stream).
+
+**YouTube and Twitch at once:** list several targets, separated by spaces;
+`youtube` stands for YouTube with `YT_STREAM_KEY`:
+`YS_STREAM_URL=youtube rtmp://live.twitch.tv/app/<your stream key>`. The
+stream is encoded once and sent (over local UDP, ports from 23480,
+`YS_RELAY_PORT`) to one relay per platform, which reconnects on its own: if
+Twitch drops, YouTube keeps streaming and Twitch comes back by itself
+(`[stream] twitch: the connection ended ...; reconnecting` in the log). Every
+platform gets the same resolution and bitrate, and the upload is their sum.
+
+With a Twitch target the stream defaults to 720p at 3 Mbit/s: most channels get no
 lower-quality versions, so every viewer receives the stream as sent, and 1080p
 at 4.5 Mbit/s buffers for many. If the machine can't encode in real time,
 `logs/stream.log` says so (`the encoder runs at 0.85x real time`) with what to
-lower (`YS_VIDEO_SIZE`, `YS_FPS`, `YS_VIDEO_BITRATE`).
+lower (`YS_VIDEO_SIZE`, `YS_FPS`, `YS_VIDEO_BITRATE`). With the browser look,
+the frame rate is rounded up to one that divides 60 (24 becomes 30): Chromium
+draws at 60 Hz, and 24 fps samples it unevenly, so the waves judder.
 
 To keep it running after you close the terminal, start it inside `tmux`
 or `screen`. Test on an **unlisted** stream for a while before going public.
@@ -488,7 +521,8 @@ What viewers see is a web page, `stream/ui/`, rendered by Chromium in a
 virtual display (Xvfb) and captured by ffmpeg:
 
 - **Top:** LIVE badge, channel name, track title, style / key / BPM / mood,
-  and the track's arc (build → groove → breakdown → rebuild → peak → outro).
+  and the track's arc as the Director planned it, each step with its bars;
+  the current one fills as it plays.
 - **Left, the artefact:** the live Tidal program, syntax-highlighted. The
   line just edited types itself in and glows, muted lines are struck
   through, and the reason for the last move is shown as a `--` comment.

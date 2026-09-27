@@ -14,7 +14,7 @@ Track: {track}
 {code}
 ```
 
-## Phase: {phase} ({edits_in_phase} edits so far)
+## Phase: {phase} ({edits_in_phase} edits so far, about {bars_left} of its planned {phase_bars} bars left)
 
 {phase_help}
 

@@ -127,6 +127,8 @@ class Director:
                 options=json.dumps(describe_options(), indent=1),
                 previous=json.dumps({k: v for k, v in previous.to_dict().items() if k != "sections"})
                 if previous else "none (this is the first piece)",
+                previous_shape=" → ".join(f"{s.name} {s.bars}" for s in previous.sections)
+                if previous and previous.sections else "none",
                 recent_progressions=", ".join(self.recent_progressions) or "none",
                 avoid=", ".join(sorted(avoid["progressions"] | avoid["presets"])) or "nothing",
                 theme=self.theme,

@@ -81,11 +81,31 @@ def test_instruments_come_from_the_style_palette():
 
 def test_llm_can_choose_instruments_and_opening():
     fallback = plan_piece(random.Random(2), style="lofi")
-    piece, notes = validate_piece({"instruments": {"pad": "choir_pad", "keys": "not-a-preset"},
+    piece, notes = validate_piece({"instruments": {"pad": "air_pad", "keys": "not-a-preset"},
                                    "opening": ["melody", "texture"]}, fallback)
-    assert piece.instruments["pad"] == "choir_pad"
+    assert piece.instruments["pad"] == "air_pad"
     assert piece.opening == ["melody", "texture"]
     assert any("keys" in n for n in notes)
+
+
+def test_no_unwanted_sounds_anywhere():
+    """No saw or organ sounds: not in the live blocks, the styles' defaults
+    or palettes, the Director's vocabulary, or what the Director may choose."""
+    import json
+
+    from music.blocks import BLOCKS
+    from music.plan import STYLES, UNWANTED_PRESETS, UNWANTED_SYNTHS, describe_options
+
+    for style, blocks in BLOCKS.items():
+        for b in blocks:
+            assert not any(s in b.body + json.dumps(b.patterns) for s in UNWANTED_SYNTHS), (style, b.name)
+    for style, cfg in STYLES.items():
+        assert not set(cfg["presets"].values()) & UNWANTED_PRESETS, style
+        assert not {n for names in cfg["palette"].values() for n in names} & UNWANTED_PRESETS, style
+    assert not any(n in json.dumps(describe_options()["presets"]) for n in UNWANTED_PRESETS)
+    fallback = plan_piece(random.Random(2), style="trance")
+    piece, notes = validate_piece({"instruments": {"pad": "organ_pad", "melody": "saw_lead"}}, fallback)
+    assert piece.instruments["pad"] not in UNWANTED_PRESETS and piece.instruments["melody"] not in UNWANTED_PRESETS
 
 
 # --------------------------------------------------------------- live mix
@@ -114,14 +134,14 @@ def test_beds_make_room_when_the_front_is_busy():
     from music.livecode import Edit, Program, Track, apply_edit, changed_statements
 
     program = Program(Track("t", "piano", "C major", 70, [0, 5, 3, 4], 2))
-    for name in ("strings", "piano_chords"):
+    for name in ("air_bed", "piano_chords"):
         b = find_block("piano", name)
         program = apply_edit(program, Edit("add", role=b.role, line=b.make(random.Random(0))))
     assert "|* gain" not in program.statement("chords")
     lead = find_block("piano", "piano_melody")
     fuller = apply_edit(program, Edit("add", role="lead", line=lead.make(random.Random(0))))
     assert fuller.statement("chords").endswith("|* gain 0.93")
-    # adding the lead re-sends the strings at their new level
+    # adding the lead re-sends the bed at its new level
     assert fuller.statement("chords") in changed_statements(program, fuller)
 
 
@@ -151,3 +171,84 @@ def test_lines_fade_in_and_out():
     for s in fades_in:
         ch, orbit = re.match(r"xfadeIn (\d) .* orbit (\d)$", s).groups()
         assert int(orbit) == int(ch) - 1
+
+
+def test_a_resumed_track_loses_sounds_that_are_out():
+    """A track saved while it still played organ or supersaw lines comes
+    back with the style's current blocks in those roles."""
+    from music.live_engine import LiveEngine
+    from music.livecode import LineSpec, Program, Track
+    from music.performer import Performer
+
+    program = Program(Track("t", "trance", "A minor", 138, [0, 5, 2, 6], 2))
+    program.lines["chords"] = LineSpec("chords", 'n (scale "{mode}" "<{chords}>" {root}) # s "ys_organ"',
+                                       block="organ_chords")
+    program.lines["lead"] = LineSpec("lead", 'n "0" # s "ys_supersaw"', block="saw_lead", muted=True)
+    engine = LiveEngine(lambda lines: None, Performer(random.Random(0), style="trance", log=lambda *_: None),
+                        log=lambda *_: None)
+    fixed = engine._without_unwanted_sounds(program)
+    assert fixed.lines["chords"].block == "piano_stabs" and "ys_housepiano" in fixed.lines["chords"].body
+    assert fixed.lines["lead"].block == "glass_lead" and fixed.lines["lead"].muted
+
+
+def test_the_directors_sounds_are_1990s_and_real():
+    """Every sound the Director may pick exists, has a measured level, and
+    is neither a saw nor the organ."""
+    from music.blocks import LIVE_SOUNDS
+    from music.mix import SYNTH_LUFS
+    from music.plan import UNWANTED_SYNTHS
+
+    with open(os.path.join(os.path.dirname(__file__), "..", "tidal", "synthdefs.scd")) as f:
+        defined = set(re.findall(r"SynthDef\(\\(\w+)", f.read()))
+    for role, sounds in LIVE_SOUNDS.items():
+        for synth in sounds:
+            assert synth in defined and synth in SYNTH_LUFS and synth not in UNWANTED_SYNTHS, (role, synth)
+    assert {"ys_housepiano", "ys_pulselead"} <= set().union(*LIVE_SOUNDS.values())
+    assert "ys_pulsepad" not in set().union(*LIVE_SOUNDS.values())         # out of rotation: too buzzy
+
+
+def test_the_director_picks_the_sounds_and_the_track_plays_them():
+    from music.livecode import Program
+    from music.performer import Performer
+
+    fallback = plan_piece(random.Random(2), style="trance")
+    assert set(fallback.sounds) == {"chords", "keys", "lead", "arp"}       # the built-in planner picks too
+    piece, notes = validate_piece({"sounds": {"chords": "ys_housepiano", "lead": "ys_supersaw",
+                                              "drums": "ys_epiano"}}, fallback)
+    assert piece.sounds["chords"] == "ys_housepiano"
+    assert piece.sounds["lead"] == fallback.sounds["lead"]                 # a saw isn't on offer
+    assert sum("rejected" in n for n in notes) == 2
+
+    class Director:
+        style = "trance"
+
+        def next_piece(self, previous):
+            p = plan_piece(random.Random(0), style="trance")
+            p.sounds = {"chords": "ys_housepiano", "lead": "ys_pulselead", "arp": "ys_glass"}
+            return p
+
+    performer = Performer(random.Random(1), style="trance", log=lambda *_: None, director=Director())
+    program = Program(performer.new_track(None))
+    assert program.track.sounds["chords"] == "ys_housepiano"
+    for role, synth in (("chords", "ys_housepiano"), ("lead", "ys_pulselead"), ("arp", "ys_glass")):
+        line = performer._add(program, role).line
+        assert f'# s "{synth}"' in line.body or line.patterns.get("synth") == synth, (role, line.body)
+
+
+def test_pads_are_atmosphere_never_the_main_chords():
+    """The soft pad and air only play far back (texture); the chords are
+    pianos; and the Director's pick for a part only changes blocks that
+    already play one of that part's sounds (the high acid stays acid)."""
+    from music.blocks import BLOCKS, LIVE_SOUNDS, find_block
+    from music.mix import synth_of
+
+    assert not {"ys_softpad", "ys_air"} & set(LIVE_SOUNDS["chords"])
+    for style in ("trance", "deephouse", "darkwave", "techno", "hardcore"):
+        for b in BLOCKS[style]:
+            if b.role == "chords":
+                assert not {synth_of(b.body), *b.patterns.get("synth", [])} & {"ys_softpad", "ys_air"}, (style, b.name)
+    assert find_block("trance", "soft_bed").role == "texture"
+    sounds = {"arp": "ys_pluck", "texture": "ys_softpad", "chords": "ys_epiano"}
+    assert '# s "ys_acid"' in find_block("trance", "high_acid").make(random.Random(0), sounds).body
+    assert '# s "ys_vinyl"' in find_block("deephouse", "vinyl").make(random.Random(0), sounds).body
+    assert '# s "ys_epiano"' in find_block("trance", "piano_stabs").make(random.Random(0), sounds).body

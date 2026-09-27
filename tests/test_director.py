@@ -128,3 +128,20 @@ def test_director_keeps_listener_narration_only(monkeypatch):
     piece = director.next_piece(None)
     assert piece.narration == "Stay a little longer with me."
     assert director.arrange_section(piece, 1, None).narration == ""
+
+
+def test_the_director_sees_the_previous_shape_and_is_told_not_to_repeat_it(monkeypatch):
+    prompts = []
+
+    def complete(model_id, system, user, **kwargs):
+        prompts.append(user)
+        return json.dumps({"title": "Glass Harbour", "style": "trance", "key": "A minor", "bpm": 138})
+
+    monkeypatch.setattr(llm, "complete", complete)
+    director = D.Director("fake/model", random.Random(1), log=lambda m: None)
+    previous = plan_piece(random.Random(3), style="trance")
+    director.next_piece(previous)
+    prompt = prompts[-1]
+    shape = " → ".join(f"{s.name} {s.bars}" for s in previous.sections)
+    assert f"Previous piece's shape (don't repeat it): {shape}" in prompt
+    assert "must NOT repeat the previous piece's" in prompt and "double breakdown" in prompt

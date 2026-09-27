@@ -19,6 +19,7 @@ import re
 from dataclasses import asdict, dataclass, field
 
 from . import presets as P
+from .blocks import LIVE_SOUNDS
 from .theory import CHORD_COLORS, MODES, PROGRESSIONS_BY_NAME, Key, progressions_for
 
 STYLES = {
@@ -76,9 +77,9 @@ STYLES = {
         "bpm": (134, 140), "modes": ["minor"], "cycles_per_chord": 2,
         # The acid line is the heart of it (Switch Angel's Strudel acid trance):
         # a squelchy 16th saw line, a kick, and everything pumping on the kick.
-        "presets": {"pad": "gated_saw", "keys": "piano", "bass": "acid_line", "melody": "saw_lead",
+        "presets": {"pad": "saw_pad", "keys": "piano", "bass": "acid_line", "melody": "saw_lead",
                     "arp": "acid_hi", "drums": "trance_kit", "texture": "air"},
-        "palette": {"pad": ["gated_saw", "gated_saw", "saw_pad"], "keys": ["piano", "felt"],
+        "palette": {"pad": ["saw_pad"], "keys": ["piano", "felt"],
                     "bass": ["acid_line"],
                     "arp": ["acid_hi", "trance_gate"], "melody": ["saw_lead", "glass"]},
         "energy_order": ["bass", "drums", "arp", "pad", "texture", "melody", "keys"],
@@ -105,6 +106,26 @@ for _name, _bpm in (("techno", (138, 150)), ("hardcore", (160, 185))):
     STYLES[_name] = {**STYLES["trance"], "bpm": _bpm, "cycles_per_chord": 4,
                      "openers": [["drums"], ["drums", "bass"]],
                      "energy_order": ["drums", "bass", "arp", "pad", "texture", "melody", "keys"]}
+
+# Sounds that aren't wanted: presets built on detuned saws (supersaw, gated
+# saw, the saw pad, saw strings, the saw-fed choir), the organ and the
+# Juno-style pulse pad (too buzzy, like the saws) are never
+# picked, by default, by the Director or by the model. Styles fall back to
+# the soft pad, air, piano, glass and electric piano.
+UNWANTED_SYNTHS = {"ys_supersaw", "ys_gatesaw", "ys_pad", "ys_strings", "ys_choir", "supersaw",
+                   "ys_organ", "superhammond", "ys_pulsepad"}
+UNWANTED_PRESETS = {name for role in P.PRESETS.values() for name, pr in role.items()
+                    if pr.synth in UNWANTED_SYNTHS}
+_FALLBACK = {"pad": ["soft_pad", "air_pad", "piano_pad"], "melody": ["glass"], "arp": ["glass_arp"],
+             "keys": ["rhodes", "felt"]}
+for _cfg in STYLES.values():
+    # Where unwanted sounds were taken out, the alternatives keep the choice varied.
+    _palette = {role: [n for n in names if n not in UNWANTED_PRESETS]
+                + ([f for f in _FALLBACK[role] if f not in names] if set(names) & UNWANTED_PRESETS else [])
+                for role, names in _cfg.get("palette", {}).items()}
+    _presets = {role: name if name not in UNWANTED_PRESETS else (_palette.get(role) or _FALLBACK[role])[0]
+                for role, name in _cfg["presets"].items()}
+    _cfg["palette"], _cfg["presets"] = _palette, _presets
 
 # Theme words that select a style (checked in this order).
 THEME_STYLE_KEYWORDS = [
@@ -177,6 +198,10 @@ class Piece:
     # This piece's own sound: role -> preset, and which roles open the track.
     instruments: dict[str, str] = field(default_factory=dict)
     opening: list[str] = field(default_factory=list)
+    # The live engine's sound per part (blocks.LIVE_SOUNDS), e.g.
+    # {"chords": "ys_housepiano", "lead": "ys_pulselead"}; parts not listed
+    # keep their block's own sound.
+    sounds: dict[str, str] = field(default_factory=dict)
 
     def energy_order(self) -> list[str]:
         """Order in which layers come in as energy rises, starting with the opening."""
@@ -310,8 +335,36 @@ def _add_variety(piece: Piece, rng: random.Random, avoid: set[str] | None = None
         piece.section_progressions["bridge"] = piece.section_progressions["breakdown"]
     piece.color = "ninths" if rng.random() < _NINTH_CHANCE.get(piece.style, 0.5) else "sevenths"
     choose_instruments(piece, rng, previous)
+    choose_sounds(piece, rng, previous)
     if piece.style in _LIFT_STYLES and rng.random() < 0.5:
         apply_key_lift(piece)
+
+
+# The built-in planner's 1990s trance and house sounds per style (the
+# Director picks from all of blocks.LIVE_SOUNDS). The chill styles keep their
+# blocks' own sounds unless the Director chooses.
+_CLUB_SOUNDS = {"chords": ["ys_housepiano", "ys_epiano"], "keys": ["ys_housepiano", "ys_epiano"],
+                "lead": ["ys_pulselead", "ys_glass"], "arp": ["ys_pluck", "ys_glass"]}
+STYLE_SOUNDS = {
+    "trance": _CLUB_SOUNDS, "darkwave": _CLUB_SOUNDS, "techno": _CLUB_SOUNDS, "hardcore": _CLUB_SOUNDS,
+    "deephouse": {"chords": ["ys_epiano", "ys_housepiano"], "keys": ["ys_housepiano", "ys_epiano"],
+                  "lead": ["ys_glass", "ys_pulselead"], "arp": ["ys_pluck", "ys_glass"]},
+}
+
+
+def sounds_summary(sounds: dict[str, str]) -> str:
+    """E.g. "chords: M1-style house piano chords · lead: square-wave trance lead"."""
+    return " · ".join(f"{role}: {LIVE_SOUNDS[role][synth].split(' (')[0]}"
+                      for role, synth in sounds.items() if synth in LIVE_SOUNDS.get(role, {}))
+
+
+def choose_sounds(piece: Piece, rng: random.Random, previous: Piece | None = None) -> None:
+    """Pick the live engine's sound per part for this piece, not repeating
+    the previous piece's where there's a choice."""
+    piece.sounds = {}
+    for role, options in STYLE_SOUNDS.get(piece.style, {}).items():
+        fresh = [o for o in options if previous is None or o != previous.sounds.get(role)] or options
+        piece.sounds[role] = rng.choice(fresh)
 
 
 def choose_instruments(piece: Piece, rng: random.Random, previous: Piece | None = None) -> None:
@@ -343,9 +396,84 @@ def apply_key_lift(piece: Piece, semitones: int = 2) -> bool:
     return True
 
 
+# The live engine's arc (music/performer.py), in the order it plays.
+LIVE_PHASES = ("build", "groove", "breakdown", "rebuild", "groove2", "outro")
+# Build and rebuild end once their lines are in; their bars are only a limit,
+# and never shorter than this (the performer needs a few edits for them).
+MIN_BUILD_BARS = 16
+# For a track resumed from a state saved before arcs were planned.
+DEFAULT_LIVE_PLAN = [["build", 32], ["groove", 64], ["breakdown", 32], ["rebuild", 32], ["groove2", 64],
+                     ["outro", 32]]
+
+
+def arc_summary(plan) -> str:
+    """E.g. "build ≤16 · groove 64 · peak 32 · breakdown 32 · rebuild ≤16 · peak 64 · outro 16 bars"."""
+    names = {"groove2": "peak"}
+    return " · ".join(f"{names.get(p, p)} {'≤' if p in ('build', 'rebuild') else ''}{bars}"
+                      for p, bars in plan) + " bars"
+
+
+# How the Director's sections become live phases (music/performer.py).
+_SECTION_PHASE = {"intro": "build", "verse": "groove", "bridge": "groove", "build": "groove",
+                  "chorus": "groove2", "breakdown": "breakdown", "outro": "outro"}
+
+
+def live_plan(piece: Piece) -> list[list]:
+    """The Director's sections, in its order, as the live arc: [[phase, bars],
+    ...], decided before the piece starts. Intro -> build, verse / bridge ->
+    groove, chorus -> peak (groove2), breakdown -> breakdown, a build right
+    after a breakdown -> rebuild (elsewhere it's part of the groove), outro ->
+    outro. Neighbours with the same phase merge. It always starts with a
+    build and ends with an outro, and every breakdown is followed by a
+    rebuild, so what it muted comes back before the next part."""
+    sections = piece.sections if len(piece.sections) >= 3 else _default_sections(piece, 12.0)
+    steps: list[list] = []
+    for i, section in enumerate(sections):
+        phase = _SECTION_PHASE.get(section.name, "groove")
+        if i == 0:
+            phase = "build"
+        elif phase == "build":
+            phase = "groove"
+        if section.name == "build" and steps and steps[-1][0] == "breakdown":
+            phase = "rebuild"
+        if steps and steps[-1][0] == phase and phase != "build":
+            steps[-1][1] += section.bars
+        else:
+            steps.append([phase, section.bars])
+    out: list[list] = []
+    for i, (phase, bars) in enumerate(steps):
+        out.append([phase, bars])
+        after = steps[i + 1][0] if i + 1 < len(steps) else None
+        if phase == "breakdown" and after not in ("rebuild", "outro", None):
+            out.append(["rebuild", MIN_BUILD_BARS])
+    if out[-1][0] != "outro":
+        out.append(["outro", 16])
+    for step in out:
+        step[1] = max(MIN_BUILD_BARS if step[0] in ("build", "rebuild") else 8, int(step[1]))
+    return out
+
+
+# Shapes the built-in planner picks from besides the style's own arc (the
+# Director is offered the same ones): (section, energy, length in periods).
+ARC_SHAPES = [
+    [("intro", 0.2, 2), ("chorus", 0.8, 4), ("breakdown", 0.3, 2), ("build", 0.6, 1), ("chorus", 0.9, 4),
+     ("chorus", 0.85, 2), ("outro", 0.2, 2)],                                          # early drop
+    [("intro", 0.2, 2), ("verse", 0.5, 3), ("breakdown", 0.3, 2), ("build", 0.6, 1), ("chorus", 0.85, 3),
+     ("breakdown", 0.3, 2), ("build", 0.65, 1), ("chorus", 0.9, 3), ("outro", 0.2, 2)],  # double breakdown
+    [("intro", 0.2, 2), ("verse", 0.45, 4), ("verse", 0.55, 3), ("bridge", 0.5, 2), ("chorus", 0.8, 4),
+     ("outro", 0.2, 2)],                                                               # slow burn
+    [("intro", 0.2, 2), ("verse", 0.5, 3), ("breakdown", 0.3, 2), ("build", 0.6, 1), ("chorus", 0.85, 3),
+     ("chorus", 0.9, 3), ("chorus", 0.85, 2), ("outro", 0.2, 2)],                      # long peak
+    [("intro", 0.2, 2), ("verse", 0.5, 3), ("chorus", 0.8, 3), ("bridge", 0.45, 2), ("verse", 0.55, 2),
+     ("chorus", 0.85, 3), ("outro", 0.2, 2)],                                          # two moods
+]
+
+
 def _default_sections(piece: Piece, target_minutes: float) -> list[Section]:
+    """The built-in planner's shape: the style's own arc or one of
+    ARC_SHAPES, chosen per piece, so pieces don't all have the same shape."""
     period = piece.period
-    arc = STYLES.get(piece.style, {}).get("arc", DEFAULT_ARC)
+    arc = random.Random(piece.seed).choice([STYLES.get(piece.style, {}).get("arc", DEFAULT_ARC)] + ARC_SHAPES)
     base_bars = sum(m for _, _, m in arc) * period
     seconds_per_bar = 1.0 / piece.cps
     scale = max(1, round(target_minutes * 60 / (base_bars * seconds_per_bar)))
@@ -479,7 +607,8 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
     raw_instruments = data.get("instruments")
     if isinstance(raw_instruments, dict):
         for role, name in raw_instruments.items():
-            if role in P.ENERGY_ORDER and isinstance(name, str) and name in P.PRESETS.get(role, {}):
+            if (role in P.ENERGY_ORDER and isinstance(name, str) and name in P.PRESETS.get(role, {})
+                    and name not in UNWANTED_PRESETS):
                 piece.instruments[role] = name
             else:
                 notes.append(f"instrument {role}={name!r} rejected")
@@ -496,6 +625,16 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
                 if isinstance(raw_instruments, dict) and raw_instruments.get(r) == n}
         choose_instruments(piece, random.Random(piece.seed))
         piece.instruments.update(keep)
+        choose_sounds(piece, random.Random(piece.seed))
+
+    # The live engine's sounds, from blocks.LIVE_SOUNDS (1990s trance and house).
+    raw_sounds = data.get("sounds")
+    if isinstance(raw_sounds, dict):
+        for role, synth in raw_sounds.items():
+            if role in LIVE_SOUNDS and synth in LIVE_SOUNDS[role]:
+                piece.sounds[role] = synth
+            else:
+                notes.append(f"sound {role}={synth!r} rejected")
 
     fallback_lift = any(s.key_shift for s in fallback.sections)
     lift = data.get("key_lift", fallback_lift)
@@ -560,5 +699,7 @@ def describe_options() -> dict:
         "section_types": SECTION_TYPES,
         "chord_colors": list(CHORD_COLORS),
         "palettes": {name: cfg.get("palette", {}) for name, cfg in STYLES.items()},
-        "presets": {role: {n: pr.description for n, pr in P.PRESETS[role].items()} for role in P.ENERGY_ORDER},
+        "sounds": LIVE_SOUNDS,
+        "presets": {role: {n: pr.description for n, pr in P.PRESETS[role].items() if n not in UNWANTED_PRESETS}
+                    for role in P.ENERGY_ORDER},
     }

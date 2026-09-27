@@ -61,7 +61,7 @@ def test_sections_start_on_multiples_of_the_period(isolated_runtime):
     engine, sent, sim = run_engine(pieces=3)
     import json
     history = [json.loads(l) for l in open(isolated_runtime / "history.jsonl")]
-    assert len(history) >= 3 * 8
+    assert len(history) >= 3 * 6          # the shortest built-in shape has 6 sections
     state = runtime.load_state()
     assert state["start_cycle"] % (4 * state["piece"]["cycles_per_chord"]) == 0
 

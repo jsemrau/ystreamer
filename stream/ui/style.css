@@ -67,7 +67,13 @@ body { color: var(--ink); font-family: var(--ui); }
 }
 #arc .step.done::before { background: color-mix(in srgb, var(--accent) 45%, transparent); }
 #arc .step.now { color: var(--ink); }
-#arc .step.now::before { background: var(--accent); box-shadow: 0 0 18px var(--accent); }
+#arc .step.now::before { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+/* The current phase fills as its planned bars play. */
+#arc .step.now::after {
+  content: ""; position: absolute; left: 0; top: 0; height: 4px; border-radius: 4px;
+  width: calc(var(--p, 1) * 100%); background: var(--accent); box-shadow: 0 0 18px var(--accent);
+}
+#arc .step .bars { margin-left: 8px; letter-spacing: 0.04em; color: var(--muted); opacity: 0.8; }
 
 /* ---------------------------------------------------------------- panels */
 main { display: grid; grid-template-columns: 1.55fr 1fr; gap: 22px; min-height: 0; }
@@ -198,6 +204,15 @@ footer { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 
 #ask-note { position: absolute; left: 0; right: 0; bottom: 100%; margin-bottom: 6px; text-align: center;
             color: var(--muted); font-size: 13px; pointer-events: none; }
 body.capture #ask, body.poster #ask { display: none; }
+
+/* The captured stream: Chromium in Xvfb has no GPU, and re-blurring the
+   moving background under every panel (plus the panels' big soft shadow)
+   held it to ~42 frames/s, so the stream's frames advanced unevenly (24 or
+   48 ms) and the motion stuttered. Without them it draws a steady 60/s;
+   slightly more opaque panels keep the text as readable. */
+body.capture .panel, body.capture .chip { backdrop-filter: none; }
+body.capture .panel { background: rgba(10, 12, 19, 0.8); box-shadow: none; }
+body.capture .chip { background: rgba(12, 14, 22, 0.85); }
 .card .asked { font-size: 19px; color: var(--ink); }
 .card .asked::before { content: "“"; } .card .asked::after { content: "”"; }
 

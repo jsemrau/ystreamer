@@ -29,7 +29,7 @@ from .livecode import (ALL_WRAPPERS, BASS_WRAPPERS, CHOICE_SLOTS, DRUM_WRAPPERS,
                        WRAPPER_NOTES, Edit, EditError,
                        Program, Track, allowed_wrappers, apply_edit)
 from .narrator import clean_narration
-from .plan import plan_piece
+from .plan import DEFAULT_LIVE_PLAN, arc_summary, live_plan, plan_piece, sounds_summary
 
 # Which roles come in first, per style (after the opener).
 ROLE_ORDER = {
@@ -55,15 +55,25 @@ class SetState:
     edits_in_track: int = 0
     tracks_played: int = 0
     target_lines: int = 5
-    groove_edits: int = 8
     muted_for_breakdown: list[str] = field(default_factory=list)
+    # The Director's plan for this track, decided before it starts: the
+    # phases in order with their bars (plan.live_plan), and which step plays
+    # now. Build and rebuild end once their lines are in; the others last
+    # their bars.
+    plan: list = field(default_factory=list)
+    step: int = 0
+    phase_start: float = 0.0   # the bar (Tidal cycle) the current phase began
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
 
     @classmethod
     def from_dict(cls, data: dict) -> "SetState":
-        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+        state = cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+        if not state.plan and isinstance(data.get("arc"), dict):     # saved with the earlier bars-per-phase arc
+            state.plan = [[p, data["arc"][p]] for p, _ in DEFAULT_LIVE_PLAN if p in data["arc"]]
+            state.step = next((i for i, (p, _) in enumerate(state.plan) if p == state.phase), 0)
+        return state
 
 
 class Performer:
@@ -92,6 +102,9 @@ class Performer:
         # Called as on_arc(before, after, why) when the arc moves on (the
         # engine narrates these moments).
         self.on_arc = None
+        # The current bar (Tidal cycle); the engine connects its clock. Without
+        # one, bars are counted from the edits.
+        self.bar_now = None
         self.settings = self._settings_for(self.style)
         self.state = SetState()
         self._llm_failures = 0
@@ -183,9 +196,13 @@ class Performer:
         self.state = SetState(tracks_played=self.state.tracks_played + (1 if previous else 0),
                               target_lines=self.rng.randint(max(3, self.settings["max_lines"] - 1),
                                                             self.settings["max_lines"]),
-                              groove_edits=self.rng.randint(6, 10))
+                              plan=live_plan(piece), phase_start=self.bar())
+        self.log("🧭 Arc plan: " + arc_summary(self.state.plan))
+        if piece.sounds:
+            self.log("🎹 Sounds: " + sounds_summary(piece.sounds))
         return Track(title=piece.title, style=self.style, key=piece.key, bpm=piece.bpm,
-                     degrees=degrees, bars_per_chord=piece.cycles_per_chord, progressions=progressions)
+                     degrees=degrees, bars_per_chord=piece.cycles_per_chord, progressions=progressions,
+                     sounds=dict(piece.sounds))
 
     # Which progression plays in each phase of the arc.
     HARMONY_PARTS = {"build": "main", "groove": "main", "breakdown": "breakdown", "rebuild": "breakdown",
@@ -203,31 +220,73 @@ class Performer:
     def advance_phase(self, program: Program) -> None:
         self._advance_phase(program)
 
+    def bar(self) -> float:
+        """The current bar (Tidal cycle)."""
+        if self.bar_now is not None:
+            return self.bar_now()
+        return float(self.state.edits_in_track * self.settings["edit_bars"])
+
+    def phase_bars(self) -> float:
+        """Bars played in the current phase."""
+        return max(0.0, self.bar() - self.state.phase_start)
+
+    def phase_bars_left(self) -> float:
+        return max(0.0, self.step_bars() - self.phase_bars())
+
+    def arc_plan(self) -> list:
+        """The plan being played ([[phase, bars], ...]); a track without one
+        (resumed from an old save, or a performer used on its own) gets the
+        default arc."""
+        if not self.state.plan:
+            self.state.plan = [list(s) for s in DEFAULT_LIVE_PLAN]
+            self.state.step = next((i for i, (p, _) in enumerate(self.state.plan) if p == self.state.phase), 0)
+        return self.state.plan
+
+    def step_bars(self) -> int:
+        """Bars planned for the current step."""
+        plan = self.arc_plan()
+        return int(plan[min(self.state.step, len(plan) - 1)][1])
+
     def _advance_phase(self, program: Program) -> None:
+        """Move to the plan's next step when this one is done: build once its
+        lines are in (or its bars are over), rebuild once what the breakdown
+        muted is back (or its bars are over), everything else after its
+        bars. The outro is the last step."""
         st = self.state
+        plan = self.arc_plan()
+        if st.step + 1 >= len(plan):
+            return
+        before, bars = st.phase, self.step_bars()
         active = program.active_roles()
-        before = st.phase
+        over = self.phase_bars() >= bars
+        names = {"groove2": "peak"}
         why = ""
-        if st.phase == "build" and len(active) >= st.target_lines:
-            st.phase, why = "groove", f"{len(active)} lines playing, the target for this track"
-        elif st.phase == "groove" and st.edits_in_phase >= st.groove_edits:
-            st.phase, why = "breakdown", f"{st.edits_in_phase} edits of groove, time for contrast"
-        elif st.phase == "breakdown" and st.edits_in_phase >= 4:
-            st.phase, why = "rebuild", "the breakdown has had 4 edits"
-        elif st.phase == "rebuild" and not any(program.lines.get(r) and program.lines[r].muted
-                                               for r in st.muted_for_breakdown):
-            st.phase, why = "groove2", "everything muted for the breakdown is back"
-        elif st.phase == "groove2" and st.edits_in_phase >= st.groove_edits:
-            st.phase, why = "outro", f"{st.edits_in_phase} edits of the second peak"
-        if st.phase != before:
-            st.edits_in_phase = 0
-            self.log(f"🧭 Arc: {before} → {st.phase} ({why})")
-            runtime.ui_event("arc", before=before, after=st.phase, why=why)
-            if self.on_arc is not None:
-                self.on_arc(before, st.phase, why)
+        if before == "build" and len(active) >= st.target_lines:
+            why = f"{len(active)} lines playing, the target for this track"
+        elif before == "rebuild" and st.muted_for_breakdown and not any(
+                program.lines.get(r) and program.lines[r].muted for r in st.muted_for_breakdown):
+            why = "everything muted for the breakdown is back"
+        elif over:
+            why = f"{bars} bars of {names.get(before, before)}, as planned"
+        if not why:
+            return
+        st.step += 1
+        st.phase = plan[st.step][0]
+        st.edits_in_phase = 0
+        st.phase_start = self.bar()
+        if st.phase == "breakdown":
+            st.muted_for_breakdown = []          # each breakdown brings back what it muted
+        self.log(f"🧭 Arc: {before} → {st.phase} ({why})")
+        runtime.ui_event("arc", before=before, after=st.phase, why=why)
+        if self.on_arc is not None:
+            self.on_arc(before, st.phase, why)
 
     def track_finished(self, program: Program) -> bool:
-        return self.state.phase == "outro" and len(program.active_roles()) <= 1 and self.state.edits_in_phase > 0
+        """The outro is down to one line, or its planned bars are over (the
+        engine fades out whatever still plays)."""
+        st = self.state
+        return st.phase == "outro" and st.edits_in_phase > 0 and (
+            len(program.active_roles()) <= 1 or self.phase_bars() >= self.step_bars())
 
     # ---------------------------------------------------------------- edits
 
@@ -366,7 +425,8 @@ class Performer:
 
     def _add(self, program: Program, role: str) -> Edit:
         block = self._block_for(role)
-        return Edit("add", role=role, line=block.make(self.rng), reason=f"bring in the {block.name.replace('_', ' ')}")
+        return Edit("add", role=role, line=block.make(self.rng, program.track.sounds),
+                    reason=f"bring in the {block.name.replace('_', ' ')}")
 
     def _missing_roles(self, program: Program) -> list[str]:
         available = {b.role for b in blocks_for(self.style)}
@@ -663,7 +723,9 @@ class Performer:
             f"A live coder is performing a {self.style} set in TidalCycles for a 24/7 stream "
             f"(theme: {self.theme or 'chill, hypnotic, evolving'}).",
             f"Track: {program.track.title}, {program.track.key}, {program.track.bpm:g} BPM.",
-            f"Phase: {self.state.phase} ({self.state.edits_in_phase} edits so far). {PHASE_HELP[self.state.phase]}",
+            f"Phase: {self.state.phase} ({self.state.edits_in_phase} edits so far, about "
+            f"{self.phase_bars_left():.0f} of its planned {self.step_bars()} bars left). "
+            f"{PHASE_HELP[self.state.phase]}",
             "The program playing now:", *program.code_lines(),
             "Recent edits (oldest first):", *(self.recent or ["(none yet)"]),
         ])
@@ -914,7 +976,7 @@ class Performer:
             if block is None:
                 raise EditError(f"unknown block {data.get('block')!r}")
             edit.role = block.role
-            edit.line = block.make(self.rng)
+            edit.line = block.make(self.rng, program.track.sounds)
         return edit
 
     def _prompt(self, program: Program, proposals: int = 0) -> str:
@@ -958,6 +1020,7 @@ class Performer:
             theme=self.theme or "chill, hypnotic, evolving", style=self.style,
             track=json.dumps(program.track.to_dict()), phase=self.state.phase,
             phase_help=PHASE_HELP[self.state.phase], edits_in_phase=self.state.edits_in_phase,
+            bars_left=round(self.phase_bars_left()), phase_bars=self.step_bars(),
             code="\n".join(program.code_lines()),
             lines="\n".join(f'"{r}": {json.dumps(e, separators=(",", ":"))}' for r, e in editable.items())
             or "(no lines yet)",

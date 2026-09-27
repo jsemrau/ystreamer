@@ -115,7 +115,8 @@ def replace_harsh_instruments(code: str) -> tuple[str, list[str]]:
 
 
 _MELODIC_SYNTHS = {"superpiano", "superfm", "supermandolin", "superhammond", "supervibe", "superpwm",
-                   "ys_pad", "ys_epiano", "ys_keys", "ys_sub", "ys_pluck", "ys_glass", "ys_air"}
+                   "ys_pad", "ys_softpad", "ys_epiano", "ys_keys", "ys_sub", "ys_pluck", "ys_glass",
+                   "ys_air"}
 
 
 def key_usage_error(code: str) -> str | None:

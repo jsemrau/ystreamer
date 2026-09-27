@@ -12,10 +12,32 @@ Lofi deliberately has no sustained pad: chords are short Rhodes/felt comping.
 from __future__ import annotations
 
 import random
+import re
 from dataclasses import dataclass, field
 
 from . import mix
 from .livecode import LineSpec
+
+# The sounds the Director picks from, per part, for each track: the toolkit of
+# 1990s trance and house, without saws or organ. The chosen sound replaces the
+# synth of whichever block plays that part.
+LIVE_SOUNDS = {
+    "chords": {"ys_housepiano": "M1-style house piano chords",
+               "ys_epiano": "DX7 / Rhodes electric piano chords",
+               "ys_glass": "DX7-style bell chords"},
+    "keys": {"ys_housepiano": "M1-style house piano stabs",
+             "ys_epiano": "DX7 / Rhodes electric piano",
+             "ys_keys": "felt piano"},
+    "lead": {"ys_pulselead": "square-wave trance lead",
+             "ys_glass": "DX7-style bell lead",
+             "ys_pluck": "plucked lead"},
+    "arp": {"ys_pluck": "plucked arp (Balearic / Cafe del Mar)",
+            "ys_glass": "bell arp",
+            "ys_pulselead": "square-wave arp"},
+    # Atmosphere only: quiet, far behind the chords and the lead.
+    "texture": {"ys_air": "airy breath, far in the background",
+                "ys_softpad": "soft pad bed, far in the background"},
+}
 
 
 @dataclass
@@ -31,19 +53,32 @@ class Block:
     # Degree pool for mutating melodic patterns (numbers the performer may use).
     pool: list[int] = field(default_factory=list)
 
-    def make(self, rng: random.Random) -> LineSpec:
+    def make(self, rng: random.Random, sounds: dict[str, str] | None = None) -> LineSpec:
+        """A new line from this block; `sounds` (part -> synth, the Director's
+        choice for the track) sets the synth of melodic parts."""
         patterns = {slot: rng.choice(options) for slot, options in self.patterns.items()}
+        body = self.body
+        sound = (sounds or {}).get(self.role)
+        palette = LIVE_SOUNDS.get(self.role, {})
+        own = {mix.synth_of(body), *(self.patterns.get("synth") or [])}
+        # Only a block that already plays one of the part's sounds changes: the
+        # vinyl crackle stays vinyl, the high acid line stays acid.
+        if sound in palette and own & set(palette) and not self.drums:
+            if "synth" in patterns:
+                patterns["synth"] = sound
+            else:
+                body = re.sub(r'# s "ys_\w+"', f'# s "{sound}"', body)
         fx = [list(p) for p in self.fx]
         # Level from the measured loudness of the synth actually chosen
         # (a block may offer several), so the line enters at its role's level.
-        synth = mix.synth_of(self.body.replace('"{synth}"', f'"{patterns.get("synth", "")}"'))
+        synth = mix.synth_of(body.replace('"{synth}"', f'"{patterns.get("synth", "")}"'))
         # Short chord hits (struct rhythms) aren't comparable with a sustained
         # measurement, so those keep their tuned gain.
-        gain = None if "struct" in self.body else mix.calibrated_gain(synth, self.role, chord="{chords}" in self.body)
+        gain = None if "struct" in body else mix.calibrated_gain(synth, self.role, chord="{chords}" in body)
         if gain is not None:
             fx = [[n, f"{gain:g}"] if n == "gain" else [n, v] for n, v in fx]
         return LineSpec(
-            role=self.role, body=self.body, patterns=patterns,
+            role=self.role, body=body, patterns=patterns,
             fx=fx, pfs=[list(p) for p in self.pfs],
             wrappers=list(self.wrappers), drums=self.drums, block=self.name,
             base_gain=dict((n, v) for n, v in fx).get("gain", ""),
@@ -113,7 +148,7 @@ BLOCKS: dict[str, list[Block]] = {
                  [["gain", "0.96"], ["lpf", "420"], ["legato", "0.75"]], octave=" - 24", pool=[0, 7, 4, -1]),
         Block("deep_stab", "keys",
               'struct "{comp}" $ n (scale "{mode}" "<{chords}>" {root}) # s "{synth}"',
-              {"comp": ["~ ~ t ~ ~ ~ t ~", "t ~ ~ t ~ ~ t ~", "~ t ~ t ~ ~ t ~"], "synth": ["ys_epiano", "ys_organ"]},
+              {"comp": ["~ ~ t ~ ~ ~ t ~", "t ~ ~ t ~ ~ t ~", "~ t ~ t ~ ~ t ~"], "synth": ["ys_epiano", "ys_keys"]},
               fx=[["gain", "0.92"], ["legato", "0.35"], ["delay", "0.3"], ["delaytime", "0.375"],
                   ["delayfeedback", "0.35"], ["lpf", "(slow 16 $ range 1600 3200 sine)"]]),
         _melodic("glass_hook", "lead", "ys_glass", "melody",
@@ -121,8 +156,10 @@ BLOCKS: dict[str, list[Block]] = {
                   "<[~ 4 ~ ~ ~ 2 ~ ~] [~ 7 ~ ~ 4 ~ 2 ~]>"],
                  [["gain", "1.0"], ["room", "0.4"], ["delay", "0.3"], ["delaytime", "0.375"],
                   ["delayfeedback", "0.3"]], octave=" + 12"),
-        Block("strings", "chords", 'n (scale "{mode}" "<{chords}>" {root}) # s "ys_strings"', {},
-              fx=[["gain", "0.8"], ["legato", "1.05"], ["room", "0.5"], ["lpf", "(slow 16 $ range 1800 3000 sine)"]]),
+        Block("rhodes_chords", "chords", 'n (scale "{mode}" "<{chords}>" {root}) # s "ys_epiano"', {},
+              fx=[["gain", "0.8"], ["legato", "1.0"], ["room", "0.4"], ["lpf", "(slow 16 $ range 1800 3000 sine)"]]),
+        Block("soft_bed", "texture", 'n (scale "{mode}" "<{chords}>" {root}) # s "ys_softpad"', {},
+              fx=[["gain", "0.6"], ["legato", "1.1"], ["lpf", "1800"], ["room", "0.6"], ["size", "0.9"]]),
         Block("glass_arp", "arp",
               'n (scale "{mode}" ("<{arp}>*8" |+ "<{roots}>") {root} + 12) # s "ys_glass"',
               {"arp": ["0 4 7 9 7 4", "0 2 4 7", "7 4 2 4 0"]},
@@ -151,19 +188,20 @@ BLOCKS: dict[str, list[Block]] = {
                  [["gain", "1.05"], ["lpf", "(slow 16 $ range 800 1600 sine)"], ["legato", "0.85"]], octave=" - 24",
                  pool=[0, 7],
                  wrappers=['(|* gain "[0.67 0.91 1 1]*4")']),
-        Block("gated_saw", "chords",
-              'n (scale "{mode}" "<{chords}>" {root}) # s "ys_gatesaw" # pI "gatepat" {gate}'
-              ' # pF "gatetime" {bar} # pF "beattime" {beat}',
-              {"gate": ["1", "2", "3", "0"]},
-              fx=[["gain", "0.88"], ["legato", "1"], ["lpf", "(slow 16 $ range 2000 4500 sine)"], ["room", "0.35"]],
-              pfs=[["gatedepth", "0.95"], ["duckdepth", "0.8"]]),
-        _melodic("saw_lead", "lead", "ys_supersaw", "melody",
+        # No saw or organ sounds: 90s M1 piano stabs carry the chords (a pad
+        # is only a quiet bed, see soft_bed), and a glass lead.
+        Block("piano_stabs", "chords",
+              'struct "{stab}" $ n (scale "{mode}" "<{chords}>" {root}) # s "ys_housepiano"',
+              {"stab": ["~ t ~ t ~ t ~ t", "t ~ ~ t ~ ~ t ~", "~ ~ t ~ ~ t ~ t", "[~ t]*4"]},
+              fx=[["gain", "0.8"], ["legato", "0.5"], ["room", "0.35"], ["lpf", "(slow 16 $ range 2500 4500 sine)"]],
+              wrappers=['(|* gain "[0.67 0.91 1 1]*4")']),
+        _melodic("glass_lead", "lead", "ys_glass", "melody",
                  ["0 ~ ~ 2 ~ ~ 4 ~", "4 ~ 2 ~ 0 ~ ~ ~", "7 ~ ~ 4 ~ 2 ~ 0",
                   "<[0 ~ ~ 2 ~ ~ 4 ~] [4 ~ ~ 2 ~ ~ 7 ~]>", "<[7 ~ 4 ~ 2 ~ 0 ~] [4 ~ 2 ~ 0 ~ -1 ~]>",
                   "<[0 ~ 4 ~ 7 ~ 4 ~] [9 ~ 7 ~ 4 ~ 2 ~] [7 ~ 4 ~ 2 ~ 0 ~] [2 ~ 4 ~ -1 ~ ~ ~]>"],
                  [["gain", "1.05"], ["lpf", "4500"], ["room", "0.4"], ["delay", "0.3"], ["delaytime", "0.33"],
                   ["delayfeedback", "0.35"]], octave=" + 12",
-                 pfs=[["duckdepth", "0.8"]]),
+                 wrappers=['(|* gain "[0.67 0.91 1 1]*4")']),
         Block("high_acid", "arp",
               'n (scale "{mode}" ("<{motif}>*16" |+ "<{roots}>") {root}) # s "ys_acid"',
               {"motif": ["0 4 0 9 7", "7 4 0 4", "0 2 4 7 9 7 4 2", "9 7 4 0 4"]},
@@ -177,13 +215,15 @@ BLOCKS: dict[str, list[Block]] = {
               fx=[["gain", "0.85"], ["lpf", "(slow 8 $ range 1500 5000 sine)"], ["delay", "0.3"],
                   ["delaytime", "0.375"], ["delayfeedback", "0.35"], ["room", "0.3"]],
               wrappers=['(|* gain "[0.67 0.91 1 1]*4")'], pool=[0, 2, 4, 6, 7, 9]),
+        Block("soft_bed", "texture", 'n (scale "{mode}" "<{chords}>" {root}) # s "ys_softpad"', {},
+              fx=[["gain", "0.6"], ["legato", "1.1"], ["lpf", "1800"], ["room", "0.6"], ["size", "0.9"]]),
         Block("air", "texture", 'n (scale "{mode}" "<{roots}>" {root} - 12) # s "ys_air"', {},
               fx=[["gain", "0.92"], ["hpf", "200"], ["legato", "1.3"], ["room", "0.7"]]),
     ],
     # --------------------------------------------------------------- ambient
     "ambient": [
         Block("air_pad", "chords", 'n (scale "{mode}" "<{chords}>" {root}) # s "{synth}"',
-              {"synth": ["ys_air", "ys_strings", "ys_choir"]},
+              {"synth": ["ys_air", "ys_softpad"]},
               fx=[["gain", "0.85"], ["legato", "1.1"], ["room", "0.6"], ["size", "0.9"],
                   ["lpf", "(slow 16 $ range 1400 2800 sine)"]]),
         _melodic("glass_bells", "lead", "ys_glass", "melody",
@@ -222,7 +262,7 @@ BLOCKS: dict[str, list[Block]] = {
               pool=[0, 2, 4, 7, 9]),
         _melodic("felt_bass", "bass", "ys_keys", "rhythm", ["0 ~ ~ ~ 4 ~ ~ ~", "0 ~ ~ ~ ~ ~ ~ ~"],
                  [["gain", "0.95"], ["legato", "1"]], octave=" - 12", pool=[0, 4]),
-        Block("strings", "chords", 'n (scale "{mode}" "<{chords}>" {root}) # s "ys_strings"', {},
+        Block("air_bed", "chords", 'n (scale "{mode}" "<{chords}>" {root}) # s "ys_air"', {},
               fx=[["gain", "0.78"], ["legato", "1.05"], ["room", "0.5"], ["lpf", "(slow 16 $ range 1600 2800 sine)"]]),
         Block("air", "texture", 'n (scale "{mode}" "<{roots}>" {root} - 12) # s "ys_air"', {},
               fx=[["gain", "0.9"], ["hpf", "200"], ["legato", "1.3"]]),
@@ -286,15 +326,15 @@ def _techno_blocks(hard: bool) -> list[Block]:
                    ["acidres", "0.25"]],
               wrappers=[pump], pool=[0, 2, 4, 6, 7]),
         Block("stab", "chords",
-              'struct "{stab}" $ n (scale "{mode}" "<{chords}>" {root}) # s "ys_supersaw" # pF "beattime" {beat}',
+              'struct "{stab}" $ n (scale "{mode}" "<{chords}>" {root}) # s "ys_epiano"',
               {"stab": ["~ ~ t ~ ~ ~ ~ ~", "~ t ~ ~ ~ ~ t ~", "~ ~ ~ t ~ ~ t ~", "[~ t]*4"]},
               fx=[["gain", "0.78"], ["legato", "0.25"], ["lpf", "(slow 8 $ range 1400 3200 sine)"], ["room", "0.35"]],
-              pfs=[["duckdepth", "0.6"]]),
-        _melodic("hoover", "lead", "ys_supersaw", "melody",
+              wrappers=[pump]),
+        _melodic("glass_lead", "lead", "ys_glass", "melody",
                  ["0 ~ ~ 0 ~ ~ 2 ~", "7 ~ 6 ~ 4 ~ 0 ~", "0 ~ 7 ~ 6 ~ 4 ~",
                   "<[0 ~ ~ 0 ~ ~ 2 ~] [0 ~ ~ 0 ~ ~ 6 4]>"],
                  [["gain", "0.9"], ["lpf", "3500"], ["room", "0.3"]], octave="",
-                 pfs=[["duckdepth", "0.7"]], pool=[0, 2, 4, 6, 7]),
+                 wrappers=[pump], pool=[0, 2, 4, 6, 7]),
         Block("pluck_seq", "arp",
               'n (scale "{mode}" ("<{arp}>*16" |+ "<{roots}>") {root}) # s "ys_pluck"',
               {"arp": ["0 7 0 4", "0 0 7 0 6", "0 4 7 4", "7 0 6 0 4 0"]},
@@ -319,8 +359,8 @@ BLOCKS["darkwave"] = [
              ["0*16", "[0 0 7 0]*4", "[0 ~ 0 7]*4", "[0 0 0 4]*4"],
              [["gain", "1.0"], ["lpf", "(slow 8 $ range 600 1400 sine)"], ["legato", "0.5"]], octave=" - 24",
              pool=[0, 7, 4, -3]),
-    Block("cold_strings", "chords", 'n (scale "{mode}" "<{chords}>" {root}) # s "{synth}"',
-          {"synth": ["ys_strings", "ys_choir", "ys_organ"]},
+    Block("cold_chords", "chords", 'n (scale "{mode}" "<{chords}>" {root}) # s "{synth}"',
+          {"synth": ["ys_epiano", "ys_glass"]},
           fx=[["gain", "0.68"], ["legato", "1.05"], ["lpf", "(slow 16 $ range 1100 2400 sine)"], ["room", "0.5"],
               ["size", "0.8"]]),
     _melodic("cold_arp", "lead", "ys_pluck", "melody",
@@ -338,6 +378,8 @@ BLOCKS["darkwave"] = [
           fx=[["gain", "0.78"], ["lpf", "(slow 16 $ range 1200 4000 sine)"], ["delay", "0.4"],
               ["delaytime", "0.375"], ["delayfeedback", "0.5"], ["room", "0.4"], ["pan", "0.6"]],
           pool=[0, 2, 4, 7, 9]),
+    Block("soft_bed", "texture", 'n (scale "{mode}" "<{chords}>" {root}) # s "ys_softpad"', {},
+          fx=[["gain", "0.6"], ["legato", "1.1"], ["lpf", "1800"], ["room", "0.6"], ["size", "0.9"]]),
     Block("static", "texture", 'n (scale "{mode}" "<{roots}>" {root} - 12) # s "ys_air"', {},
           fx=[["gain", "0.85"], ["hpf", "400"], ["legato", "1.3"], ["room", "0.8"]]),
 ]
