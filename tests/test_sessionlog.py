@@ -18,6 +18,22 @@ class _SimClock:
         self.t += seconds
 
 
+class _SyncPool:
+    """Runs the performer at once instead of on a thread: under the simulated
+    clock a thread can lose the race to the next bar, which makes timing
+    assertions flaky."""
+
+    def submit(self, fn, *args):
+        import concurrent.futures
+
+        future = concurrent.futures.Future()
+        future.set_result(fn(*args))
+        return future
+
+    def shutdown(self, **kwargs):
+        pass
+
+
 def _session(tmp_path, tracks=2):
     log = sessionlog.SessionLog(directory=str(tmp_path), session_id="test")
     log.start(theme="test", style="trance")
@@ -25,6 +41,7 @@ def _session(tmp_path, tracks=2):
     performer = Performer(random.Random(4), style="trance", log=lambda *_: None)
     engine = LiveEngine(lambda lines: None, performer, log=lambda *_: None, now=clock.now, sleep=clock.sleep,
                         max_tracks=tracks, session_log=log)
+    engine._pool = _SyncPool()
     engine.run()
     log.close(edits=engine.edits)
     return engine, log
@@ -81,10 +98,7 @@ def test_the_first_groove_edit_waits_the_grooves_interval_not_the_builds(tmp_pat
     edits = [json.loads(line) for line in open(log.path, encoding="utf-8") if '"type": "edit"' in line]
     i = next(i for i, e in enumerate(edits) if e["phase"] == "groove")
     gap = edits[i]["cycle"] - edits[i - 1]["cycle"]
-    # The groove's interval (16), not the build's (4-5). Under the simulated
-    # clock the performer's thread can finish just after the bar, and the
-    # engine then (correctly) lands the edit one bar later.
-    assert STYLE_SETTINGS["trance"]["edit_bars"] <= round(gap) <= STYLE_SETTINGS["trance"]["edit_bars"] + 1
+    assert round(gap) == STYLE_SETTINGS["trance"]["edit_bars"]      # the groove's pace, not the build's
     assert round(edits[1]["cycle"] - edits[0]["cycle"]) == 4       # the build itself stays quick
 
 
