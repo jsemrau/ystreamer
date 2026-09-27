@@ -67,6 +67,10 @@ trap stop INT TERM
 sleep 20
 echo "[live] starting the stream (log: logs/stream.log) and the watchdog (log: logs/watchdog.log)"
 "$REPO/stream/stream.sh" >> "$REPO/logs/stream.log" 2>&1 & STREAM_PID=$!; PIDS+=($STREAM_PID)
+# The stream's health (keeping up? how much it sends) and warnings, here in
+# the terminal; tail stops with this script.
+tail -n0 -F --pid=$$ "$REPO/logs/stream.log" 2>/dev/null \
+    | grep --line-buffered -E '^\[stream\]|^Stream:|exited|Error|error' &
 # If the stream part stops (no stream key, missing Chromium/Xvfb, ...), say
 # so here instead of only in its log.
 (
