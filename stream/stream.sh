@@ -47,6 +47,15 @@ if [[ -f "$REPO/.env" ]]; then
 fi
 RUNTIME="${YS_RUNTIME_DIR:-$REPO/runtime}"
 mkdir -p "$RUNTIME"
+
+# One stream at a time: a second copy sending with the same key makes the
+# platform drop one connection and refuse the other's reconnects, which
+# viewers see as endless buffering.
+exec 9>"$RUNTIME/stream.lock"
+if ! flock -n 9; then
+    echo "[stream] another stream.sh is already running (see: pgrep -af stream.sh); stop it first" >&2
+    exit 1
+fi
 [[ -f "$RUNTIME/now_playing.txt" ]] || echo "starting..." > "$RUNTIME/now_playing.txt"
 [[ -f "$RUNTIME/code.txt" ]] || echo "" > "$RUNTIME/code.txt"
 [[ -f "$RUNTIME/narration.txt" ]] || echo "" > "$RUNTIME/narration.txt"
@@ -190,7 +199,7 @@ if [[ "$UI_MODE" == "browser" ]]; then
     echo "Streaming the browser look ($CHROMIUM on $DISPLAY_NUM, ${W}x${H})" >&2
     VIDEO_IN=(-thread_queue_size 512 -f x11grab -draw_mouse 0 -video_size "${W}x${H}" -framerate "$FPS"
               -i "${DISPLAY_NUM}.0")
-    FILTER="[0:a]alimiter=limit=0.89:level=disabled,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout];\
+    FILTER="[0:a]alimiter=limit=0.89:level=disabled,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000:async=1000:first_pts=0[aout];\
 [1:v]fps=${FPS},format=yuv420p[vout]"
     # No zerolatency: x264's frame threads, lookahead and B-frames give a
     # better picture for the bitrate; a few frames of delay don't matter.
@@ -203,7 +212,7 @@ fi
 echo "Stream: ${SIZE} at ${FPS} fps, ${VBITRATE} (YS_VIDEO_SIZE / YS_FPS / YS_VIDEO_BITRATE)" >&2
 WAVE_H=$(( H / 5 ))
 [[ "$UI_MODE" == "browser" ]] || FILTER="\
-[0:a]alimiter=limit=0.89:level=disabled,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,asplit=2[aout][awave];\
+[0:a]alimiter=limit=0.89:level=disabled,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000:async=1000:first_pts=0,asplit=2[aout][awave];\
 [awave]showwaves=s=${W}x${WAVE_H}:mode=cline:rate=${FPS}:colors=0xE8DCC8@0.55[wave];\
 [1:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${FPS}${BG_LOOK},format=yuv420p[bg];\
 [bg][wave]overlay=0:H-h-10[v1];\
@@ -317,7 +326,14 @@ while true; do
     if (( status == 0 || elapsed > 300 )); then
         backoff=2
     else
-        echo "ffmpeg exited with $status after ${elapsed}s; retrying in ${backoff}s" >&2
+        case $status in
+            251) why="input/output error: the server refused or closed the connection (a second stream with the same key? a wrong key? network?)" ;;
+            255) why="the stream failed (see the ffmpeg message above)" ;;
+            224) why="broken pipe: the connection dropped" ;;
+            152) why="connection reset by the server" ;;
+            *)   why="see the ffmpeg message above" ;;
+        esac
+        echo "ffmpeg exited with $status after ${elapsed}s ($why); retrying in ${backoff}s" >&2
         sleep "$backoff"
         backoff=$(( backoff < 60 ? backoff * 2 : 60 ))
     fi
