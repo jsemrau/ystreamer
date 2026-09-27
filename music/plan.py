@@ -106,6 +106,21 @@ for _name, _bpm in (("techno", (138, 150)), ("hardcore", (160, 185))):
                      "openers": [["drums"], ["drums", "bass"]],
                      "energy_order": ["drums", "bass", "arp", "pad", "texture", "melody", "keys"]}
 
+# No saw sounds: presets built on detuned saws (supersaw, gated saw, the saw
+# pad, saw strings, the saw-fed choir) are never picked, by default, by the
+# Director or by the model. Styles fall back to sine/FM sounds.
+SAW_SYNTHS = {"ys_supersaw", "ys_gatesaw", "ys_pad", "ys_strings", "ys_choir", "supersaw"}
+SAW_PRESETS = {name for role in P.PRESETS.values() for name, pr in role.items() if pr.synth in SAW_SYNTHS}
+_NO_SAW_FALLBACK = {"pad": ["organ_pad", "air_pad", "piano_pad"], "melody": ["glass"], "arp": ["glass_arp"]}
+for _cfg in STYLES.values():
+    # Where saws were taken out, the sine/FM alternatives keep the choice varied.
+    _palette = {role: [n for n in names if n not in SAW_PRESETS]
+                + ([f for f in _NO_SAW_FALLBACK[role] if f not in names] if set(names) & SAW_PRESETS else [])
+                for role, names in _cfg.get("palette", {}).items()}
+    _presets = {role: name if name not in SAW_PRESETS else (_palette.get(role) or _NO_SAW_FALLBACK[role])[0]
+                for role, name in _cfg["presets"].items()}
+    _cfg["palette"], _cfg["presets"] = _palette, _presets
+
 # Theme words that select a style (checked in this order).
 THEME_STYLE_KEYWORDS = [
     ("hardcore", ("hardcore", "gabber", "gabba", "speedcore", "frenchcore", "terrorcore", "rotterdam")),
@@ -527,7 +542,8 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
     raw_instruments = data.get("instruments")
     if isinstance(raw_instruments, dict):
         for role, name in raw_instruments.items():
-            if role in P.ENERGY_ORDER and isinstance(name, str) and name in P.PRESETS.get(role, {}):
+            if (role in P.ENERGY_ORDER and isinstance(name, str) and name in P.PRESETS.get(role, {})
+                    and name not in SAW_PRESETS):
                 piece.instruments[role] = name
             else:
                 notes.append(f"instrument {role}={name!r} rejected")
@@ -608,5 +624,6 @@ def describe_options() -> dict:
         "section_types": SECTION_TYPES,
         "chord_colors": list(CHORD_COLORS),
         "palettes": {name: cfg.get("palette", {}) for name, cfg in STYLES.items()},
-        "presets": {role: {n: pr.description for n, pr in P.PRESETS[role].items()} for role in P.ENERGY_ORDER},
+        "presets": {role: {n: pr.description for n, pr in P.PRESETS[role].items() if n not in SAW_PRESETS}
+                    for role in P.ENERGY_ORDER},
     }

@@ -282,15 +282,19 @@ LOOSE_KITS = {"lofi_kit", "downtempo_kit"}
 # softer equivalents by the normaliser.
 LEGACY_INSTRUMENT_WHITELIST = {
     "superpiano", "superfm", "supermandolin", "superhammond", "supervibe", "superpwm",
-    "ys_pad", "ys_epiano", "ys_keys", "ys_sub", "ys_pluck", "ys_glass", "ys_air", "ys_vinyl",
+    "ys_organ", "ys_epiano", "ys_keys", "ys_sub", "ys_pluck", "ys_glass", "ys_air", "ys_vinyl",
     "bd", "sn", "hh", "hh27", "cp", "808bd", "808sd", "808hc", "808oh", "pad", "padlong", "arpy",
 }
 LEGACY_INSTRUMENT_REPLACEMENTS = {
-    "supersaw": "ys_pad",
-    "superzow": "ys_pad",
+    "supersaw": "ys_organ",      # no saw sounds (ys_pad is detuned saws too)
+    "ys_pad": "ys_organ",
+    "ys_strings": "ys_organ",
+    "ys_supersaw": "ys_organ",
+    "ys_gatesaw": "ys_organ",
+    "superzow": "ys_organ",
     "superchip": "ys_glass",
-    "superhoover": "ys_pad",
-    "hoover": "ys_pad",
+    "superhoover": "ys_organ",
+    "hoover": "ys_organ",
     "superstatic": "ys_air",
     "supersquare": "ys_epiano",
     "superreese": "ys_sub",

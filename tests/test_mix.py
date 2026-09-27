@@ -81,11 +81,31 @@ def test_instruments_come_from_the_style_palette():
 
 def test_llm_can_choose_instruments_and_opening():
     fallback = plan_piece(random.Random(2), style="lofi")
-    piece, notes = validate_piece({"instruments": {"pad": "choir_pad", "keys": "not-a-preset"},
+    piece, notes = validate_piece({"instruments": {"pad": "air_pad", "keys": "not-a-preset"},
                                    "opening": ["melody", "texture"]}, fallback)
-    assert piece.instruments["pad"] == "choir_pad"
+    assert piece.instruments["pad"] == "air_pad"
     assert piece.opening == ["melody", "texture"]
     assert any("keys" in n for n in notes)
+
+
+def test_no_saw_sounds_anywhere():
+    """No saw sounds: not in the live blocks, the styles' defaults or
+    palettes, the Director's vocabulary, or what the Director may choose."""
+    import json
+
+    from music.blocks import BLOCKS
+    from music.plan import SAW_PRESETS, SAW_SYNTHS, STYLES, describe_options
+
+    for style, blocks in BLOCKS.items():
+        for b in blocks:
+            assert not any(s in b.body + json.dumps(b.patterns) for s in SAW_SYNTHS), (style, b.name)
+    for style, cfg in STYLES.items():
+        assert not set(cfg["presets"].values()) & SAW_PRESETS, style
+        assert not {n for names in cfg["palette"].values() for n in names} & SAW_PRESETS, style
+    assert not any(n in json.dumps(describe_options()["presets"]) for n in SAW_PRESETS)
+    fallback = plan_piece(random.Random(2), style="trance")
+    piece, notes = validate_piece({"instruments": {"pad": "saw_pad", "melody": "saw_lead"}}, fallback)
+    assert piece.instruments["pad"] not in SAW_PRESETS and piece.instruments["melody"] not in SAW_PRESETS
 
 
 # --------------------------------------------------------------- live mix
@@ -114,14 +134,14 @@ def test_beds_make_room_when_the_front_is_busy():
     from music.livecode import Edit, Program, Track, apply_edit, changed_statements
 
     program = Program(Track("t", "piano", "C major", 70, [0, 5, 3, 4], 2))
-    for name in ("strings", "piano_chords"):
+    for name in ("air_bed", "piano_chords"):
         b = find_block("piano", name)
         program = apply_edit(program, Edit("add", role=b.role, line=b.make(random.Random(0))))
     assert "|* gain" not in program.statement("chords")
     lead = find_block("piano", "piano_melody")
     fuller = apply_edit(program, Edit("add", role="lead", line=lead.make(random.Random(0))))
     assert fuller.statement("chords").endswith("|* gain 0.93")
-    # adding the lead re-sends the strings at their new level
+    # adding the lead re-sends the bed at its new level
     assert fuller.statement("chords") in changed_statements(program, fuller)
 
 

@@ -123,9 +123,9 @@ There are two options, and you can combine them:
 
 The choices are `lofi`, `ambient`, `downtempo`, `piano`, `deephouse`, `trance`,
 `techno` (138-150 BPM: pounding kick, offbeat rumble bass, 16th hats, acid,
-short supersaw stabs), `hardcore` (160-185 BPM: the same kit with a
+short electric-piano stabs), `hardcore` (160-185 BPM: the same kit with a
 distorted gabber kick) and `darkwave` (110-128 BPM cold electro / coldwave:
-a stiff 808 drum machine, a 16th-note sequencer bass, a cold string-machine,
+a stiff 808 drum machine, a 16th-note sequencer bass, a cold organ or air pad,
 choir or organ bed, pluck arpeggios lost in delay and a sparse glass line).
 Each sets a tempo range, the modes it uses (e.g. minor or dorian for lofi),
 the default instruments and which layers come in first. `deephouse` is
@@ -147,17 +147,20 @@ s("tbd:2!4").duck("3:4:5:6").duckdepth(.8).duckattack(.16)
   knob is automated like a hand on the slider: drifting in the groove,
   opening across builds, turned down in breakdowns (where the line keeps
   going under the pad).
-- **Sidechain:** while the kick plays, everything pumps. Sustained supersaws
-  duck inside the synth on every beat (depth 0.8, recovering over 0.16 s),
-  and 16th-note layers get the same shape per step.
+- **Sidechain:** while the kick plays, everything pumps: every layer gets
+  the same gain shape on each beat.
 - **Around it:** a 136-140 BPM pitch-swept synth kick with off-beat hats and
-  claps, a second higher acid line or a gated arp, and sustained supersaw
-  chords pumping on the kick. Pieces go groove → breakdown → build (roll,
+  claps, a second higher acid line, organ chords and a glass lead, pumping
+  on the kick. Pieces go groove → breakdown → build (roll,
   filter rise, kick drop) → drop, twice.
 
-A gated supersaw (`ys_gatesaw`) is still defined but no longer played: the
-chopped chords weren't liked. Its gate chops sustained chords inside the
-synth. The gate is remapped to 0…1 so "closed" is silent, and
+**No saw sounds.** The synths built on detuned saws (`ys_supersaw`,
+`ys_gatesaw`, `ys_pad`, `ys_strings`, `ys_choir`) are still defined but never
+played: not in the live blocks, the styles' defaults or palettes, or the
+Director's choices (`SAW_PRESETS` in `music/plan.py`). Chords and pads use
+organ, air, piano or electric piano; leads use glass. The acid lines
+(`ys_acid`, `ys_tbass`) stay. The gated saw's gate chops sustained chords
+inside the synth. The gate is remapped to 0…1 so "closed" is silent, and
 `gatetime` (one bar in seconds) locks it to the tempo. It's either a
 straight 16th chopper (`PulseDPW(freq, mul: 2).range(0, 1)`, or a smoothed
 `LFPulse` without sc3-plugins) or a stutter envelope built from a 16-step
@@ -235,7 +238,7 @@ the built-in performer makes that edit, so the music never stops.
 
 Lofi has no sustained pad; its harmony comes from Rhodes and felt-piano
 comping. Trance is the Switch Angel acid setup: acid line, ducking kick,
-gated saw and supersaw lead.
+organ chords and a glass lead (no saws).
 
 ```
 ./venv/bin/python orchestrator.py --style lofi              # live-coded lofi, local LLM
@@ -316,7 +319,7 @@ chorus, breakdown, verse, chorus and outro. It changes as it goes:
 - **Movement:** pad, keys and arpeggio filters drift slowly ("gentle"), not
   at all ("still"), or more ("lively").
 - **Its own sound:** every piece picks its instruments from its style's
-  palette. Pads can be warm analog, strings, organ, choir, airy or piano,
+  palette. Pads can be organ, airy or piano (no saw pads),
   plus several keys, leads and basses. Each piece also picks how it opens
   (keys first, drums and bass first, an arpeggio, a lone pad...), and it
   never repeats the previous piece's opening or pad.

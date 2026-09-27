@@ -564,7 +564,7 @@ def test_director_tempo_follows_the_locked_style():
 
 
 def test_gain_edits_stay_near_the_lines_level():
-    program = _program_with("piano", "strings")
+    program = _program_with("piano", "air_bed")
     line = program.lines["chords"]
     base = float(line.base_gain)
     ok = apply_edit(program, Edit("set_fx", role="chords", name="gain", value=f"{base * 1.05:.3f}"))
