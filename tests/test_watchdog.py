@@ -39,3 +39,21 @@ def test_restart_stops_the_engine_from_its_pid_file(tmp_path, monkeypatch):
     cfg = W.WatchdogConfig(restart_cmd="", engine_pidfile=str(pidfile))
     W.restart_engine(cfg)
     assert killed == [(4242, signal.SIGTERM)]
+
+
+def test_restart_under_live_sh_ignores_a_systemd_restart_cmd(tmp_path, monkeypatch):
+    """A YS_RESTART_CMD left in .env for systemd must not start a second
+    engine (without live.sh's --style) next to the one live.sh supervises."""
+    import signal
+
+    from stream import watchdog as W
+
+    pidfile = tmp_path / "engine.pid"
+    pidfile.write_text("4242\n")
+    killed, ran = [], []
+    monkeypatch.setattr(W.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    monkeypatch.setattr(W.subprocess, "run", lambda *a, **k: ran.append(a))
+    cfg = W.WatchdogConfig(restart_cmd="systemctl --user restart ystreamer-engine.service",
+                           engine_pidfile=str(pidfile))
+    W.restart_engine(cfg)
+    assert killed == [(4242, signal.SIGTERM)] and ran == []

@@ -131,8 +131,12 @@ if [[ "$UI_MODE" == "browser" && ( -z "$CHROMIUM" || -z "$(command -v Xvfb)" ) ]
 fi
 
 PIDS=()
-cleanup() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; }
-trap cleanup EXIT INT TERM
+FFMPEG_PID=""
+cleanup() { for p in $FFMPEG_PID "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; }
+# Exit on INT/TERM too: a trap that only cleans up would return into the
+# reconnect loop, retrying forever against the display it just stopped.
+trap cleanup EXIT
+trap 'exit 143' INT TERM
 
 if [[ "$UI_MODE" == "browser" ]]; then
     # Chromium draws at 60 Hz; a stream rate that doesn't divide 60 (24, 25)
@@ -214,8 +218,14 @@ run_once() {
         -c:v libx264 -preset veryfast "${TUNE[@]}" -b:v "$VBITRATE" -maxrate "$VBITRATE" \
         -bufsize "$VBITRATE" -g $(( FPS * 2 )) -keyint_min $(( FPS * 2 )) -pix_fmt yuv420p \
         -c:a aac -b:a 160k -ar 48000 -ac 2 \
-        -t "$SEGMENT_SECONDS" -f "${YS_STREAM_FORMAT:-flv}" "$TARGET" | watch_speed
-    return "${PIPESTATUS[0]}"
+        -t "$SEGMENT_SECONDS" -f "${YS_STREAM_FORMAT:-flv}" "$TARGET" > >(watch_speed) &
+    # In the background, so a stop signal runs the trap at once (bash defers
+    # traps until a foreground command ends, here hours away).
+    FFMPEG_PID=$!
+    wait "$FFMPEG_PID"
+    local status=$?
+    FFMPEG_PID=""
+    return "$status"
 }
 
 # Reconnect forever, with backoff on failures. A clean exit (segment ended)
