@@ -68,7 +68,6 @@ SIZE="${YS_VIDEO_SIZE:-$DEFAULT_SIZE}"
 W="${SIZE%x*}"; H="${SIZE#*x}"
 FPS="${YS_FPS:-30}"
 VBITRATE="${YS_VIDEO_BITRATE:-$DEFAULT_BITRATE}"
-echo "Stream: ${SIZE} at ${FPS} fps, ${VBITRATE} (YS_VIDEO_SIZE / YS_FPS / YS_VIDEO_BITRATE)" >&2
 SEGMENT_SECONDS=$(( ${YS_STREAM_SEGMENT_HOURS:-11} * 3600 ))
 FONT="${YS_FONT:-/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf}"
 MONO="${YS_MONO_FONT:-/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf}"
@@ -136,6 +135,13 @@ cleanup() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done; }
 trap cleanup EXIT INT TERM
 
 if [[ "$UI_MODE" == "browser" ]]; then
+    # Chromium draws at 60 Hz; a stream rate that doesn't divide 60 (24, 25)
+    # samples it unevenly (33/50 ms steps), so the waves judder. Round up.
+    if (( 60 % FPS != 0 )); then
+        for f in 15 20 30 60; do (( f >= FPS )) && break; done
+        echo "YS_FPS=${FPS} judders with the browser look (Chromium draws at 60 Hz); streaming at ${f} fps" >&2
+        FPS=$f
+    fi
     UI_PORT="${YS_UI_PORT:-8765}"
     DISPLAY_NUM="${YS_XVFB_DISPLAY:-:99}"
     PY="$REPO/venv/bin/python"; [[ -x "$PY" ]] || PY=python3
@@ -163,6 +169,7 @@ else
     TUNE=(-tune stillimage)
 fi
 
+echo "Stream: ${SIZE} at ${FPS} fps, ${VBITRATE} (YS_VIDEO_SIZE / YS_FPS / YS_VIDEO_BITRATE)" >&2
 WAVE_H=$(( H / 5 ))
 [[ "$UI_MODE" == "browser" ]] || FILTER="\
 [0:a]alimiter=limit=0.89:level=disabled,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,asplit=2[aout][awave];\

@@ -477,7 +477,9 @@ Twitch target the stream defaults to 720p at 3 Mbit/s: most channels get no
 lower-quality versions, so every viewer receives the stream as sent, and 1080p
 at 4.5 Mbit/s buffers for many. If the machine can't encode in real time,
 `logs/stream.log` says so (`the encoder runs at 0.85x real time`) with what to
-lower (`YS_VIDEO_SIZE`, `YS_FPS`, `YS_VIDEO_BITRATE`).
+lower (`YS_VIDEO_SIZE`, `YS_FPS`, `YS_VIDEO_BITRATE`). With the browser look,
+the frame rate is rounded up to one that divides 60 (24 becomes 30): Chromium
+draws at 60 Hz, and 24 fps samples it unevenly, so the waves judder.
 
 To keep it running after you close the terminal, start it inside `tmux`
 or `screen`. Test on an **unlisted** stream for a while before going public.
