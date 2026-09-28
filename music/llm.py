@@ -82,7 +82,11 @@ def _claude(model: str, system: str, user: str, timeout: float, max_tokens: int)
     if effort:
         kwargs["output_config"] = {"effort": effort}
     client = _claude_client.with_options(timeout=timeout)
-    request = dict(model=model, max_tokens=max(max_tokens, 16000), system=system,
+    # The system prompt is the fixed part (the Performer's rules): cache it, so
+    # repeated calls pay a fraction for it (no effect below the model's
+    # minimum cacheable length).
+    request = dict(model=model, max_tokens=max(max_tokens, 16000),
+                   system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                    messages=[{"role": "user", "content": user}], **kwargs)
     try:
         if model.startswith(_FALLBACK_MODELS):
@@ -220,7 +224,9 @@ def complete(model_id: str, system: str, user: str, timeout: float | None = None
             return _claude(model, system, user, timeout, max_tokens)
         if provider == "local":
             # Qwen-style chat templates otherwise "think" for thousands of tokens.
-            extra = {"chat_template_kwargs": {"enable_thinking": False}}
+            # cache_prompt: reuse the part of the prompt that matches the last
+            # call (the system prompt with the fixed rules comes first).
+            extra = {"chat_template_kwargs": {"enable_thinking": False}, "cache_prompt": True}
             if schema is not None and _local_schema_ok:
                 try:
                     return _openai_compatible(

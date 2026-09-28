@@ -895,7 +895,7 @@ class Performer:
                                                                  "minItems": 1, "maxItems": 3}},
                   "required": ["proposals"], "additionalProperties": False}
         asks = f"3 ideas for '{program.track.title}' ({self.state.phase})"
-        reply = self._ask_fitting(lambda: self._prompt(program, proposals=3), asks=asks,
+        reply = self._ask_fitting(lambda: self._prompt(program, proposals=3), proposals=3, asks=asks,
                                   show_full=self.show_llm, max_tokens=900, temperature=0.8, timeout=timeout,
                                   schema=schema)
         data = llm.extract_json(reply)
@@ -987,19 +987,21 @@ class Performer:
         self._llm_failures = 0
         return chosen
 
-    def _ask_fitting(self, build_prompt, **kwargs) -> str:
-        """converse() with the prompt from build_prompt(); if the model's
-        context window is too small for it, switch to compact prompts for
-        the rest of the run and retry once."""
+    def _ask_fitting(self, build_prompt, proposals: int = 0, **kwargs) -> str:
+        """converse() with the fixed rules as the system prompt and the prompt
+        from build_prompt(); if the model's context window is too small for
+        it, switch to compact prompts for the rest of the run and retry once."""
+        system = self.system_prompt(proposals)
         try:
-            return llm.converse("Performer", self.model_id, self._SYSTEM, build_prompt(), log=self.log, **kwargs)
+            return llm.converse("Performer", self.model_id, system, build_prompt(), log=self.log, **kwargs)
         except llm.LLMError as e:
             if self._compact or "context window" not in str(e):
                 raise
             self._compact = True
             self.log("[Performer] the prompt doesn't fit the model's context window; switching to compact "
                      "prompts (no glossary or example moves). Raise LLAMA_CTX_SIZE for the full prompt.")
-            return llm.converse("Performer", self.model_id, self._SYSTEM, build_prompt(), log=self.log, **kwargs)
+            return llm.converse("Performer", self.model_id, self.system_prompt(proposals), build_prompt(),
+                                log=self.log, **kwargs)
 
     _SYSTEM = "You are a live coder performing TidalCycles. Reply with JSON only."
 
@@ -1126,7 +1128,6 @@ class Performer:
                         "(remove or mute one first)") if full else json.dumps(addable)
         template = _load_prompt("performer.md")
         return template.format(
-            theme=self.theme or "chill, hypnotic, evolving", style=self.style,
             track=json.dumps(program.track.to_dict()), phase=self.state.phase,
             phase_help=PHASE_HELP[self.state.phase], edits_in_phase=self.state.edits_in_phase,
             bars_left=round(self.phase_bars_left()), phase_bars=self.step_bars(),
@@ -1137,14 +1138,35 @@ class Performer:
             examples=("(compact prompt)" if self._compact
                       else "\n".join(f"- {e}" for e in PHASE_EXAMPLES[self.state.phase])),
             recent="\n".join(self.recent) or "(none yet: this is the start of the track)",
-            wrapper_notes=_wrapper_notes(wrap_kinds, used_wrappers, names_only=self._compact),
-            fx_notes="\n".join(f"- `{n}` [{lo:g}-{hi:g}]: {FX_NOTES[n]}"
-                                for n, (lo, hi) in {**FX_RANGES, **PF_RANGES}.items() if n in used_fx)
-            if not self._compact else
-            "Ranges: " + ", ".join(f"{n} {lo:g}-{hi:g}" for n, (lo, hi) in {**FX_RANGES, **PF_RANGES}.items()
-                                   if n in used_fx),
-            reply=REPLY_PROPOSALS.replace("N", str(proposals)) if proposals else REPLY_SINGLE,
+            # The full glossary is in the fixed rules; a compact prompt (small
+            # context windows) gets just the names and ranges in play here.
+            wrapper_notes="" if not self._compact else (
+                "\nWrappers: " + _wrapper_notes(wrap_kinds, used_wrappers, names_only=True).replace("\n", " ")
+                + "\nRanges: " + ", ".join(f"{n} {lo:g}-{hi:g}" for n, (lo, hi) in {**FX_RANGES, **PF_RANGES}.items()
+                                            if n in used_fx)),
         )
+
+    def system_prompt(self, proposals: int = 0) -> str:
+        """The fixed part of the Performer's prompt: the role, how to read the
+        code, the operations, the taste and the reply format. It is the same
+        from call to call (it changes only with the style or the reply mode),
+        so it goes first, as the system prompt: a local server reuses it from
+        the previous call instead of reading it again, and Claude caches it."""
+        if self._compact:
+            glossary = "(compact prompt: the wrappers and ranges in play are listed with the lines)"
+        else:
+            glossary = ("Wrappers (a line takes those of its group, see `wrap_with`):\n"
+                        + "\n".join(f"- {kind}: " + ", ".join(f"`{w}`" for w in ws)
+                                     for kind, ws in _WRAPPER_KINDS.items())
+                        + "\n\n" + "\n".join(f"- `{w}`: {note}" for w, note in sorted(WRAPPER_NOTES.items()))
+                        + "\n\nEffects and controls (a line takes those in its `can_set_fx` / `controls`):\n"
+                        + "\n".join(f"- `{n}` [{lo:g}-{hi:g}]: {FX_NOTES[n]}"
+                                     for n, (lo, hi) in {**FX_RANGES, **PF_RANGES}.items() if n in FX_NOTES))
+        rules = _load_prompt("performer_rules.md").format(
+            theme=self.theme or "chill, hypnotic, evolving", style=self.style,
+            max_lines=self.settings["max_lines"], glossary=glossary,
+            reply=REPLY_PROPOSALS.replace("N", str(proposals)) if proposals else REPLY_SINGLE)
+        return f"{self._SYSTEM}\n\n{rules}"
 
 
 _WRAPPER_KINDS = {"drum wrappers": DRUM_WRAPPERS, "bass wrappers": BASS_WRAPPERS,
