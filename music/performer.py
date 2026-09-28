@@ -116,6 +116,10 @@ class Performer:
         # build's quick pace still leaves it time to make the moves.
         self.latency: float | None = None
         self._bar_seconds = 0.0
+        # Knob rides: (role, control) -> direction (+1 up, -1 down). A ride
+        # keeps going for several edits, like a hand on a knob, then turns.
+        self._rides: dict[tuple[str, str], int] = {}
+        self._last_ride: str | None = None
         # Requests typed into the stream page (music/host_requests.py); the
         # engine connects the queue.
         self.requests = None
@@ -475,14 +479,27 @@ class Performer:
         """One small revision to a playing line."""
         rng = self.rng
         roles = program.active_roles() or list(program.lines)
+        # Stay with the knob being ridden about half the time, so a ride
+        # builds over several edits instead of scattering across lines.
+        last = self._last_ride
+        if last and last in program.active_roles() and rng.random() < 0.5:
+            edit = self._ride_edit(last, program.lines[last], calm)
+            if edit is not None:
+                try:
+                    apply_edit(program, edit, self.settings["max_lines"])
+                    return edit
+                except EditError:
+                    pass
         for _ in range(12):
             role = rng.choice(roles)
             line = program.lines[role]
-            # Moves a listener hears (new notes, rhythms, variations) over
-            # small effect nudges.
-            kind = rng.choice(["pattern", "pattern", "pattern", "wrap", "wrap", "wrap", "fx", "pf"])
+            # Small, audible, cumulative: one note or step, or a knob ridden a
+            # little further; a new wrapper now and then.
+            kind = rng.choice(["pattern", "pattern", "pattern", "pattern", "ride", "ride", "ride", "wrap", "fx"])
             edit = None
-            if kind == "pattern" and line.patterns:
+            if kind == "ride":
+                edit = self._ride_edit(role, line, calm)
+            elif kind == "pattern" and line.patterns:
                 edit = self._pattern_edit(role, line)
             elif kind == "fx":
                 edit = self._fx_edit(role, line, calm)
@@ -512,18 +529,98 @@ class Performer:
             value = rng.choice([v for v in CHOICE_SLOTS[slot] if v != current])
             return Edit("set_pattern", role=role, name=slot, value=value, reason=f"switch the {slot} pattern")
         variants = [v for v in (block.patterns.get(slot, []) if block else []) if v != current]
+        # Small first: one step on or off (drums), one note or rest (melodies);
+        # a whole new pattern only now and then.
+        if line.drums:
+            small = self._drum_step(current)
+            if small and (not variants or rng.random() < 0.9):
+                return Edit("set_pattern", role=role, name=slot, value=small,
+                            reason=f"one {'hit more' if small.count('~') < current.count('~') else 'hit less'} "
+                                   f"in the {role} {slot}")
+        elif block and block.pool and rng.random() < 0.3:
+            small = self._melodic_step(current, block.pool)
+            if small:
+                return Edit("set_pattern", role=role, name=slot, value=small,
+                            reason=f"{'a rest' if small.count('~') > current.count('~') else 'one more note'} "
+                                   f"in the {role}" + ("" if slot == role else f" {slot}"))
         # Notes only: not the counts after * ! / @ (e.g. the 16 in "0*16").
         numbers = [m for m in re.finditer(r"(?<![*!/@%\d.])-?\d+", current)]
-        if not line.drums and numbers and block and block.pool and (not variants or rng.random() < 0.6):
+        if not line.drums and numbers and block and block.pool and (not variants or rng.random() < 0.9):
             m = rng.choice(numbers)
             new_num = str(rng.choice([n for n in block.pool if str(n) != m.group()] or block.pool))
             value = current[:m.start()] + new_num + current[m.end():]
             return Edit("set_pattern", role=role, name=slot, value=value,
-                        reason=f"change one note of the {role} {slot}")
+                        reason=f"change one note of the {role}" + ("" if slot == role else f" {slot}"))
         if variants:
             return Edit("set_pattern", role=role, name=slot, value=rng.choice(variants),
                         reason=f"new {slot} pattern on the {role}")
         return None
+
+    def _drum_step(self, pattern: str) -> str | None:
+        """Toggle one step of a flat drum layer: a rest becomes a hit (with a
+        sound already in that pattern) or a hit a rest."""
+        layers = pattern.split(",")
+        k = self.rng.randrange(len(layers))
+        tokens = layers[k].split()
+        simple = [i for i, t in enumerate(tokens) if re.fullmatch(r"~|[a-z0-9]+(:\d+)?", t)]
+        sounds = [t for t in tokens if t != "~" and re.fullmatch(r"[a-z0-9]+(:\d+)?", t)]
+        if len(tokens) < 4 or not simple or not sounds:
+            return None
+        i = self.rng.choice(simple)
+        tokens[i] = self.rng.choice(sounds) if tokens[i] == "~" else "~"
+        if all(t == "~" for t in tokens):
+            return None
+        layers[k] = (" " if layers[k].startswith(" ") else "") + " ".join(tokens)
+        return ",".join(layers)
+
+    def _melodic_step(self, pattern: str, pool: list[int]) -> str | None:
+        """In a flat melody: one note becomes a rest, or a rest a note (a
+        chord tone, so it stays in harmony)."""
+        tokens = pattern.split()
+        if len(tokens) < 4 or not all(re.fullmatch(r"~|-?\d+", t) for t in tokens):
+            return None
+        rests = [i for i, t in enumerate(tokens) if t == "~"]
+        notes = [i for i, t in enumerate(tokens) if t != "~"]
+        chord_tones = [n for n in pool if n % 7 in (0, 2, 4, 6)] or [0]
+        if rests and (len(notes) <= 2 or self.rng.random() < 0.5):
+            tokens[self.rng.choice(rests)] = str(self.rng.choice(chord_tones))
+        elif len(notes) > 2:
+            tokens[self.rng.choice(notes)] = "~"
+        else:
+            return None
+        return " ".join(tokens)
+
+    def _ride_edit(self, role: str, line, calm: bool) -> Edit | None:
+        """Ride a knob a little further: the acid, else the line's filter.
+        The direction holds across edits (like a hand on the knob) and turns
+        at the end of its range."""
+        pfs = dict(line.pfs)
+        if "acid" in pfs:
+            name, lo, hi, current = "acid", 0.2, 0.9, pfs["acid"]
+            step = self.rng.uniform(0.03, 0.06)
+        else:
+            fx = dict(line.fx)
+            if "lpf" not in ROLE_FX.get(role, ["lpf"]):
+                return None
+            name, lo, hi, current = "lpf", 400.0, 8000.0, fx.get("lpf", "")
+            step = None
+        base = float(current) if _NUM_RE.match(current or "") else (lo + hi) / 2
+        key = (role, name)
+        direction = self._rides.get(key) or self.rng.choice([-1, 1])
+        if calm:
+            direction = -1
+        if (direction > 0 and base >= hi * 0.97) or (direction < 0 and base <= lo * 1.03):
+            direction = -direction                      # the end of the range: turn
+        self._rides[key] = direction
+        self._last_ride = role
+        if name == "acid":
+            value = round(min(hi, max(lo, base + direction * step)), 3)
+            return Edit("set_pf", role=role, name="acid", value=f"{value:g}",
+                        reason=f"ride the acid {'open' if direction > 0 else 'closed'} a little")
+        factor = self.rng.uniform(1.06, 1.15)
+        value = round(min(hi, max(lo, base * factor if direction > 0 else base / factor)))
+        return Edit("set_fx", role=role, name="lpf", value=str(value),
+                    reason=f"ride the {role} filter {'open' if direction > 0 else 'down'} a little")
 
     def _fx_edit(self, role: str, line, calm: bool) -> Edit | None:
         rng = self.rng
@@ -536,11 +633,11 @@ class Performer:
         current = fx.get(name)
         if name == "lpf":
             base = float(current) if current and re.match(r"^[\d.]+$", current) else 3000.0
-            if rng.random() < 0.35:
+            if rng.random() < 0.1:
                 a, b = round(max(lo, base * 0.4)), round(min(hi, base * 1.1))
                 value = f"(slow {rng.choice([4, 8, 16])} $ range {a} {b} sine)"
                 return Edit("set_fx", role=role, name="lpf", value=value, reason=f"let the {role} filter breathe")
-            factor = rng.uniform(0.55, 0.9) if calm else rng.uniform(0.7, 1.4)
+            factor = rng.uniform(0.75, 0.92) if calm else rng.choice([rng.uniform(0.85, 0.94), rng.uniform(1.06, 1.18)])
             value = f"{round(min(hi, max(lo, base * factor)))}"
             return Edit("set_fx", role=role, name="lpf", value=value,
                         reason=f"{'darken' if factor < 1 else 'brighten'} the {role}")
@@ -1087,10 +1184,10 @@ def _clamp_value(op: str, name: str, value: str, program: Program) -> str:
 
 PHASE_HELP = {
     "build": "Build the track up: add the next line almost every edit, until the full groove plays.",
-    "groove": "The track is up: a full, layered groove. Make it move: give a melody a second bar "
-              "(`<[...] [...]>`), turn a line into a 16th-note arp (`\"<0 4 7 9>*16\"`), layer an "
-              "octave (`off 0.125 (|+ n 12)`), ride a filter or the acid knob with a slow sine, "
-              "add a variation wrapper. Keep every line in harmony.",
+    "groove": "The track is up: a full, layered groove. Keep it moving with small steps, one per "
+              "edit: change one note, add or drop one hit, ride the acid knob or a filter a little "
+              "further in the same direction. Now and then a bigger touch (a second bar with "
+              "`<[...] [...]>`, an octave layer). Keep every line in harmony.",
     "breakdown": "Breakdown: mute the beat and/or bass, and make what's left more spacious.",
     "rebuild": "Bring the muted lines back (unmute), building tension.",
     "groove2": "Second peak: the richest part of the track. Bring in what was missing, intensify, "
@@ -1162,10 +1259,10 @@ PHASE_EXAMPLES = {
         "Before adding the next line, give the new one a tweak so it sits (e.g. lpf on keys to 2500).",
     ],
     "groove": [
-        "Change one or two notes of the melody so the phrase answers itself (\"0 ~ 2 4\" -> \"0 ~ 2 5\").",
-        "Let a filter breathe: set_fx lpf to (slow 16 $ range 1200 4000 sine) on the keys.",
-        "Wrap the melody in off 0.25 (|+ n 12) for a call-and-answer echo, then take it off a few edits later.",
-        "Open the acid knob step by step across several edits to build tension.",
+        "Change ONE note of the melody so the phrase answers itself (\"0 ~ 2 4\" -> \"0 ~ 2 6\").",
+        "Add or remove one hit in the drums (\"~ cp ~ cp\" -> \"~ cp ~ [cp cp]\").",
+        "Ride the acid knob a little further (0.52 -> 0.56), and keep riding it the same way next time.",
+        "Open a filter a touch (lpf 2400 -> 2700); a few edits later, a touch more.",
     ],
     "breakdown": [
         "Mute the beat first; the space it leaves is the point.",
