@@ -326,9 +326,10 @@ def test_prompt_teaches_tidal_and_remembers_recent_edits():
     program = _program_with("lofi", "dusty_beat", "sub_walk", "felt_melody")
     performer.applied(Edit("set_fx", role="beat", name="lpf", value="2400", reason="darker drums", source="LLM"))
     prompt = performer._prompt(program)
-    assert "`jux rev`: a reversed copy in the other ear" in prompt       # wrapper glossary
-    assert "`lpf` [200-9000]: low-pass cutoff" in prompt                  # effect glossary
-    assert "`<a b>` alternates bar by bar" in prompt                       # mini-notation
+    rules = performer.system_prompt()
+    assert "`jux rev`: a reversed copy in the other ear" in rules        # wrapper glossary (fixed rules)
+    assert "`lpf` [200-9000]: low-pass cutoff" in rules                   # effect glossary
+    assert "`<a b>` alternates bar by bar" in performer.system_prompt()    # mini-notation (the fixed rules)
     assert "- d1: # lpf -> 2400 (you, build): darker drums" in prompt      # its own recent edits
     assert "Good moves in this phase" in prompt and "{" not in prompt.split("## Reply")[0].split("```json")[0][-50:]
 
@@ -530,7 +531,7 @@ def test_small_context_window_switches_to_compact_prompts(monkeypatch):
     prompts = []
 
     def fake(agent, model_id, system, prompt, **kw):
-        prompts.append(prompt)
+        prompts.append(system + prompt)          # what the model reads: the rules and the prompt
         if len(prompts) == 1:
             raise llm.LLMError("HTTP 400: the prompt doesn't fit the model's context window (...)")
         return '{"listening": "x", "reason": "darker", "op": "set_fx", "role": "beat", "name": "lpf", "value": "2400"}'
@@ -730,3 +731,56 @@ def test_the_build_gives_a_slow_model_enough_bars_to_make_the_moves(monkeypatch)
     fast = Performer(random.Random(0), style="trance", log=lambda *_: None)    # built-in only
     fast.state.phase, fast._bar_seconds, fast.latency = "build", 1.76, 30.0
     assert fast.edit_bars_now() == 4
+
+
+def test_the_fixed_rules_come_first_and_never_change(monkeypatch):
+    """The system prompt holds everything that doesn't change, byte for byte,
+    so llama-server reuses it and Claude caches it; the program, the phase
+    and the recent moves go in the user prompt."""
+    performer = Performer(random.Random(0), style="trance", model_id="local", log=lambda *_: None)
+    a = _program_with("trance", "trance_beat")
+    b = _program_with("trance", "trance_beat", "acid", "rolling_bass")
+    first = performer.system_prompt()
+    performer.state.phase = "breakdown"
+    performer.applied(Edit("mute", role="beat", reason="space", source="LLM"))
+    assert performer.system_prompt() == first
+    assert "## Operations" in first and "## Reading the code" in first and "ys_acid" not in first
+    assert "ys_acid" in performer._prompt(b) and "## Operations" not in performer._prompt(a)
+    assert performer.system_prompt(proposals=3) != first            # the judge's reply format differs
+    seen = {}
+    monkeypatch.setattr(llm, "converse", lambda agent, model, system, user, **k:
+                        seen.update(system=system, user=user) or "{}")
+    performer._ask_fitting(lambda: performer._prompt(b))
+    assert seen["system"] == first and seen["user"].startswith("Track:")
+
+
+def test_caching_is_asked_for(monkeypatch):
+    import types
+
+    import requests
+
+    bodies = []
+
+    def fake_post(url, headers, json, timeout):
+        bodies.append(json)
+        return types.SimpleNamespace(status_code=200, text="{}",
+                                     json=lambda: {"choices": [{"message": {"content": "{}"}}]})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    llm.complete("local", "rules", "now")
+    assert bodies[-1]["cache_prompt"] is True
+    assert bodies[-1]["messages"][0] == {"role": "system", "content": "rules"}
+
+    sent = {}
+
+    class Messages:
+        def create(self, **kw):
+            sent.update(kw)
+            return types.SimpleNamespace(stop_reason="end_turn",
+                                         content=[types.SimpleNamespace(type="text", text="{}")])
+
+    client = types.SimpleNamespace(messages=Messages(), beta=types.SimpleNamespace(messages=Messages()))
+    client.with_options = lambda **k: client
+    monkeypatch.setattr(llm, "_claude_client", client)
+    llm._claude("claude-sonnet-5", "rules", "now", 10, 100)
+    assert sent["system"] == [{"type": "text", "text": "rules", "cache_control": {"type": "ephemeral"}}]
