@@ -14,6 +14,7 @@ import copy
 import math
 import threading
 import time
+from collections import deque
 from typing import Callable
 
 from . import runtime
@@ -42,6 +43,14 @@ class LiveEngine:
         self.max_tracks = max_tracks
         self.program: Program | None = None
         self.edits = 0
+        # The arranger's transitions (music/arranger.py): the phase they were
+        # set for, and the device lines playing now (channel -> statement).
+        self._arranged_phase: str | None = None
+        self._devices: dict[int, str] = {}
+        # The host's 👍 / 👎 from the stream page (host_requests.RatingQueue;
+        # the orchestrator connects it), matched to the last change before it.
+        self.ratings = None
+        self._recent_edits: deque = deque(maxlen=32)      # (time, describe, source)
         self.groove_complexity: list[float] = []   # complexity after each groove edit, per track
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="performer")
         # Narration lines are written in the background so the music never waits.
@@ -96,6 +105,40 @@ class LiveEngine:
                      peak_complexity=max(values) if values else None,
                      code=[program.statement(r) for r in program.lines], program=program.to_dict())
 
+    def _arrange(self, program: Program) -> None:
+        """The arc moved on: play the transition (music/arranger.py). For a
+        drop, one bar without kick and bass first, then it all lands."""
+        from . import arranger
+
+        phase = self.performer.state.phase
+        if phase == self._arranged_phase:
+            return
+        before, self._arranged_phase = self._arranged_phase, phase
+        plan = arranger.plan_for(program.track.style, before, phase)
+        statements = list(plan["statements"]) + ([arranger.impact()] if plan["impact"] else [])
+        if not self._type_ok(statements):
+            self.log("[Arranger] the transition didn't type check; skipped")
+            return
+        breath = [r for r in arranger.BREATH_ROLES if r in program.active_roles()] if plan["breath"] else []
+        if breath:
+            self._send([arranger.silence(ROLE_CHANNELS[r]) for r in breath] +
+                       [s for s in plan["statements"] if s.startswith(f"d{arranger.RISER} ")] +
+                       [arranger.silence(arranger.FILL)])
+            self._wait_until(math.floor(self.clock.cycle()) + 1)          # one bar's breath
+            statements = [program.statement(r) for r in breath] + statements
+        if not self._send(statements):
+            return
+        self._devices = dict(plan["playing"])
+        if plan["note"]:
+            self.log(f"🎚 Arranger: {plan['note']}")
+            runtime.append_thought(f"🎚 {plan['note']}")
+            runtime.ui_event("arranger", text=plan["note"], phase=phase,
+                             devices=[s for s in statements if not s.startswith(tuple(
+                                 f"d{ROLE_CHANNELS[r]} " for r in breath))])
+            self._record("arrangement", **self._track_info(program), before=before, after=phase,
+                         note=plan["note"], breath=bool(breath), statements=statements)
+        self._publish(program, None, plan["note"])
+
     def _follow_harmony(self, program: Program) -> Program:
         """Change the progression when the arc reaches a part with its own
         (e.g. the breakdown), starting on its first chord at this bar."""
@@ -130,9 +173,33 @@ class LiveEngine:
 
     # ----------------------------------------------------------------- helpers
 
+    def _check_ratings(self) -> None:
+        if self.ratings is None or self.program is None:
+            return
+        while True:
+            rating = self.ratings.take()
+            if rating is None:
+                return
+            program, t = self.program, rating["t"]
+            before = [e for e in self._recent_edits if e[0] <= t]
+            last = before[-1] if before else None
+            edit = last[1] if last else ""
+            thumb = "👍" if rating["rating"] > 0 else "👎"
+            self.log(f"{thumb} The host {'likes' if rating['rating'] > 0 else 'dislikes'} this"
+                     + (f" (the last change: {edit})" if edit else ""))
+            runtime.append_thought(f"{thumb} host rating" + (f" after: {edit}" if edit else ""))
+            runtime.ui_event("rating", rating=rating["rating"], edit=edit)
+            self.performer.note_rating(rating["rating"], edit)
+            self._record("rating", **self._track_info(program), rating=rating["rating"], rated_at=t,
+                         phase=self.performer.state.phase, last_edit=edit,
+                         last_edit_source=last[2] if last else None,
+                         seconds_since_edit=round(t - last[0], 1) if last else None,
+                         code=[program.statement(r) for r in program.lines])
+
     def _wait_until(self, cycle: float) -> None:
         last_beat = 0.0
         while not self.stop_event.is_set():
+            self._check_ratings()
             remaining = self.clock.seconds_until(cycle)
             if remaining <= 0:
                 return
@@ -210,6 +277,9 @@ class LiveEngine:
                          "text": f"d{line.channel} $ " + (program.expression(role) if not line.muted
                                                          else line.render(track.harmony())),
                          "edited": role == highlight})
+        for channel, statement in sorted(self._devices.items()):
+            code.append({"channel": channel, "role": "arranger", "muted": False, "text": statement,
+                         "edited": False})
         stats = dict(perf.stats)
         judged = stats.get("judge_llm", 0) + stats.get("judge_builtin", 0)
         models = {}
@@ -376,6 +446,7 @@ class LiveEngine:
             if new.track.bpm != program.track.bpm:
                 self.clock.set_cps(new.track.cps)
             self._record_edit(program, new, edit)
+            self._recent_edits.append((self.clock._now(), edit.describe(), edit.source or "built-in"))
             program = self.program = new
             self.edits += 1
             highlight = edit.role if edit.role in program.lines else None
@@ -416,6 +487,7 @@ class LiveEngine:
                 self._send(silence + [program.tempo_statement()])
                 self.clock.set_cps(track.cps)
                 self._record_track_start(program)
+                self._arrange(program)
                 self._announce(program)
                 self._publish(program, None, "")
             # Move the arc on now (e.g. build -> groove once the last line is
@@ -423,6 +495,7 @@ class LiveEngine:
             # pace, the same one the performer's deadline uses.
             self.performer.advance_phase(program)
             program = self.program = self._follow_harmony(program)
+            self._arrange(program)
             next_cycle += self.performer.edit_bars_now()
         self.performer.report_stats()
         self._pool.shutdown(wait=False, cancel_futures=True)

@@ -29,9 +29,12 @@ const ICONS = {
   arc:       '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M1 11c3-7 6-7 7-2s4 5 7-2v5H1z"/></svg>',
   track:     '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M6 2l8-1v10a2 2 0 11-2-2V4L7 5v8a2 2 0 11-2-2V2z"/></svg>',
   request:   '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M1 7l14-6-5 14-2-6z"/></svg>',
+  arranger:  '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M2 2h2v12H2zm5 4h2v8H7zm5-3h2v11h-2z"/></svg>',
+  rating:    '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M8 14s-6-3.6-6-8a3.5 3.5 0 016-2.4A3.5 3.5 0 0114 6c0 4.4-6 8-6 8z"/></svg>',
 };
 const AGENT_NAMES = { director: "Director", performer: "Performer", judge: "Judge", narrator: "Narrator",
-                      arc: "Arc", track: "New track", request: "Host request" };
+                      arc: "Arc", track: "New track", request: "Host request", arranger: "Arranger",
+                      rating: "Host rating" };
 
 let ui = null;              // latest ui.json
 let shownEvents = new Set();
@@ -187,7 +190,7 @@ function card(ev, old, fresh) {
   const kind = ev.agent;
   const colour = { director: "var(--director)", performer: "var(--performer)", judge: "var(--judge)",
                    narrator: "var(--narrator)", arc: "var(--arc)", track: "var(--accent)",
-                   request: "var(--director)" }[kind] || "var(--accent)";
+                   request: "var(--director)", arranger: "var(--arc)", rating: "var(--narrator)" }[kind] || "var(--accent)";
   let meta = "", body = "";
   if (kind === "performer") {
     const src = ev.source || "";
@@ -220,6 +223,11 @@ function card(ev, old, fresh) {
     meta = `<span class="badge ${src.startsWith("LLM") ? "ai" : "random"}">${src.startsWith("LLM") ? "AI review" : "built-in"}</span>`;
     body = `<div class="asked">${esc(ev.text)}</div>` + `<div class="move">${esc(ev.edit)}</div>` +
            (ev.review ? `<div class="why">${esc(ev.review)}</div>` : "");
+  } else if (kind === "arranger") {
+    body = `<div class="why">${esc(ev.text)}</div>`;
+  } else if (kind === "rating") {
+    body = `<div class="why">${ev.rating > 0 ? "👍 the host likes this" : "👎 the host doesn't like this"}</div>` +
+           (ev.edit ? `<div class="move">${esc(ev.edit)}</div>` : "");
   } else if (kind === "track") {
     body = `<div class="why"><b>${esc(ev.title)}</b> · ${esc(ev.style)} · ${esc(ev.key)} · ${Math.round(ev.bpm || 0)} bpm</div>` +
            (ev.sounds ? `<div class="note">${esc(ev.sounds)}</div>` : "") +
@@ -465,6 +473,20 @@ const params = new URLSearchParams(location.search);
 if (params.get("poster")) document.body.classList.add("poster");
 // ?capture=1: the page as captured for the stream (no request box).
 if (params.get("capture")) document.body.classList.add("capture");
+
+// 👍 / 👎 on what is playing: POST /rate, kept with the music in the session memory.
+document.querySelectorAll("#ask .rate").forEach((b) => b.addEventListener("click", async () => {
+  const note = $("ask-note");
+  try {
+    const r = await fetch("/rate", { method: "POST", headers: { "Content-Type": "application/json" },
+                                     body: JSON.stringify({ rating: Number(b.dataset.rating) }) });
+    note.textContent = r.ok ? (b.dataset.rating > 0 ? "👍 noted, with what's playing" : "👎 noted, with what's playing")
+                            : "couldn't send it";
+  } catch (err) {
+    note.textContent = "couldn't reach the page server";
+  }
+  setTimeout(() => { note.textContent = ""; }, 6000);
+}));
 
 // The host's request box: POST /request, picked up at the Performer's next edit.
 $("ask").addEventListener("submit", async (e) => {

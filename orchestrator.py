@@ -414,12 +414,13 @@ def run_engine(args) -> None:
                           build_bars=config.BUILD_BARS, max_lines=director.settings["max_lines"],
                           resume=bool(args.resume))
         print(f"[orchestrator] Session log: {session_log.path}")
-        from music.host_requests import RequestQueue
+        from music.host_requests import RatingQueue, RequestQueue
 
         # Requests typed into the stream page ("more bass") reach the Performer.
         director.requests = RequestQueue()
         engine = LiveEngine(send, director, narrator=narrator, type_checker=type_checker,
                             max_tracks=args.pieces, session_log=session_log)
+        engine.ratings = RatingQueue()          # 👍 / 👎 from the stream page
     else:
         engine = MusicEngine(send, director, use_custom_synths=not args.no_custom_synths, narrator=narrator,
                              free_layer=args.free_layer, type_checker=type_checker, max_pieces=args.pieces)

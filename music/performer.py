@@ -328,6 +328,13 @@ class Performer:
 
     # ------------------------------------------------------------ requests
 
+    def note_rating(self, rating: int, edit: str) -> None:
+        """The host rated what is playing: keep it with the recent edits, so
+        the model builds on what was liked and steers away from what wasn't."""
+        thumb = "👍 liked" if rating > 0 else "👎 disliked"
+        self.recent.append(f"- the host {thumb} what played after: {edit}" if edit
+                           else f"- the host {thumb} what is playing")
+
     def request_waiting(self) -> bool:
         return self.requests is not None and self.requests.pending()
 
