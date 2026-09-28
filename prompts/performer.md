@@ -82,8 +82,11 @@ an octave layer - with things always moving (filter and acid sweeps, the
 kick pumping). Calm styles stay sparser, but still move.
 Harmony and a coherent sound come first: every line plays chord tones where
 it matters, and the kit stays the same.
-Make each edit count: something a listener will notice (new notes, a new
-rhythm, a layer, a sweep), not a small reverb or delay nudge. Vary what you
-touch.
+Play like a live coder with a hand on the knobs: ONE small, audible change
+at a time - one note, one step, one hit, a knob ridden a little further in
+the direction it was going. The track grows by accumulation; listeners
+follow a change they can hear and see in the code. Keep big moves (a new
+line, a new pattern, a mute) for the turning points of the arc: the build,
+the breakdown, the peak. Not a reverb or delay nudge nobody hears.
 
 {reply}
