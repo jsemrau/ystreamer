@@ -328,6 +328,13 @@ class Performer:
 
     # ------------------------------------------------------------ requests
 
+    def note_rating(self, rating: int, edit: str) -> None:
+        """The host rated what is playing: keep it with the recent edits, so
+        the model builds on what was liked and steers away from what wasn't."""
+        thumb = "👍 liked" if rating > 0 else "👎 disliked"
+        self.recent.append(f"- the host {thumb} what played after: {edit}" if edit
+                           else f"- the host {thumb} what is playing")
+
     def request_waiting(self) -> bool:
         return self.requests is not None and self.requests.pending()
 
@@ -651,7 +658,12 @@ class Performer:
         return Edit("set_fx", role=role, name=name, value=f"{value:g}", reason=f"adjust the {role} {name}")
 
     def _pf_edit(self, role: str, line, calm: bool) -> Edit | None:
-        name, current = self.rng.choice(line.pfs)
+        # Knobs only: a control holding a rhythm (the acid's accent pattern)
+        # isn't a knob to nudge.
+        knobs = [(n, v) for n, v in line.pfs if not v.startswith('"')]
+        if not knobs:
+            return None
+        name, current = self.rng.choice(knobs)
         lo, hi = PF_RANGES[name]
         base = float(current) if re.match(r"^[\d.]+$", current) else (lo + hi) / 2
         if name == "acid":

@@ -40,7 +40,7 @@ FX_RANGES: dict[str, tuple[float, float]] = {
 }
 # Custom SynthDef controls (sent with pF).
 PF_RANGES: dict[str, tuple[float, float]] = {
-    "acid": (0.1, 0.95), "acidres": (0.08, 0.6), "gatedepth": (0.0, 1.0), "duckdepth": (0.0, 0.9),
+    "acid": (0.1, 0.95), "acidres": (0.08, 0.6), "accent": (0.0, 1.0), "drive": (0.5, 3.0), "gatedepth": (0.0, 1.0), "duckdepth": (0.0, 0.9),
 }
 
 # Wrappers an edit may add, per kind of line. Pitch-safe: only octave shifts.
@@ -101,6 +101,8 @@ FX_NOTES = {
     "speed": "sample playback speed: 2 = an octave up and shorter",
     "acid": "the acid squelch knob: 0.2 closed and muffled, 0.9 screaming open",
     "acidres": "resonance of the acid filter: higher is more whistling",
+    "accent": "the 303 accent: accented steps (1) are louder, brighter, more resonant; a pattern like \"[0 0 1 0]*4\"",
+    "drive": "grit on the acid: 1 clean, 2 dirty, 3 screaming",
     "gatedepth": "how hard the trance gate chops the chords",
     "duckdepth": "sidechain pump from the kick: 0 none, 0.8 strong pumping",
 }

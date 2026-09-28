@@ -152,8 +152,10 @@ def test_synthdefs_have_acid_env_and_duck():
     with open(os.path.join(os.path.dirname(__file__), "..", "tidal", "synthdefs.scd")) as f:
         text = f.read()
     acid = text[text.index("SynthDef(\\ys_acid"):]
-    assert "100 * (2 ** (acid.clip(0, 1) * 9 * fenv))" in acid          # lpf(100).lpenv(x * 9)
-    assert "Env([0, 1, 0.2], [0.001, 0.12]" in acid                     # lps(.2).lpd(.12)
+    # lpf(100).lpenv(x * 9), lps(.2).lpd(.12) when unaccented (accent 0); an
+    # accent deepens the envelope and shortens its decay, like a 303's.
+    assert "100 * (2 ** (acid.clip(0, 1) * (9 + (2 * acc)) * fenv))" in acid
+    assert "Env([0, 1, 0.2], [0.001, 0.12 - (0.04 * acc)]" in acid
     assert text.count("Impulse.ar(beattime.reciprocal)") == 2           # duck on every beat
 
 

@@ -89,3 +89,52 @@ class RequestQueue:
         with self._lock:
             self._read_new()
             return self._pending.pop(0) if self._pending else None
+
+
+# ------------------------------------------------------------------ ratings
+# The host's thumbs (👍 = 1, 👎 = -1) on what is playing, from the stream
+# page: stamped with the time, so they can be matched to the music.
+
+def _ratings_path() -> str:
+    return os.path.join(config.RUNTIME_DIR, "ratings.jsonl")
+
+
+def submit_rating(value) -> dict | None:
+    try:
+        rating = 1 if int(value) > 0 else -1
+    except (TypeError, ValueError):
+        return None
+    record = {"rating": rating, "t": time.time()}
+    os.makedirs(config.RUNTIME_DIR, exist_ok=True)
+    with open(_ratings_path(), "a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+    return record
+
+
+class RatingQueue(RequestQueue):
+    """New ratings since the engine started ({"rating": 1 | -1, "t": ...})."""
+
+    def __init__(self, path: str | None = None, from_start: bool = False):
+        super().__init__(path or _ratings_path(), from_start)
+
+    def _read_new(self) -> None:
+        try:
+            size = os.path.getsize(self.path)
+        except OSError:
+            return
+        if size < self._offset:
+            self._offset = 0
+        if size == self._offset:
+            return
+        with open(self.path, "rb") as f:
+            f.seek(self._offset)
+            chunk = f.read()
+        end = chunk.rfind(b"\n") + 1
+        self._offset += end
+        for line in chunk[:end].decode("utf-8", "replace").splitlines():
+            try:
+                record = json.loads(line)
+                rating = 1 if int(record["rating"]) > 0 else -1
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                continue
+            self._pending.append({"rating": rating, "t": float(record.get("t", time.time()))})

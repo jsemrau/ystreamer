@@ -34,7 +34,7 @@ ROLE_TARGET_LUFS = {"lead": -21.0, "bass": -19.0, "keys": -25.0, "chords": -29.0
 
 # Synths whose single-note measurement doesn't tell how loud a fast
 # 16th-note stream is; their blocks keep hand-tuned gains.
-UNCALIBRATED = {"ys_tbass", "ys_acid", "ys_kick", "ys_gabber"}
+UNCALIBRATED = {"ys_tbass", "ys_acid", "ys_kick", "ys_gabber", "ys_kick909"}
 
 _SYNTH_RE = re.compile(r'# s "(ys_\w+)"')
 

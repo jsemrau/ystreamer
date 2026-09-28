@@ -43,7 +43,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         """A request from the host ("more bass"), typed into the page. The
         server only listens on 127.0.0.1, so only this machine can send one."""
-        if self.path.split("?", 1)[0] != "/request":
+        path = self.path.split("?", 1)[0]
+        if path not in ("/request", "/rate"):
             self.send_error(404)
             return
         from music import host_requests
@@ -51,10 +52,13 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             length = min(int(self.headers.get("Content-Length") or 0), 4096)
             data = json.loads(self.rfile.read(length) or b"{}")
-            record = host_requests.submit(data.get("text", ""))
+            if path == "/rate":     # 👍 / 👎 on what is playing
+                record = host_requests.submit_rating(data.get("rating"))
+            else:
+                record = host_requests.submit(data.get("text", ""))
         except (ValueError, OSError):
             record = None
-        body = json.dumps({"ok": bool(record), "text": record["text"] if record else ""}).encode()
+        body = json.dumps({"ok": bool(record), "text": record.get("text", "") if record else ""}).encode()
         self.send_response(200 if record else 400)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))

@@ -389,6 +389,24 @@ the page with `?capture=1`). Without an LLM, simple keyword rules answer
 Requests are logged in the terminal (`📨`) and in the session memory; the
 page server only listens on 127.0.0.1.
 
+## Rating what plays (👍 / 👎)
+
+Next to the request box are 👍 and 👎: rate what is playing right now. Each
+rating is kept in the session memory with the track, the phase, the code
+and the last change before it (`python -m eval.export_edits --ratings`), and
+the Performer sees it among its recent moves ("the host 👎 disliked what
+played after: ..."), so a model builds on what you like within the track.
+Over time this is the taste data to tune and train on.
+
+## Transitions (the arranger)
+
+In club styles the arranger adds what a producer does between sections: a
+riser and a snare roll that speeds up through the rebuild, one bar without
+kick and bass before the drop, an impact when it lands, and a snare fill at
+the end of every 16-bar phrase in the groove and the peak. The devices run on
+`d10` / `d11`, show in the code panel and the feed ("Arranger"), and are kept
+in the session memory.
+
 ## Session memory: every change to the artefact
 
 Each live session writes `sessions/<date>_<time>.jsonl` (set
