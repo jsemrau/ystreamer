@@ -175,13 +175,16 @@ BLOCKS: dict[str, list[Block]] = {
     # ---------------------------------------------------------------- trance
     "trance": [
         Block("trance_beat", "beat", 's "[{kick}, {hats}, {clap}]"',
-              {"kick": ["ys_kick*4"], "hats": ["[~ 808oh]*4", "[~ 808oh]*4, hh*16", "[~ hh]*4"],
+              {"kick": ["ys_kick909*4"], "hats": ["[~ 808oh]*4", "[~ 808oh]*4, hh*16", "[~ hh]*4"],
                "clap": ["~", "~ cp ~ cp"]},
               fx=[["gain", "1.0"]], drums=True),
         Block("acid", "acid",
               'n (scale "{mode}" ("<{motif}>*16" |+ "<{roots}>") {root} - 12) # s "ys_acid"',
               {"motif": ["0 4 0 9 7", "0 7 0 2", "0 2 0 4 7", "0 4 0 9 7 11", "0 0 7 2 4"]},
-              fx=[["gain", "0.98"], ["legato", "0.6"]], pfs=[["acid", "(slow 16 $ range 0.35 0.75 sine)"]],
+              fx=[["gain", "0.98"], ["legato", "0.6"]],
+              # The 303's accent on off-beat 16ths gives the line its bite.
+              pfs=[["acid", "(slow 16 $ range 0.35 0.75 sine)"], ["accent", '"[0 0 1 0 0 1 0 0]*2"'],
+                   ["drive", "1.4"]],
               wrappers=['(|* gain "[0.67 0.91 1 1]*4")'], pool=[0, 2, 4, 6, 7, 9, 11]),
         _melodic("rolling_bass", "bass", "ys_tbass", "rhythm",
                  ["[~ 0 0 0]*4", "[~ 0 0 0]*3 [~ 0 0 7]", "[~ ~ 0 ~]*4"],
@@ -392,7 +395,7 @@ BLOCKS["hardcore"] = _techno_blocks(hard=True)
 STYLE_SETTINGS = {
     "lofi": {"edit_bars": 8, "max_lines": 7, "openers": [["beat"], ["keys"], ["bass", "beat"]]},
     "deephouse": {"edit_bars": 16, "max_lines": 7, "openers": [["beat"], ["beat", "bass"]]},
-    "trance": {"edit_bars": 16, "max_lines": 7, "openers": [["acid"], ["beat"], ["acid", "beat"]]},
+    "trance": {"edit_bars": 16, "max_lines": 5, "openers": [["acid"], ["beat"], ["acid", "beat"]]},
     "ambient": {"edit_bars": 8, "max_lines": 6, "openers": [["chords"], ["texture"], ["keys"]]},
     "piano": {"edit_bars": 8, "max_lines": 5, "openers": [["keys"]]},
     "downtempo": {"edit_bars": 8, "max_lines": 6, "openers": [["beat"], ["keys"]]},

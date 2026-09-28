@@ -651,7 +651,12 @@ class Performer:
         return Edit("set_fx", role=role, name=name, value=f"{value:g}", reason=f"adjust the {role} {name}")
 
     def _pf_edit(self, role: str, line, calm: bool) -> Edit | None:
-        name, current = self.rng.choice(line.pfs)
+        # Knobs only: a control holding a rhythm (the acid's accent pattern)
+        # isn't a knob to nudge.
+        knobs = [(n, v) for n, v in line.pfs if not v.startswith('"')]
+        if not knobs:
+            return None
+        name, current = self.rng.choice(knobs)
         lo, hi = PF_RANGES[name]
         base = float(current) if re.match(r"^[\d.]+$", current) else (lo + hi) / 2
         if name == "acid":

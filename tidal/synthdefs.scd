@@ -321,14 +321,51 @@ SynthDef(\ys_gatesaw, { |out, sustain = 4, pan, freq = 440, speed = 1,
 // A raw saw through a resonant low-pass sitting at 100 Hz; every note sweeps
 // the cutoff up by acid * 9 octaves and decays in 0.12 s to a sustain of 0.2.
 // `acid` is the slider (0..1): Tidal automates it like a hand on the knob.
-SynthDef(\ys_acid, { |out, sustain = 0.1, pan, freq = 110, speed = 1, acid = 0.5, acidres = 0.18|
+SynthDef(\ys_acid, { |out, sustain = 0.1, pan, freq = 110, speed = 1, acid = 0.5, acidres = 0.18,
+                        accent = 0, drive = 1|
+    // A 303: a saw through a resonant low-pass with a per-note filter
+    // envelope. Accented steps (accent 0..1, usually a pattern like
+    // "[0 0 1 0]*4") are louder, brighter and more resonant, the way the
+    // 303's accent bites; drive adds grit.
     var f = freq * speed;
     var len = sustain.max(0.04);
+    var acc = accent.clip(0, 1);
     var env = EnvGen.ar(Env([0, 1, 0.9, 0], [0.002, len, 0.03]), doneAction: 2);
-    var fenv = EnvGen.ar(Env([0, 1, 0.2], [0.001, 0.12], -4));
-    var cutoff = (100 * (2 ** (acid.clip(0, 1) * 9 * fenv))).clip(40, 16000);
-    var sig = RLPF.ar(Saw.ar(f), cutoff, acidres.clip(0.05, 1));
-    sig = (sig * 1.8).tanh * 0.3;
+    var fenv = EnvGen.ar(Env([0, 1, 0.2], [0.001, 0.12 - (0.04 * acc)], -4));
+    var cutoff = (100 * (2 ** (acid.clip(0, 1) * (9 + (2 * acc)) * fenv))).clip(40, 16000);
+    var sig = RLPF.ar(Saw.ar(f), cutoff, (acidres - (0.07 * acc)).clip(0.05, 1));
+    sig = (sig * 1.8 * drive.clip(0.5, 4)).tanh * 0.3 * (1 + (0.5 * acc));
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
+// 909-style kick for trance: a click, a fast pitch drop into a round ~52 Hz
+// body that rings for about 0.4 s, lightly saturated.
+SynthDef(\ys_kick909, { |out, pan, sustain = 0.4|
+    var env = EnvGen.ar(Env([0, 1, 0.55, 0], [0.002, 0.12, 0.3], [0, -3, -4]), doneAction: 2);
+    var pitch = EnvGen.ar(Env([260, 90, 52], [0.012, 0.09], \exp));
+    var click = HPF.ar(WhiteNoise.ar, 3000) * EnvGen.ar(Env.perc(0.0005, 0.012)) * 0.35;
+    var sig = (SinOsc.ar(pitch, 0.5pi) + click) * 1.6;
+    sig = sig.tanh * 0.8;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
+// A riser for the bars before a drop: noise through a band-pass that climbs
+// from 300 Hz to 9 kHz over the note (sustain = its length), swelling up.
+SynthDef(\ys_riser, { |out, pan, sustain = 8|
+    var len = sustain.clip(1, 40);
+    var env = EnvGen.ar(Env([0, 0.15, 1, 0], [len * 0.05, len * 0.93, len * 0.02], [2, 3, -4]), doneAction: 2);
+    var sweep = EnvGen.ar(Env([300, 9000], [len], \exp));
+    var sig = BPF.ar(WhiteNoise.ar + PinkNoise.ar, sweep, 0.35) * 1.5 + (SinOsc.ar(sweep * 0.25) * 0.05);
+    sig = sig * 0.35;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
+// The impact on the downbeat of a drop: a crash-like noise tail and a low boom.
+SynthDef(\ys_impact, { |out, pan, sustain = 2|
+    var env = EnvGen.ar(Env.perc(0.002, 2.5, 1, -5), doneAction: 2);
+    var noise = HPF.ar(WhiteNoise.ar, 4000) * EnvGen.ar(Env.perc(0.001, 1.8, 1, -6)) * 0.5;
+    var boom = SinOsc.ar(EnvGen.ar(Env([90, 40], [0.4], \exp))) * EnvGen.ar(Env.perc(0.005, 1.2, 1, -4)) * 0.8;
+    var sig = ((noise + boom) * 1.2).tanh * 0.6;
     OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
 }).add;
 )

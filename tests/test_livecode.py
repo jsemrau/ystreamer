@@ -695,7 +695,8 @@ def test_club_styles_build_to_a_rich_moving_peak(style):
                         now=clock.now, sleep=clock.sleep, max_tracks=1)
     engine.run()
     code = "\n".join(peak)
-    assert len(peak) >= 6
+    # Fewer, better layers: trance peaks at its own maximum (5); others at 6+.
+    assert len(peak) >= min(6, STYLE_SETTINGS[style]["max_lines"])
     assert "*16" in code                          # a 16th-note acid or arp
     assert "sine" in code                         # something sweeps
 
