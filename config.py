@@ -72,7 +72,9 @@ LLAMA_GGUF_MODEL = _env("LLAMA_GGUF_MODEL", "")
 LOCAL_LLM_API_BASE = _env("LOCAL_LLM_API_BASE", "http://127.0.0.1:8080/v1")
 LLAMA_SERVER_LOG = _env("LLAMA_SERVER_LOG", os.path.join(REPO_DIR, "logs", "llama-server.log"))
 # llama-server launch options: context size (shared by the parallel slots),
-# layers on the GPU (999 = all), and any extra flags (e.g. "-fa on --cache-type-k q8_0").
+# layers on the GPU (999 = all; "auto" leaves it to llama.cpp, which then
+# fits what it can on the GPUs and keeps the rest, e.g. a big MoE model's
+# experts, in RAM), and any extra flags (e.g. "-fa on --cache-type-k q8_0").
 LLAMA_CTX_SIZE = int(_env("LLAMA_CTX_SIZE", "16384"))
 LLAMA_GPU_LAYERS = _env("LLAMA_GPU_LAYERS", "999")
 LLAMA_SERVER_ARGS = _env("LLAMA_SERVER_ARGS", "")

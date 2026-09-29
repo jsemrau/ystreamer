@@ -528,8 +528,9 @@ def llama_load_progress(since: float) -> tuple[int | None, str]:
 # llama-server log patterns -> what to do about them.
 _LLAMA_ERRORS = [
     (r"out of memory|failed to allocate|cudaMalloc failed|ErrorOutOfDeviceMemory|unable to allocate",
-     "the GPU ran out of memory. Lower LLAMA_CTX_SIZE in .env (e.g. 8192), or offload fewer layers "
-     "with LLAMA_GPU_LAYERS (e.g. 50), or add LLAMA_SERVER_ARGS=--cache-type-k q8_0 --cache-type-v q8_0 -fa on"),
+     "the GPU ran out of memory. For a model bigger than the GPUs set LLAMA_GPU_LAYERS=auto in .env "
+     "(llama.cpp keeps what doesn't fit in RAM); otherwise lower LLAMA_CTX_SIZE (e.g. 8192), "
+     "offload fewer layers with LLAMA_GPU_LAYERS (e.g. 50), or add LLAMA_SERVER_ARGS=--cache-type-k q8_0 --cache-type-v q8_0 -fa on"),
     (r"unknown model architecture|unknown architecture|unsupported model",
      "this llama.cpp build doesn't know the model's architecture. Update and rebuild llama.cpp"),
     (r"failed to load model|error loading model|invalid magic|gguf_init.*failed",
@@ -556,12 +557,11 @@ def diagnose_llama_failure() -> str:
     """Last lines of llama-server's log plus a likely fix, for when it died."""
     tail = _llama_log_tail(40)
     hint = ""
-    for line in reversed(tail):
-        for pattern, fix in _LLAMA_ERRORS:
-            if re.search(pattern, line, re.IGNORECASE):
-                hint = fix
-                break
-        if hint:
+    # The patterns are in order of how specific they are: an out-of-memory
+    # line explains the "failed to load model" that follows it.
+    for pattern, fix in _LLAMA_ERRORS:
+        if any(re.search(pattern, line, re.IGNORECASE) for line in tail):
+            hint = fix
             break
     shown = "\n".join(f"    {line}" for line in tail[-12:]) or "    (the log is empty)"
     text = f"last lines of {config.LLAMA_SERVER_LOG}:\n{shown}"
@@ -631,7 +631,9 @@ def ensure_local_llm_server(wait: bool = True) -> None:
     try:
         global _llama_process
         port = urllib.parse.urlparse(config.LOCAL_LLM_API_BASE).port or 8080
-        cmd = [config.LLAMA_SERVER_BIN, "-m", config.LLAMA_GGUF_MODEL, "-ngl", str(config.LLAMA_GPU_LAYERS),
+        layers = str(config.LLAMA_GPU_LAYERS).strip().lower()
+        cmd = [config.LLAMA_SERVER_BIN, "-m", config.LLAMA_GGUF_MODEL,
+               *([] if layers in ("", "auto") else ["-ngl", layers]),
                "--port", str(port), "--ctx-size", str(config.LLAMA_CTX_SIZE), "--parallel", "2",
                *shlex.split(config.LLAMA_SERVER_ARGS)]
         log(f"[llama-server] {' '.join(cmd)}")
