@@ -105,9 +105,41 @@ class LiveEngine:
                      peak_complexity=max(values) if values else None,
                      code=[program.statement(r) for r in program.lines], program=program.to_dict())
 
-    def _arrange(self, program: Program) -> None:
+    def _fill_for_the_drop(self, program: Program) -> tuple[Program, list[str]]:
+        """When the groove lands (club styles), the stack lands with it:
+        parts still missing (the Director's sketched parts first) come in and
+        everything muted comes back at once, instead of one part per edit. The
+        first groove fills to two short of the style's limit, leaving room to
+        grow; the drop into the peak fills it."""
+        from . import arranger
+
+        phase = self.performer.state.phase
+        if (phase not in ("groove", "groove2") or phase == self._arranged_phase
+                or program.track.style not in arranger.CLUB_STYLES):
+            return program, []
+        new = copy.deepcopy(program)
+        limit = self.performer.settings["max_lines"] - (2 if phase == "groove" else 0)
+        landing = []
+        for role, line in new.lines.items():
+            if line.muted and len(new.active_roles()) < limit:
+                line.muted = False
+                landing.append(role)
+        sketched = set(new.track.parts) | {(new.track.hook or {}).get("role")}
+        missing = sorted(self.performer._missing_roles(new), key=lambda r: r not in sketched)
+        for role in missing:
+            if len(new.active_roles()) >= limit:
+                break
+            new.lines[role] = new.track.make(self.performer._block_for(role), self.performer.rng)
+            landing.append(role)
+        if not landing or not self._type_ok([new.statement(r) for r in landing]):
+            return program, []
+        self.log(f"🎚 The drop brings in: {', '.join(landing)}")
+        return new, landing
+
+    def _arrange(self, program: Program, landing: list[str] | None = None) -> None:
         """The arc moved on: play the transition (music/arranger.py). For a
-        drop, one bar without kick and bass first, then it all lands."""
+        drop, one bar without kick and bass first, then it all lands, with
+        the parts in `landing` (see _fill_for_the_drop)."""
         from . import arranger
 
         phase = self.performer.state.phase
@@ -116,8 +148,13 @@ class LiveEngine:
         before, self._arranged_phase = self._arranged_phase, phase
         plan = arranger.plan_for(program.track.style, before, phase)
         statements = list(plan["statements"]) + ([arranger.impact()] if plan["impact"] else [])
+        # Everything playing is sent again when parts land: with more lines,
+        # the beds step back in the mix (program.expression).
+        landed = [program.statement(r) for r in program.active_roles()] if landing else []
         if not self._type_ok(statements):
             self.log("[Arranger] the transition didn't type check; skipped")
+            if landed:
+                self._send(landed)
             return
         breath = [r for r in arranger.BREATH_ROLES if r in program.active_roles()] if plan["breath"] else []
         if breath:
@@ -126,6 +163,8 @@ class LiveEngine:
                        [arranger.silence(arranger.FILL)])
             self._wait_until(math.floor(self.clock.cycle()) + 1)          # one bar's breath
             statements = [program.statement(r) for r in breath] + statements
+        statements = [s for s in landed if not s.startswith(tuple(f"d{ROLE_CHANNELS[r]} " for r in breath))] \
+            + statements
         if not self._send(statements):
             return
         self._devices = dict(plan["playing"])
@@ -372,7 +411,7 @@ class LiveEngine:
             fresh = [b for b in blocks_for(program.track.style, role)
                      if not ({synth_of(b.body)} | {v for vs in b.patterns.values() for v in vs}) & UNWANTED_SYNTHS]
             if fresh:
-                new = fresh[0].make(random.Random(0), program.track.sounds)
+                new = program.track.make(fresh[0], random.Random(0))
                 new.muted = line.muted
                 program.lines[role] = new
                 self.log(f"[Live] d{line.channel}: {line.block or role} used a sound that's out; now {new.block}")
@@ -495,7 +534,9 @@ class LiveEngine:
             # pace, the same one the performer's deadline uses.
             self.performer.advance_phase(program)
             program = self.program = self._follow_harmony(program)
-            self._arrange(program)
+            program, landing = self._fill_for_the_drop(program)
+            self.program = program
+            self._arrange(program, landing)
             next_cycle += self.performer.edit_bars_now()
         self.performer.report_stats()
         self._pool.shutdown(wait=False, cancel_futures=True)

@@ -21,7 +21,8 @@ from . import feedback, llm, runtime
 from .narrator import clean_narration
 from . import presets as P
 from .melody import STEPS_PER_CYCLE
-from .plan import (STYLES, Arrangement, Piece, Section, arrange, describe_options, plan_piece,
+from .blocks import hook_kinds
+from .plan import (STYLES, Arrangement, Piece, Section, arrange, director_vocabulary, plan_piece,
                    validate_arrangement, validate_piece)
 from .theory import Key, progressions_for
 
@@ -41,6 +42,24 @@ _AGENTS = {
 }
 
 
+# One of these goes into each piece prompt, so tracks don't all start from
+# the same habits (an LLM left alone writes A minor and the same four chords).
+SPARKS = [
+    "a hook built from only two or three different notes, all in the rhythm",
+    "start the progression away from the tonic, so it only comes home on the last chord",
+    "a hook that climbs across the loop and falls back at the end",
+    "a hook with more rests than notes: syncopated, full of space",
+    "lean on the mode's most characteristic chord (the II in phrygian, the IV in dorian, the VI in minor)",
+    "a breakdown progression darker than the main one, and the brightest chords saved for the peak",
+    "a hook that answers itself: a question in its first half, the answer in its second",
+    "harmony that barely moves (two chords, repeated) so the hook does all the moving",
+    "a hook built around the fifth and the seventh rather than the root",
+    "a tempo at the edge of the style's range",
+    "a key far from the last track's: a new colour straight away",
+    "an odd-length acid or arp cycle (5 or 7 notes) rolling against the 4/4",
+]
+
+
 class Director:
     def __init__(self, model_id: str | None, rng: random.Random, log=print,
                  theme: str = "chill music to relax, study and sleep to",
@@ -56,6 +75,8 @@ class Director:
         self.max_layers = max_layers
         self.style = style
         self.recent_progressions: deque[str] = deque(maxlen=4)
+        self.recent_keys: deque[str] = deque(maxlen=4)
+        self.recent_hooks: deque[str] = deque(maxlen=4)
         self.consecutive_failures = 0
         # After this many failures in a row, stop asking the LLM for a while.
         self.failure_backoff = 3
@@ -112,7 +133,90 @@ class Director:
         self.log(line)
         runtime.append_thought(line)
 
+    def _suggest_key(self, style: str, previous: Piece | None) -> Key:
+        """A random key for the style that wasn't played recently: half the
+        time a neighbour of the previous track's key, otherwise any root."""
+        modes = STYLES[style]["modes"]
+        fresh = [Key(r, m) for r in range(12) for m in modes if Key(r, m).name not in self.recent_keys]
+        if previous is not None and self.rng.random() < 0.5:
+            near = [k for k in Key.parse(previous.key).neighbours() if k in fresh]
+            if near:
+                return self.rng.choice(near)
+        return self.rng.choice(fresh or [Key(r, m) for r in range(12) for m in modes])
+
     # -- decisions -------------------------------------------------------------
+
+    PIECE_SYSTEM = "You are a concise music director. Reply with JSON only."
+
+    def piece_prompt(self, previous: Piece | None, fallback: Piece, avoid: dict) -> str:
+        """The prompt asking for the next track's idea (also used to build
+        training data, eval/distill_director.py)."""
+        style = self.style if self.style in STYLES else None
+        cfg = STYLES[style] if style else None
+        return _load_prompt("director_piece.md").format(
+            theme=self.theme,
+            style_line=(f"Style: {style} ({cfg['bpm'][0]}-{cfg['bpm'][1]} BPM, modes: {', '.join(cfg['modes'])})."
+                        if cfg else "Choose `style` from `styles` and include it."),
+            options=json.dumps(director_vocabulary(style)),
+            previous=json.dumps({k: previous.to_dict()[k] for k in
+                                 ("title", "style", "key", "bpm", "progression", "mood", "hook", "idea")})
+            if previous else "none (this is the first track)",
+            previous_shape=" → ".join(f"{s.name} {s.bars}" for s in previous.sections)
+            if previous and previous.sections else "none",
+            recent_keys=", ".join(self.recent_keys) or "none",
+            recent_hooks=", ".join(self.recent_hooks) or "none",
+            recent_progressions=", ".join(self.recent_progressions) or "none",
+            avoid=", ".join(sorted(avoid["progressions"] | avoid["presets"])) or "nothing",
+            suggested_key=self._suggest_key(style or fallback.style, previous).name,
+            spark=self.rng.choice(SPARKS),
+        )
+
+    def review_piece(self, data: dict, fallback: Piece, avoid: dict) -> tuple[Piece, list[str]]:
+        """The model's plan made playable: validated, with every correction
+        noted (an empty list means it was right as it was)."""
+        piece, notes = validate_piece(data, fallback, self.target_minutes)
+        if self.style and piece.style != self.style:
+            notes.append(f"style locked to {self.style}")
+            piece.style = fallback.style
+            piece.cycles_per_chord = fallback.cycles_per_chord
+        # Tempo and key must suit the style that actually plays (the
+        # LLM may have planned them for another style).
+        lo, hi = STYLES[piece.style]["bpm"]
+        if not lo <= piece.bpm <= hi:
+            notes.append(f"{piece.bpm:g} BPM is outside {piece.style}'s {lo}-{hi}; using {fallback.bpm:g}")
+            piece.bpm = fallback.bpm
+        if Key.parse(piece.key).mode not in STYLES[piece.style]["modes"]:
+            notes.append(f"{piece.key} doesn't suit {piece.style}; using {fallback.key}")
+            piece.key, piece.progression = fallback.key, fallback.progression
+            piece.section_progressions = dict(fallback.section_progressions)
+        if piece.key in self.recent_keys:
+            # Same mode, another root: the Roman numerals still fit.
+            key = Key.parse(piece.key)
+            roots = [r for r in range(12) if Key(r, key.mode).name not in self.recent_keys]
+            if roots:
+                new = Key(self.rng.choice(roots), key.mode).name
+                notes.append(f"{piece.key} was played in the last {len(self.recent_keys)} tracks; using {new}")
+                piece.key = new
+        if piece.hook and hook_kinds(piece.style).get(piece.hook.get("role")) != piece.hook.get("kind"):
+            notes.append(f"hook on {piece.hook.get('role')} doesn't fit {piece.style}")
+            piece.hook = {}
+        if piece.progression in avoid["progressions"]:
+            notes.append(f"progression {piece.progression} is disliked; using fallback")
+            piece.progression = fallback.progression
+            if Key.parse(piece.key).mode != Key.parse(fallback.key).mode:
+                piece.key = fallback.key
+        if piece.progression in self.recent_progressions:
+            # Don't let every track sit on the same chords.
+            mode = Key.parse(piece.key).mode
+            fresh = [p.name for p in progressions_for(mode) if p.name not in self.recent_progressions]
+            if fresh:
+                choice = fallback.progression if fallback.progression in fresh else self.rng.choice(fresh)
+                notes.append(f"progression {piece.progression} was used in the last "
+                             f"{len(self.recent_progressions)} tracks; using {choice}")
+                piece.progression = choice
+        _distinct_sections(piece, self.rng)
+        piece.narration = clean_narration(data.get("narration"))
+        return piece, notes
 
     def next_piece(self, previous: Piece | None) -> Piece:
         avoid = feedback.disliked()
@@ -122,54 +226,18 @@ class Director:
                               target_minutes=self.target_minutes)
         piece = fallback
         if self._llm_available():
-            prompt = _load_prompt("director_piece.md").format(
-                target_minutes=int(self.target_minutes),
-                options=json.dumps(describe_options(), indent=1),
-                previous=json.dumps({k: v for k, v in previous.to_dict().items() if k != "sections"})
-                if previous else "none (this is the first piece)",
-                previous_shape=" → ".join(f"{s.name} {s.bars}" for s in previous.sections)
-                if previous and previous.sections else "none",
-                recent_progressions=", ".join(self.recent_progressions) or "none",
-                avoid=", ".join(sorted(avoid["progressions"] | avoid["presets"])) or "nothing",
-                theme=self.theme,
-            )
-            data = self._ask("piece", "You are a concise music director. Reply with JSON only.", prompt)
+            prompt = self.piece_prompt(previous, fallback, avoid)
+            data = self._ask("piece", self.PIECE_SYSTEM, prompt)
             if data:
-                piece, notes = validate_piece(data, fallback, self.target_minutes)
-                if self.style and piece.style != self.style:
-                    notes.append(f"style locked to {self.style}")
-                    piece.style = fallback.style
-                    piece.cycles_per_chord = fallback.cycles_per_chord
-                # Tempo and key must suit the style that actually plays (the
-                # LLM may have planned them for another style).
-                lo, hi = STYLES[piece.style]["bpm"]
-                if not lo <= piece.bpm <= hi:
-                    notes.append(f"{piece.bpm:g} BPM is outside {piece.style}'s {lo}-{hi}; using {fallback.bpm:g}")
-                    piece.bpm = fallback.bpm
-                if Key.parse(piece.key).mode not in STYLES[piece.style]["modes"]:
-                    notes.append(f"{piece.key} doesn't suit {piece.style}; using {fallback.key}")
-                    piece.key, piece.progression = fallback.key, fallback.progression
-                if piece.progression in avoid["progressions"]:
-                    notes.append(f"progression {piece.progression} is disliked; using fallback")
-                    piece.progression = fallback.progression
-                    if Key.parse(piece.key).mode != Key.parse(fallback.key).mode:
-                        piece.key = fallback.key
-                if piece.progression in self.recent_progressions:
-                    # Don't let every track sit on the same chords.
-                    mode = Key.parse(piece.key).mode
-                    fresh = [p.name for p in progressions_for(mode) if p.name not in self.recent_progressions]
-                    if fresh:
-                        choice = fallback.progression if fallback.progression in fresh else self.rng.choice(fresh)
-                        notes.append(f"progression {piece.progression} was used in the last "
-                                     f"{len(self.recent_progressions)} tracks; using {choice}")
-                        piece.progression = choice
-                _distinct_sections(piece, self.rng)
+                piece, notes = self.review_piece(data, fallback, avoid)
                 if notes:
                     self.log(f"[Director] corrected LLM piece plan: {'; '.join(notes)}")
-                piece.narration = clean_narration(data.get("narration"))
                 self._think("Next piece", f"'{piece.title}', {piece.style}, {piece.key}, {piece.bpm:.0f} BPM, "
                                           f"{piece.progression}, {piece.mood}", data)
         self.recent_progressions.append(piece.progression)
+        self.recent_keys.append(piece.key)
+        if piece.hook:
+            self.recent_hooks.append(f"{piece.hook['role']}: {piece.hook['pattern']}")
         if piece is fallback:
             runtime.ui_event("director", what="Next piece", model="built-in",
                              decision=f"'{piece.title}', {piece.style}, {piece.key}, {piece.bpm:.0f} BPM, "

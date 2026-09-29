@@ -27,7 +27,7 @@ from .blocks import STYLE_SETTINGS, Block, blocks_for, find_block
 from .livecode import (ALL_WRAPPERS, BASS_WRAPPERS, CHOICE_SLOTS, DRUM_WRAPPERS, EDIT_OPS, FX_RANGES,
                        FX_NOTES, LOCKED_SLOTS, MELODIC_WRAPPERS, PF_RANGES, ROLE_CHANNELS, ROLE_FX,
                        WRAPPER_NOTES, Edit, EditError,
-                       Program, Track, allowed_wrappers, apply_edit)
+                       Program, Track, allowed_wrappers, apply_edit, complexity, line_controls)
 from .narrator import clean_narration
 from .plan import DEFAULT_LIVE_PLAN, arc_summary, live_plan, plan_piece, sounds_summary
 
@@ -126,6 +126,7 @@ class Performer:
         # Compact prompts (no glossary or example moves) once the model's
         # context window turned out to be too small for the full one.
         self._compact = False
+        self._complexity_now: float | None = None   # measured at each edit
         # The judge's last answer details (probabilities per option, confidence)
         # and, per track, the share of its probability given to the LLM's ideas.
         self.last_judgement: dict = {}
@@ -187,16 +188,19 @@ class Performer:
         self._last_piece = piece
         self.track_narration = getattr(piece, "narration", "") or ""
         self.track_mood = piece.mood
-        from .theory import PROGRESSIONS_BY_NAME
+        from .theory import Key as _Key, progression_named, progressions_for
 
-        degrees = list(PROGRESSIONS_BY_NAME[piece.progression].degrees)
+        mode = _Key.parse(piece.key).mode
+        main = progression_named(piece.progression, mode) or progressions_for(mode)[0]
+        degrees = list(main.degrees)
         # The harmony moves with the arc: the main progression, its own for
         # the breakdown, another for the peak (from the Director's plan).
-        progressions = {"main": {"name": piece.progression, "degrees": degrees}}
+        progressions = {"main": {"name": main.name, "degrees": degrees}}
         for part, section in (("breakdown", "breakdown"), ("peak", "chorus")):
             name = piece.section_progressions.get(section)
-            if name in PROGRESSIONS_BY_NAME and name != piece.progression:
-                progressions[part] = {"name": name, "degrees": list(PROGRESSIONS_BY_NAME[name].degrees)}
+            other = progression_named(name, mode) if name and name != main.name else None
+            if other is not None:
+                progressions[part] = {"name": other.name, "degrees": list(other.degrees)}
         self.state = SetState(tracks_played=self.state.tracks_played + (1 if previous else 0),
                               target_lines=self.rng.randint(max(3, self.settings["max_lines"] - 1),
                                                             self.settings["max_lines"]),
@@ -204,13 +208,44 @@ class Performer:
         self.log("🧭 Arc plan: " + arc_summary(self.state.plan))
         if piece.sounds:
             self.log("🎹 Sounds: " + sounds_summary(piece.sounds))
+        if piece.hook:
+            self.log(f"🎣 Hook ({piece.hook['role']}): {piece.hook['pattern']}")
+        if piece.idea:
+            self.log(f"💡 Idea: {piece.idea}")
+        if piece.parts:
+            self.log("✏️  Sketch: " + " · ".join(f"{r} {p['pattern']}" for r, p in piece.parts.items()))
+        if piece.motion:
+            self.log("🎛  Moving: " + " · ".join(f"{r}.{c} {v}" for r, cs in piece.motion.items() for c, v in cs.items()))
         return Track(title=piece.title, style=self.style, key=piece.key, bpm=piece.bpm,
                      degrees=degrees, bars_per_chord=piece.cycles_per_chord, progressions=progressions,
-                     sounds=dict(piece.sounds))
+                     sounds=dict(piece.sounds), hook=dict(piece.hook), idea=piece.idea,
+                     parts=dict(piece.parts), motion=dict(piece.motion))
 
     # Which progression plays in each phase of the arc.
     HARMONY_PARTS = {"build": "main", "groove": "main", "breakdown": "breakdown", "rebuild": "breakdown",
                      "groove2": "peak", "outro": "main"}
+
+    # Share of the style's peak complexity each phase aims for.
+    COMPLEXITY_SHARE = {"build": 0.5, "groove": 0.75, "breakdown": 0.4, "rebuild": 0.6, "groove2": 1.0, "outro": 0.3}
+
+    def complexity_target(self) -> float:
+        return self.settings.get("peak_complexity", 16) * self.COMPLEXITY_SHARE.get(self.state.phase, 0.75)
+
+    def complexity_note(self, program: Program) -> str:
+        """Where the music is against the target for this phase, and what to do about it."""
+        now, target = complexity(program), self.complexity_target()
+        if self.state.phase in ("breakdown", "outro"):
+            advice = "strip back: fewer lines and variations" if now > target + 1 else "hold it sparse and moving"
+        elif now < target - 2:
+            advice = ("too plain for this phase: add variation to what plays - a wrapper, a knob that moves on "
+                      "its own ((slow 16 $ range a b sine)), a phrase that changes bar to bar (<[...] [...]>), "
+                      "an odd-length 16th cycle against the beat" + ("" if self.state.phase != "build"
+                                                                     else ", or the next line"))
+        elif now > target + 2:
+            advice = "plenty going on: refine what plays rather than adding"
+        else:
+            advice = "about right: keep it moving"
+        return f"Complexity now {now:.1f}, about {target:.0f} suits this phase: {advice}."
 
     def harmony_for_phase(self, track: Track) -> tuple[str, dict] | None:
         """(part, {"name", "degrees"}) for the current phase, or None when the
@@ -298,6 +333,7 @@ class Performer:
         """Choose the next edit (LLM if available, built-in otherwise)."""
         self._advance_phase(program)
         self._bar_seconds = 1 / program.track.cps
+        self._complexity_now = complexity(program)
         request = self.requests.take() if self.requests is not None else None
         if request is not None:
             return self._answer_request(program, request["text"])
@@ -436,12 +472,18 @@ class Performer:
 
     def _add(self, program: Program, role: str) -> Edit:
         block = self._block_for(role)
-        return Edit("add", role=role, line=block.make(self.rng, program.track.sounds),
+        return Edit("add", role=role, line=program.track.make(block, self.rng),
                     reason=f"bring in the {block.name.replace('_', ' ')}")
 
     def _missing_roles(self, program: Program) -> list[str]:
+        """Roles not playing yet, in the order a track builds up; the part
+        carrying the Director's hook comes first, so the hook is always heard."""
         available = {b.role for b in blocks_for(self.style)}
         order = [r for r in ROLE_ORDER.get(self.style, list(ROLE_CHANNELS)) if r in available]
+        hook_role = (program.track.hook or {}).get("role")
+        if hook_role in order:
+            order.remove(hook_role)
+            order.insert(0, hook_role)
         return [r for r in order if r not in program.lines]
 
     def _builtin_edit(self, program: Program) -> Edit:
@@ -503,8 +545,13 @@ class Performer:
             # Small, audible, cumulative: one note or step, or a knob ridden a
             # little further; a new wrapper now and then.
             kind = rng.choice(["pattern", "pattern", "pattern", "pattern", "ride", "ride", "ride", "wrap", "fx"])
+            if not calm and complexity(program) < self.complexity_target() - 2 and rng.random() < 0.85:
+                # Too plain for this phase: layer variation onto what plays.
+                kind = rng.choice(["wrap", "motion"])
             edit = None
-            if kind == "ride":
+            if kind == "motion":
+                edit = self._motion_edit(role, line)
+            elif kind == "ride":
                 edit = self._ride_edit(role, line, calm)
             elif kind == "pattern" and line.patterns:
                 edit = self._pattern_edit(role, line)
@@ -629,6 +676,29 @@ class Performer:
         return Edit("set_fx", role=role, name="lpf", value=str(value),
                     reason=f"ride the {role} filter {'open' if direction > 0 else 'down'} a little")
 
+    def _motion_edit(self, role: str, line) -> Edit | None:
+        """Set a knob moving on its own: a slow sine around where it is (the
+        filter by default), so the line keeps changing between edits."""
+        rng = self.rng
+        static = [(n, v, "set_pf") for n, v in line.pfs if n in PF_RANGES and re.match(r"^[\d.]+$", str(v))]
+        static += [(n, v, "set_fx") for n, v in line.fx
+                   if n in ROLE_FX.get(role, ()) and n not in ("gain", "legato", "pan")
+                   and re.match(r"^[\d.]+$", str(v))]
+        if not static and "lpf" in ROLE_FX.get(role, ()) and not any(n == "lpf" for n, _ in line.fx):
+            static = [("lpf", "3000", "set_fx")]
+        if not static:
+            return None
+        name, value, op = rng.choice(static)
+        lo, hi = PF_RANGES.get(name) if op == "set_pf" else FX_RANGES[name]
+        base, span = float(value), (hi - lo) * 0.2
+        if name in ("lpf", "hpf"):
+            a, b = max(lo, base * 0.5), min(hi, base * 1.4)
+        else:
+            a, b = max(lo, base - span), min(hi, base + span)
+        digits = 0 if hi > 100 else 2
+        value = f"(slow {rng.choice([8, 16, 32])} $ range {round(a, digits):g} {round(b, digits):g} sine)"
+        return Edit(op, role=role, name=name, value=value, reason=f"set the {role} {name} moving on its own")
+
     def _fx_edit(self, role: str, line, calm: bool) -> Edit | None:
         rng = self.rng
         fx = dict((n, v) for n, v in line.fx)
@@ -715,6 +785,15 @@ class Performer:
                 need = self.latency / (0.85 * (0.7 if self.judge else 1.0)) + 0.5
                 bars = max(bars, math.ceil(need / self._bar_seconds))
             return max(1, min(self.settings["edit_bars"], bars))
+        if (self.state.phase in ("groove", "groove2") and self._complexity_now is not None
+                and self._complexity_now < self.complexity_target() - 4):
+            # Far from the density this phase wants: edit twice as often, as
+            # a live coder does while building a section up, but never faster
+            # than the model can answer.
+            bars = max(1, self.settings["edit_bars"] // 2)
+            if self.model_id and self.latency and self._bar_seconds:
+                bars = max(bars, math.ceil((self.latency / 0.85 + 0.5) / self._bar_seconds))
+            return min(self.settings["edit_bars"], bars)
         return self.settings["edit_bars"]
 
     def _wait_seconds(self, program: Program) -> float:
@@ -792,7 +871,11 @@ class Performer:
 
         active = program.active_roles()
         if st.phase == "build" or (st.phase in ("groove", "groove2") and len(active) < self.settings["max_lines"]):
-            for role in self._missing_roles(program)[:3 if st.phase == "build" else 1]:
+            missing = self._missing_roles(program)
+            hook_role = (program.track.hook or {}).get("role")
+            # Until the hook's part is in, it's the only part offered to add.
+            count = 1 if hook_role in missing[:1] or st.phase != "build" else 3
+            for role in missing[:count]:
                 offer(self._add(program, role))
         if st.phase == "breakdown":
             for role in active:
@@ -1053,9 +1136,9 @@ class Performer:
             fx = [n for n in ROLE_FX.get(role, list(FX_RANGES)) if n in FX_RANGES]
             if fx:
                 options.append(variant("set_fx", role={"const": role}, name={"enum": fx}, value=text))
-            if line.pfs:
-                options.append(variant("set_pf", role={"const": role}, name={"enum": [n for n, _ in line.pfs]},
-                                       value=text))
+            controls = line_controls(line)
+            if controls:
+                options.append(variant("set_pf", role={"const": role}, name={"enum": controls}, value=text))
             wraps = [w for w in allowed_wrappers(line) if w not in line.wrappers]
             if wraps and len(line.wrappers) < 3:
                 options.append(variant("wrap", role={"const": role}, name={"enum": wraps}))
@@ -1070,6 +1153,8 @@ class Performer:
             raise EditError(f"unknown op {op!r}")
         role = str(data.get("role", "")).strip()
         name = str(data.get("name", "")).strip()
+        if op == "set_fx" and name in PF_RANGES and name not in FX_RANGES:
+            op = "set_pf"            # a synth control sent as an effect (e.g. acidres)
         value = _clamp_value(op, name, str(data.get("value", "")).strip(), program)
         edit = Edit(op, role=role, name=name, value=value,
                     reason=" ".join(str(data.get("reason", "")).split())[:200],
@@ -1087,7 +1172,11 @@ class Performer:
             if block is None:
                 raise EditError(f"unknown block {data.get('block')!r}")
             edit.role = block.role
-            edit.line = block.make(self.rng, program.track.sounds)
+            edit.line = program.track.make(block, self.rng)
+            hook_role = (program.track.hook or {}).get("role")
+            if (hook_role and hook_role not in program.lines and edit.role != hook_role
+                    and len(program.active_roles()) + 1 >= self.settings["max_lines"]):
+                raise EditError(f"the last place is kept for the {hook_role}, which plays the track's hook")
         return edit
 
     def _prompt(self, program: Program, proposals: int = 0) -> str:
@@ -1111,6 +1200,9 @@ class Performer:
             entry["fx"] = dict((n, v) for n, v in line.fx)
             if line.pfs:
                 entry["controls"] = dict((n, v) for n, v in line.pfs)
+            extra = [c for c in line_controls(line) if c not in dict(line.pfs)]
+            if extra:
+                entry["can_add_controls"] = extra     # set_pf adds them
             entry["can_set_fx"] = fx_ok
             if line.wrappers:
                 entry["wrappers"] = line.wrappers
@@ -1119,7 +1211,7 @@ class Performer:
                 wrap_kinds.add(_wrapper_kind(line))
             editable[role] = entry
             used_wrappers.update(line.wrappers)
-            used_fx.update(fx_ok + [n for n, _ in line.pfs])
+            used_fx.update(fx_ok + line_controls(line))
         addable = {b.name: b.role for b in blocks_for(self.style) if b.role not in program.lines}
         full = len(program.active_roles()) >= self.settings["max_lines"]
         # A full track can't take another line: say so, rather than offer blocks
@@ -1130,6 +1222,7 @@ class Performer:
         return template.format(
             track=json.dumps(program.track.to_dict()), phase=self.state.phase,
             phase_help=PHASE_HELP[self.state.phase], edits_in_phase=self.state.edits_in_phase,
+            complexity=self.complexity_note(program),
             bars_left=round(self.phase_bars_left()), phase_bars=self.step_bars(),
             code="\n".join(program.code_lines()),
             lines="\n".join(f'"{r}": {json.dumps(e, separators=(",", ":"))}' for r, e in editable.items())

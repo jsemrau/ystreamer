@@ -20,7 +20,8 @@ from dataclasses import asdict, dataclass, field
 
 from . import presets as P
 from .blocks import LIVE_SOUNDS
-from .theory import CHORD_COLORS, MODES, PROGRESSIONS_BY_NAME, Key, progressions_for
+from .theory import (CHORD_COLORS, MODES, PROGRESSIONS_BY_NAME, Key, mode_chords, parse_progression,
+                     progression_named, progressions_for)
 
 STYLES = {
     "lofi": {
@@ -74,7 +75,7 @@ STYLES = {
     "trance": {
         # After Switch Angel's live-coded trance: 138 BPM, four-on-the-floor,
         # rolling bass, gated supersaw arps, breakdown -> build -> drop.
-        "bpm": (134, 140), "modes": ["minor"], "cycles_per_chord": 2,
+        "bpm": (134, 140), "modes": ["minor", "phrygian", "dorian"], "cycles_per_chord": 2,
         # The acid line is the heart of it (Switch Angel's Strudel acid trance):
         # a squelchy 16th saw line, a kick, and everything pumping on the kick.
         "presets": {"pad": "saw_pad", "keys": "piano", "bass": "acid_line", "melody": "saw_lead",
@@ -185,7 +186,7 @@ class Piece:
     style: str
     key: str            # e.g. "C minor"
     bpm: float
-    progression: str    # name in theory.PROGRESSIONS_BY_NAME
+    progression: str    # Roman numerals: a library name or one the Director wrote (theory.progression_named)
     cycles_per_chord: int
     mood: str
     sections: list[Section]
@@ -202,6 +203,17 @@ class Piece:
     # {"chords": "ys_housepiano", "lead": "ys_pulselead"}; parts not listed
     # keep their block's own sound.
     sounds: dict[str, str] = field(default_factory=dict)
+    # The track's identity from the Director: a hook ({"role": "acid",
+    # "pattern": "0 4 7 4 9"}, scale degrees the role's block plays when it
+    # comes in) and one idea for the performer to build toward.
+    hook: dict[str, str] = field(default_factory=dict)
+    idea: str = ""
+    # The rest of the Director's sketch: the starting pattern of other parts
+    # (role -> {"kind", "pattern"}) and knobs that move on their own (role ->
+    # {control: "(slow 32 $ range 0.3 0.85 sine)"}), so the track is layered
+    # and moving from the start, like a live-coded set.
+    parts: dict[str, dict] = field(default_factory=dict)
+    motion: dict[str, dict] = field(default_factory=dict)
 
     def energy_order(self) -> list[str]:
         """Order in which layers come in as energy rises, starting with the opening."""
@@ -515,6 +527,145 @@ def _clamp(value, lo, hi, default):
     return max(lo, min(hi, v))
 
 
+_HOOK_TOKEN_RE = re.compile(r"^(~|-?\d{1,2})$")
+
+
+# Controls that hold a rhythm (the 303 accent pattern), not a knob position.
+_PATTERN_CONTROLS = {"accent"}
+_RHYTHM_RE = re.compile(r"^[t~\s\[\]<>*!\d.]+$")
+
+
+def _part_problem(role: str, kind: str, pattern: str) -> str | None:
+    """Why a sketch pattern of this kind can't play, or None. Tunes are
+    scale degrees on chord tones where it matters (livecode.harmony_problem);
+    a chord rhythm is t (hit) and ~ (rest)."""
+    from .livecode import harmony_problem
+
+    if kind == "rhythm":
+        if not _RHYTHM_RE.match(pattern) or "t" not in pattern:
+            return "a chord rhythm is t (hit) and ~ (rest), e.g. \"~ t ~ t ~ t [~ t] ~\""
+        return None
+    if kind == "cycle":
+        tokens = pattern.split()
+        if not 3 <= len(tokens) <= 16 or not all(_HOOK_TOKEN_RE.match(t) for t in tokens):
+            return "a cycle is 3-16 space-separated degrees or ~"
+    if not any(t.lstrip("-").isdigit() for t in re.split(r"[\s\[\]<>*!]+", pattern)):
+        return "no notes"
+    if any(abs(int(d)) > 14 for d in re.findall(r"(?<![*!])-?\d+", pattern)):
+        return "degrees go from -7 to 14"
+    return harmony_problem({"cycle": "acid", "bassline": "bass"}.get(kind, "lead"), pattern)
+
+
+def validate_hook(raw, style: str) -> tuple[dict[str, str], str]:
+    """The Director's hook as {"role", "kind", "pattern"}, or ({}, why not).
+    A "cycle" hook (acid, arps) is 3-16 chord-tone degrees or rests that
+    cycle as 16ths; a "phrase" hook (a lead) is a melody over the bar with
+    chord tones on the strong steps. Either way it can't leave the chords."""
+    from .blocks import hook_kinds
+    from .livecode import EditError, check_pattern
+
+    if not isinstance(raw, dict):
+        return {}, "expected {\"role\": ..., \"pattern\": ...}"
+    role = str(raw.get("role", "")).strip().lower()
+    kinds = hook_kinds(style)
+    if role not in kinds:
+        return {}, f"{style} can carry a hook on {', '.join(sorted(kinds))}, not {role!r}"
+    try:
+        pattern = check_pattern(raw.get("pattern", ""))
+    except EditError as e:
+        return {}, str(e)
+    problem = _part_problem(role, kinds[role], pattern)
+    if problem:
+        return {}, problem
+    return {"role": role, "kind": kinds[role], "pattern": pattern}, ""
+
+
+def validate_parts(raw, style: str) -> tuple[dict[str, dict], list[str]]:
+    """The sketch's starting patterns: role -> pattern text in, role ->
+    {"kind", "pattern"} out; parts that don't fit are left out (noted)."""
+    from .blocks import sketch_kinds
+    from .livecode import EditError, check_pattern
+
+    if not isinstance(raw, dict):
+        return {}, (["parts: expected {role: pattern}"] if raw else [])
+    kinds, out, notes = sketch_kinds(style), {}, []
+    for role, pattern in raw.items():
+        role = str(role).strip().lower()
+        if role not in kinds:
+            notes.append(f"part {role!r} can't be sketched in {style} ({', '.join(sorted(kinds))} can)")
+            continue
+        try:
+            pattern = check_pattern(pattern.get("pattern", "") if isinstance(pattern, dict) else pattern)
+        except EditError as e:
+            notes.append(f"part {role}: {e}")
+            continue
+        problem = _part_problem(role, kinds[role], pattern)
+        if problem:
+            notes.append(f"part {role}: {problem}")
+            continue
+        out[role] = {"kind": kinds[role], "pattern": pattern}
+    return out, notes
+
+
+def validate_motion(raw, style: str) -> tuple[dict[str, dict], list[str]]:
+    """Knobs that move on their own: {role: {control: [low, high, bars]}} in,
+    {role: {control: "(slow bars $ range low high sine)"}} out. The control
+    must be one the part takes (livecode.ROLE_FX, or its block's own pF
+    controls such as the acid knob) and the range inside its limits."""
+    from .blocks import BLOCKS
+    from .livecode import FX_RANGES, PF_RANGES, ROLE_FX, EditError, _check_number, line_controls
+
+    if not isinstance(raw, dict):
+        return {}, (["motion: expected {role: {control: [low, high, bars]}}"] if raw else [])
+    out, notes = {}, []
+    for role, controls in raw.items():
+        role = str(role).strip().lower()
+        own_pfs = {n for b in BLOCKS.get(style, []) if b.role == role and not b.drums
+                   for n in line_controls(b.make(random.Random(0)))} - _PATTERN_CONTROLS
+        if not isinstance(controls, dict):
+            notes.append(f"motion {role}: expected {{control: [low, high, bars]}}")
+            continue
+        for control, spec in controls.items():
+            control = str(control).strip().lower()
+            allowed = (control in FX_RANGES and control in ROLE_FX.get(role, ()) and control != "gain") \
+                or (control in own_pfs and control in PF_RANGES)
+            if not allowed:
+                notes.append(f"motion {role}.{control}: not a knob the {role} has")
+                continue
+            try:
+                low, high, bars = (list(spec) + [None, None, None])[:3]
+                value = f"(slow {int(bars)} $ range {float(low):g} {float(high):g} sine)"
+                value = _check_number(value, *(FX_RANGES.get(control) or PF_RANGES[control]))
+            except (TypeError, ValueError, EditError) as e:
+                notes.append(f"motion {role}.{control}: {e}")
+                continue
+            out.setdefault(role, {})[control] = value
+    return out, notes
+
+
+def _written_progression(prog: str, mode: str, notes: list[str], what: str):
+    """A library or written progression; a written one with numerals in the
+    wrong case gets the mode's own chords on those degrees (noted)."""
+    if not prog:
+        return None
+    found = progression_named(prog, mode)
+    if found is None:
+        try:
+            found = parse_progression(prog, mode, fix_case=True)
+            notes.append(f"{what} {prog} -> {found.name} (the chords {mode} has on those degrees)")
+        except ValueError:
+            return None
+    return found
+
+
+def _why_not(prog: str, mode: str) -> str:
+    try:
+        parse_progression(prog, mode)
+    except ValueError as e:
+        return f" ({e})"
+    return ""
+
+
 def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) -> tuple[Piece, list[str]]:
     """Merge an LLM-proposed piece plan onto a valid fallback plan.
 
@@ -549,13 +700,16 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
         lo, hi = STYLES[piece.style]["bpm"]
         piece.bpm = float(round(_clamp(data["bpm"], lo, hi, piece.bpm)))
 
+    # A progression from the library, or one the Director wrote itself; both
+    # must use only the mode's own chords (theory.parse_progression).
     prog = str(data.get("progression", "")).strip()
-    if prog in PROGRESSIONS_BY_NAME and key.mode in PROGRESSIONS_BY_NAME[prog].modes:
-        piece.progression = prog
+    written = _written_progression(prog, key.mode, notes, "progression")
+    if written is not None:
+        piece.progression = written.name
     else:
         if prog:
-            notes.append(f"progression {prog!r} not valid for {key.mode}")
-        if key.mode not in PROGRESSIONS_BY_NAME[piece.progression].modes:
+            notes.append(f"progression {prog!r} not valid for {key.mode}{_why_not(prog, key.mode)}")
+        if progression_named(piece.progression, key.mode) is None:
             piece.progression = progressions_for(key.mode)[0].name
 
     mood = str(data.get("mood", "")).strip()
@@ -570,15 +724,16 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
 
     # Per-section progressions must suit the (possibly new) mode.
     section_progs = {name: prog for name, prog in piece.section_progressions.items()
-                     if key.mode in PROGRESSIONS_BY_NAME[prog].modes}
+                     if progression_named(prog, key.mode) is not None}
     raw_progs = data.get("section_progressions")
     if isinstance(raw_progs, dict):
         for name, prog in raw_progs.items():
             name = str(name).strip().lower()
-            if name in SECTION_TYPES and prog in PROGRESSIONS_BY_NAME and key.mode in PROGRESSIONS_BY_NAME[prog].modes:
-                section_progs[name] = prog
+            written = _written_progression(str(prog).strip(), key.mode, notes, f"{name} progression")
+            if name in SECTION_TYPES and written is not None:
+                section_progs[name] = written.name
             else:
-                notes.append(f"section progression {name}={prog!r} rejected")
+                notes.append(f"section progression {name}={prog!r} rejected{_why_not(str(prog), key.mode)}")
     piece.section_progressions = section_progs
     if not piece.section_progressions and key.mode != Key.parse(fallback.key).mode:
         _add_variety(piece, random.Random(piece.seed))
@@ -636,6 +791,20 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
             else:
                 notes.append(f"sound {role}={synth!r} rejected")
 
+    if "hook" in data:
+        piece.hook, why = validate_hook(data.get("hook"), piece.style)
+        if why:
+            notes.append(f"hook rejected ({why})")
+    if "parts" in data:
+        piece.parts, part_notes = validate_parts(data.get("parts"), piece.style)
+        notes.extend(part_notes)
+    if "motion" in data:
+        piece.motion, motion_notes = validate_motion(data.get("motion"), piece.style)
+        notes.extend(motion_notes)
+    idea = " ".join(str(data.get("idea") or "").split())
+    if idea:
+        piece.idea = idea[:200]
+
     fallback_lift = any(s.key_shift for s in fallback.sections)
     lift = data.get("key_lift", fallback_lift)
     if lift is True or (lift and str(lift).lower() == "true"):
@@ -688,6 +857,36 @@ def validate_arrangement(data: dict, piece: Piece, fallback: Arrangement, max_la
     elif character:
         notes.append(f"unknown melody_character {character!r}")
     return arrangement, notes
+
+
+def director_vocabulary(style: str | None) -> dict:
+    """What the Director may choose from for a piece: the style's tempo and
+    modes, the chords each mode allows for written progressions (with a few
+    examples), the live sounds, and which parts can carry a hook."""
+    from .blocks import BLOCKS, hook_kinds, sketch_kinds
+    from .livecode import FX_RANGES, PF_RANGES, ROLE_FX, line_controls
+
+    styles = [style] if style in STYLES else list(STYLES)
+    knobs = {}
+    for s in styles:
+        for block in BLOCKS.get(s, []):
+            if block.drums:
+                continue
+            own = {n: list(PF_RANGES[n]) for n in line_controls(block.make(random.Random(0)))
+                   if n in PF_RANGES and n not in _PATTERN_CONTROLS}
+            fx = {n: list(FX_RANGES[n]) for n in ROLE_FX.get(block.role, ()) if n not in ("gain", "legato")}
+            knobs.setdefault(block.role, {}).update({**fx, **own})
+    modes = sorted({m for s in styles for m in STYLES[s]["modes"]}, key=list(MODES).index)
+    return {
+        "styles": {s: {"bpm": list(STYLES[s]["bpm"]), "modes": STYLES[s]["modes"]} for s in styles},
+        "chords_per_mode": {m: mode_chords(m) for m in modes},
+        "example_progressions": {m: [p.name for p in progressions_for(m)][:6] for m in modes},
+        "section_types": SECTION_TYPES,
+        "sounds": LIVE_SOUNDS,
+        "hook_parts": {s: hook_kinds(s) for s in styles},
+        "sketch_parts": {s: sketch_kinds(s) for s in styles},
+        "knobs": knobs,
+    }
 
 
 def describe_options() -> dict:

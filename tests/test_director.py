@@ -143,5 +143,150 @@ def test_the_director_sees_the_previous_shape_and_is_told_not_to_repeat_it(monke
     director.next_piece(previous)
     prompt = prompts[-1]
     shape = " → ".join(f"{s.name} {s.bars}" for s in previous.sections)
-    assert f"Previous piece's shape (don't repeat it): {shape}" in prompt
-    assert "must NOT repeat the previous piece's" in prompt and "double breakdown" in prompt
+    assert f"Previous track's shape (if you write `sections`, make it different): {shape}" in prompt
+
+
+def test_written_progressions_use_only_the_modes_chords():
+    from music.theory import parse_progression, progression_named
+
+    assert parse_progression("i-II-VI-vii", "phrygian").degrees == (0, 1, 5, 6)
+    for bad in ("i-V-VI-VII",        # V isn't in natural minor
+                "i-ii-VI-VII",       # ii is diminished in minor
+                "i-VI-VII",          # three chords
+                "i-VI-X-VII"):       # not a numeral
+        with pytest.raises(ValueError):
+            parse_progression(bad, "minor")
+    assert progression_named("i-V-VI-VII", "minor") is None
+
+
+def test_hooks_stay_on_chord_tones():
+    from music.plan import validate_hook
+
+    assert validate_hook({"role": "acid", "pattern": "0 7 0 4 9"}, "trance")[0]["kind"] == "cycle"
+    assert validate_hook({"role": "lead", "pattern": "7 ~ 4 ~ 9 ~ 7 5"}, "trance")[0]["kind"] == "phrase"
+    assert not validate_hook({"role": "acid", "pattern": "0 3 0 4"}, "trance")[0]       # 3 clashes
+    assert not validate_hook({"role": "lead", "pattern": "1 ~ 4 ~ 9 ~ 7 ~"}, "trance")[0]  # strong step off
+    assert not validate_hook({"role": "bass", "pattern": "0 7"}, "trance")[0]            # no hook part
+
+
+def test_the_director_writes_its_own_chords_and_hook(monkeypatch):
+    from music.blocks import find_block
+
+    reply = {"title": "Glass Minaret", "key": "E phrygian", "bpm": 138, "progression": "i-II-VI-vii",
+             "section_progressions": {"breakdown": "VI-vii-i-i", "chorus": "i-III-II-i"},
+             "hook": {"role": "acid", "pattern": "0 7 0 4 9 4 2"}, "idea": "the acid climbs at the peak"}
+    prompts = []
+
+    def complete(model_id, system, user, **kwargs):
+        prompts.append(user)
+        return json.dumps(reply)
+
+    monkeypatch.setattr(llm, "complete", complete)
+    director = D.Director("fake/model", random.Random(1), log=lambda m: None, style="trance")
+    piece = director.next_piece(None)
+    assert (piece.key, piece.progression) == ("E phrygian", "i-II-VI-vii")
+    assert piece.section_progressions["chorus"] == "i-III-II-i"
+    assert piece.hook == {"role": "acid", "kind": "cycle", "pattern": "0 7 0 4 9 4 2"}
+    assert "Suggested key:" in prompts[-1] and "chords_per_mode" in prompts[-1]
+
+    # The acid line plays the hook when it comes in.
+    line = find_block("trance", "acid").make(random.Random(0), {}, piece.hook)
+    assert line.patterns["motif"] == "0 7 0 4 9 4 2"
+
+    # The next track isn't in a key played recently.
+    second = director.next_piece(piece)
+    assert second.key != "E phrygian"
+    assert "E phrygian" in prompts[-1] and "acid: 0 7 0 4 9 4 2" in prompts[-1]
+
+
+def test_wrong_case_chords_become_the_modes_own():
+    from music.plan import validate_piece
+
+    fallback = plan_piece(random.Random(0), style="trance")
+    piece, notes = validate_piece({"key": "B dorian", "progression": "i-VII-iv-VII",
+                                   "section_progressions": {"chorus": "i-IV-iii-VII"}}, fallback)
+    assert piece.progression == "i-VII-IV-VII"
+    assert piece.section_progressions["chorus"] == "i-IV-III-VII"
+    assert any("i-VII-iv-VII -> i-VII-IV-VII" in n for n in notes)
+
+
+def test_sixteen_note_cycle_hooks_are_fine():
+    from music.plan import validate_hook
+
+    assert validate_hook({"role": "arp", "pattern": "0 ~ ~ 7 ~ 4 ~ 0 ~ 11 ~ ~ 7 ~ 4 ~"}, "trance")[0]
+
+
+def test_the_hooks_part_comes_in_right_after_the_opener():
+    from music.livecode import Program, Track, apply_edit
+    from music.performer import Performer
+
+    performer = Performer(random.Random(2), style="trance", log=lambda *_: None)
+    track = performer.new_track(None)
+    track.hook = {"role": "arp", "kind": "cycle", "pattern": "0 7 4 7 0 4 ~ 7"}
+    program = Program(track)
+    for _ in range(2):
+        program = apply_edit(program, performer._builtin_edit(program), performer.settings["max_lines"])
+    assert "arp" in program.lines and program.lines["arp"].patterns[
+        next(iter(k for k in program.lines["arp"].patterns if k in ("motif", "arp")))] == "0 7 4 7 0 4 ~ 7"
+    # The judge is offered only the hook's part to add until it's in.
+    performer2 = Performer(random.Random(2), style="trance", log=lambda *_: None)
+    performer2.new_track(None)
+    fresh = Program(track)
+    fresh = apply_edit(fresh, performer2._add(fresh, "beat"), 5)
+    adds = [e.role for e in performer2._candidates(fresh) if e.op == "add"]
+    assert adds == ["arp"]
+
+
+def test_distilled_answers_are_kept_only_when_nothing_needed_fixing():
+    from eval.distill_director import _situation, check
+
+    req = _situation(random.Random(5), 0)
+    while req["style"] != "trance":
+        req = _situation(random.Random(len(req["prompt"])), 0)
+    answer = {"title": "Glass Minaret", "key": "C# phrygian", "bpm": 138, "progression": "i-II-VI-vii",
+              "section_progressions": {"breakdown": "VI-vii-i-i", "chorus": "i-III-II-i"},
+              "hook": {"role": "acid", "pattern": "0 7 0 4 9 4 2"}, "idea": "the acid climbs",
+              "parts": {"bass": "[~ 0 0 0]*4", "chords": "~ t ~ t ~ t [~ t] ~",
+                        "lead": "<[7 ~ 4 ~ 2 ~ 0 ~] [9 ~ 7 ~ 4 ~ 2 ~]>", "arp": "0 4 7 11"},
+              "motion": {"acid": {"acid": [0.3, 0.85, 32]}, "chords": {"lpf": [1500, 4000, 16]}},
+              "narration": "Hold on.", "mood": "tense"}
+    if "C# phrygian" in req["recent_keys"]:
+        answer["key"] = "D# phrygian"
+    assert check(req, json.dumps(answer))[0] is not None
+    # Playable after a correction (V -> v) isn't good enough to learn from.
+    fixed = dict(answer, key="C# minor", progression="i-V-VI-VII",
+                 section_progressions={"breakdown": "VI-VII-i-i", "chorus": "i-VI-III-VII"},
+                 hook={"role": "acid", "pattern": "0 7 0 4"})
+    assert check(req, json.dumps(fixed))[0] is None
+    assert check(req, json.dumps({k: v for k, v in answer.items() if k != "hook"}))[0] is None
+    # Too thin for a Switch Angel build: one part, nothing moving.
+    assert "parts sketched" in check(req, json.dumps(dict(answer, parts={"bass": "[~ 0 0 0]*4"})))[1]
+    assert "moving knobs" in check(req, json.dumps(dict(answer, motion={})))[1]
+
+
+def test_the_sketch_sets_each_parts_starting_pattern_and_moving_knobs():
+    from music.blocks import find_block
+    from music.plan import validate_motion, validate_parts
+
+    parts, notes = validate_parts({"bass": "[~ 0 ~ 7]*4", "chords": "t ~ ~ t ~ ~ t ~", "arp": "0 3 7"}, "trance")
+    assert set(parts) == {"bass", "chords"} and "arp" in notes[0]          # 3 isn't a chord tone
+    motion, notes = validate_motion({"acid": {"acid": [0.3, 0.85, 32]}, "bass": {"room": [0, 0.5, 8]},
+                                     "acid ": {"accent": [0, 1, 8]}}, "trance")
+    assert motion == {"acid": {"acid": "(slow 32 $ range 0.3 0.85 sine)"}} and len(notes) == 2
+    bass = find_block("trance", "rolling_bass").make(random.Random(0), {}, None, parts, motion)
+    assert bass.patterns["rhythm"] == "[~ 0 ~ 7]*4"
+    stabs = find_block("trance", "piano_stabs").make(random.Random(0), {}, None, parts, motion)
+    assert stabs.patterns["stab"] == "t ~ ~ t ~ ~ t ~"
+    acid = find_block("trance", "acid").make(random.Random(0), {}, None, parts, motion)
+    assert dict(acid.pfs)["acid"] == "(slow 32 $ range 0.3 0.85 sine)"
+
+
+def test_the_performer_is_told_how_complex_the_phase_should_be():
+    from music.livecode import Program
+    from music.performer import Performer
+
+    performer = Performer(random.Random(0), style="trance", log=lambda *_: None)
+    track = performer.new_track(None)
+    performer.state.phase = "groove2"
+    note = performer.complexity_note(Program(track))
+    assert "about 22" in note and "too plain" in note

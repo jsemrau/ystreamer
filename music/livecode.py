@@ -100,17 +100,38 @@ FX_NOTES = {
     "shape": "distortion/saturation: 0 clean, 0.5 heavily driven",
     "speed": "sample playback speed: 2 = an octave up and shorter",
     "acid": "the acid squelch knob: 0.2 closed and muffled, 0.9 screaming open",
-    "acidres": "resonance of the acid filter: higher is more whistling",
+    "acidres": "the acid filter's damping: lower is more resonant and whistling (0.08 screams, 0.4 smooth)",
     "accent": "the 303 accent: accented steps (1) are louder, brighter, more resonant; a pattern like \"[0 0 1 0]*4\"",
     "drive": "grit on the acid: 1 clean, 2 dirty, 3 screaming",
     "gatedepth": "how hard the trance gate chops the chords",
     "duckdepth": "sidechain pump from the kick: 0 none, 0.8 strong pumping",
 }
 
+# The custom controls each of our SynthDefs takes (tidal/synthdefs.scd), so an
+# edit can set one the line doesn't carry yet (it plays at the synth's default).
+SYNTH_CONTROLS: dict[str, tuple[str, ...]] = {
+    "ys_acid": ("acid", "acidres", "accent", "drive"),
+    "ys_gatesaw": ("gatedepth", "duckdepth"),
+    "ys_supersaw": ("duckdepth",),
+}
+_SYNTH_RE = re.compile(r'# s "(\w+)"')
+
+
+def line_controls(line: "LineSpec") -> list[str]:
+    """The pF controls a line can set: those it carries, then the others its
+    synth takes."""
+    have = [n for n, _ in line.pfs]
+    m = _SYNTH_RE.search(line.body)
+    synth = m.group(1) if m else ""
+    if synth == "{synth}" or not m:
+        synth = line.patterns.get("synth", "")
+    return have + [c for c in SYNTH_CONTROLS.get(synth, ()) if c not in have and c in PF_RANGES]
+
+
 # Effects that make sense per role (bass stays dry and dark; textures only
 # get space and tone).
 ROLE_FX = {
-    "beat": ["lpf", "room", "crush", "shape", "gain"], "perc": ["room", "pan", "gain", "lpf"],
+    "beat": ["lpf", "room", "crush", "shape", "gain"], "perc": ["room", "pan", "gain", "lpf", "hpf"],
     "bass": ["lpf", "gain", "legato"], "texture": ["room", "lpf", "gain"],
     "chords": ["lpf", "room", "size", "gain"], "keys": ["lpf", "room", "delay", "legato", "gain"],
     "lead": ["lpf", "room", "delay", "delayfeedback", "legato", "gain"],
@@ -190,6 +211,16 @@ class Track:
     start_cycle: int = 0
     # The Director's sound per part for this track (blocks.LIVE_SOUNDS).
     sounds: dict = field(default_factory=dict)
+    # The Director's hook ({"role", "pattern"}) and its idea for the track.
+    hook: dict = field(default_factory=dict)
+    idea: str = ""
+    # The rest of the Director's sketch (plan.Piece.parts / .motion).
+    parts: dict = field(default_factory=dict)
+    motion: dict = field(default_factory=dict)
+
+    def make(self, block, rng) -> "LineSpec":
+        """A line from a block, with this track's sounds and sketch."""
+        return block.make(rng, self.sounds, self.hook, self.parts, self.motion)
 
     @property
     def cps(self) -> float:
@@ -468,6 +499,8 @@ def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
             raise EditError(f"at most {max_lines} lines")
         line.muted = False
     elif op in ("set_fx", "remove_fx"):
+        if edit.name in PF_RANGES and edit.name not in FX_RANGES:
+            raise EditError(f"{edit.name!r} is a synth control: use set_pf")
         if edit.name not in FX_RANGES or edit.name not in ROLE_FX.get(role, list(FX_RANGES)):
             raise EditError(f"effect {edit.name!r} not allowed on the {role}")
         line.fx = [pair for pair in line.fx if pair[0] != edit.name]
@@ -477,10 +510,14 @@ def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
         elif edit.name == "gain":
             raise EditError("gain can be adjusted but not removed")
     elif op == "set_pf":
-        if edit.name not in PF_RANGES or not any(p[0] == edit.name for p in line.pfs):
-            raise EditError(f"control {edit.name!r} not on this line")
+        if edit.name not in PF_RANGES or edit.name not in line_controls(line):
+            raise EditError(f"control {edit.name!r} isn't one this line's synth takes"
+                            f" ({', '.join(line_controls(line)) or 'none'})")
         value = _check_number(edit.value, *PF_RANGES[edit.name])
-        line.pfs = [[n, value if n == edit.name else v] for n, v in line.pfs]
+        if any(p[0] == edit.name for p in line.pfs):
+            line.pfs = [[n, value if n == edit.name else v] for n, v in line.pfs]
+        else:
+            line.pfs.append([edit.name, value])
     elif op == "set_pattern":
         if edit.name not in line.patterns:
             raise EditError(f"pattern {edit.name!r} not on this line (has {sorted(line.patterns)})")

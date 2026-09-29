@@ -39,7 +39,7 @@ Stream theme: {theme}. Style: {style}.
 - `{{"op": "set_fx", "role": "<role>", "name": "<effect>", "value": "<number or (slow 8 $ range a b sine)>"}}`
 - `{{"op": "remove_fx", "role": "<role>", "name": "<effect>"}}`
 - `{{"op": "set_pf", "role": "<role>", "name": "<control>", "value": "<number or (slow 8 $ range a b sine)>"}}`
-  for controls already on the line
+  for the synth's own controls: those on the line (`controls`) or one it can add (`can_add_controls`)
 - `{{"op": "wrap" | "unwrap", "role": "<role>", "name": "<wrapper>"}}`
 - `{{"op": "tempo", "value": "<bpm>"}}`, at most +/-12 BPM from now
 
@@ -52,6 +52,10 @@ an octave layer - with things always moving (filter and acid sweeps, the
 kick pumping). Calm styles stay sparser, but still move.
 Harmony and a coherent sound come first: every line plays chord tones where
 it matters, and the kit stays the same.
+The track's `hook` and `idea` (in Track) come from the Director and are what
+make this track its own. The hook is the tune its part starts with: keep it
+recognisable, develop it (take half of it, move it up, change its rhythm)
+rather than replacing it. Steer toward the idea over the whole track.
 Play like a live coder with a hand on the knobs: ONE small, audible change
 at a time - one note, one step, one hit, a knob ridden a little further in
 the direction it was going. The track grows by accumulation; listeners

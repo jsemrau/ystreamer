@@ -34,7 +34,7 @@ from . import runtime
 from .director import Director
 from .plan import Arrangement, Piece
 from .templates import HarmonyContext, render_layer, statement, with_orbit
-from .theory import PROGRESSIONS_BY_NAME, Key, progression_chords, transpose_key
+from .theory import Key, progression_chords, progression_named, progressions_for, transpose_key
 
 
 class Clock:
@@ -109,9 +109,9 @@ class MusicEngine:
                     arrangement: Arrangement | None = None) -> HarmonyContext:
         section = piece.sections[index]
         key = transpose_key(Key.parse(piece.key), section.key_shift)
-        progression = PROGRESSIONS_BY_NAME[piece.progression_for(section.name)]
-        if key.mode not in progression.modes:
-            progression = PROGRESSIONS_BY_NAME[piece.progression]
+        progression = (progression_named(piece.progression_for(section.name), key.mode)
+                       or progression_named(piece.progression, key.mode)
+                       or progressions_for(key.mode)[0])
         chords = progression_chords(key, progression, color=piece.color)
         # Same section name -> same seed -> recurring sections reuse their
         # melody's opening; `variation` makes each return answer differently.

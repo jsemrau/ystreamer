@@ -784,3 +784,29 @@ def test_caching_is_asked_for(monkeypatch):
     monkeypatch.setattr(llm, "_claude_client", client)
     llm._claude("claude-sonnet-5", "rules", "now", 10, 100)
     assert sent["system"] == [{"type": "text", "text": "rules", "cache_control": {"type": "ephemeral"}}]
+
+
+def test_a_plain_groove_speeds_up_the_edits_until_it_is_rich():
+    performer = Performer(random.Random(0), style="trance", log=lambda *_: None)
+    performer.state.phase = "groove2"
+    performer._complexity_now = 6.0          # far below the peak's target
+    assert performer.edit_bars_now() == STYLE_SETTINGS["trance"]["edit_bars"] // 2
+    performer._complexity_now = 21.0         # rich enough: the normal pace
+    assert performer.edit_bars_now() == STYLE_SETTINGS["trance"]["edit_bars"]
+
+
+def test_a_control_the_synth_takes_can_be_added_even_as_an_effect():
+    from music.blocks import find_block
+    from music.livecode import line_controls
+
+    performer = Performer(random.Random(0), style="trance", log=lambda *_: None)
+    track = performer.new_track(None)
+    program = Program(track)
+    program.lines["acid"] = find_block("trance", "acid").make(random.Random(0))
+    assert "acidres" in line_controls(program.lines["acid"])
+    edit = performer._edit_from_json({"op": "set_fx", "role": "acid", "name": "acidres", "value": "0.12"}, program)
+    assert edit.op == "set_pf"
+    after = apply_edit(program, edit)
+    assert dict(after.lines["acid"].pfs)["acidres"] == "0.12"
+    with pytest.raises(EditError):       # the acid synth has no trance gate
+        apply_edit(program, Edit("set_pf", role="acid", name="gatedepth", value="0.5"))

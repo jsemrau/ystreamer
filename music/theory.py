@@ -35,6 +35,7 @@ MODES: dict[str, list[int]] = {
     "major": [0, 2, 4, 5, 7, 9, 11],
     "minor": [0, 2, 3, 5, 7, 8, 10],
     "dorian": [0, 2, 3, 5, 7, 9, 10],
+    "phrygian": [0, 1, 3, 5, 7, 8, 10],
     "lydian": [0, 2, 4, 6, 7, 9, 11],
     "mixolydian": [0, 2, 4, 5, 7, 9, 10],
 }
@@ -42,7 +43,7 @@ MODES: dict[str, list[int]] = {
 MODE_ALIASES = {
     "maj": "major", "ionian": "major",
     "min": "minor", "m": "minor", "aeolian": "minor", "natural minor": "minor",
-    "dor": "dorian", "lyd": "lydian", "mix": "mixolydian", "mixo": "mixolydian",
+    "dor": "dorian", "phr": "phrygian", "lyd": "lydian", "mix": "mixolydian", "mixo": "mixolydian",
 }
 
 # Pentatonic subset (as scale-degree indices into the mode) that is safe to
@@ -51,6 +52,7 @@ SAFE_PENTATONIC = {
     "major": [0, 1, 2, 4, 5],       # 1 2 3 5 6
     "minor": [0, 2, 3, 4, 6],       # 1 b3 4 5 b7
     "dorian": [0, 2, 3, 4, 6],      # 1 b3 4 5 b7
+    "phrygian": [0, 2, 3, 4, 6],    # 1 b3 4 5 b7
     "lydian": [0, 1, 2, 4, 5],      # 1 2 3 5 6
     "mixolydian": [0, 1, 2, 4, 5],  # 1 2 3 5 6
 }
@@ -202,13 +204,76 @@ PROGRESSIONS: list[Progression] = [
     # modal
     Progression("i-IV-i-IV", (0, 3, 0, 3), ("dorian",), "groovy, floating", (0.0, 1.0)),
     Progression("i-IV-VII-IV", (0, 3, 6, 3), ("dorian",), "soulful", (0.2, 1.0)),
+    Progression("i-III-IV-i", (0, 2, 3, 0), ("dorian",), "bright, lifting", (0.2, 1.0)),
+    Progression("i-VII-III-IV", (0, 6, 2, 3), ("dorian",), "open, rolling", (0.3, 1.0)),
+    Progression("i-IV-v-i", (0, 3, 4, 0), ("dorian",), "cool, driving", (0.2, 1.0)),
     Progression("I-II-I-II", (0, 1, 0, 1), ("lydian",), "dreamy, weightless", (0.0, 0.6)),
     Progression("I-II-V-I", (0, 1, 4, 0), ("lydian",), "wonder", (0.0, 1.0)),
     Progression("I-VII-IV-I", (0, 6, 3, 0), ("mixolydian",), "laid-back, sunny", (0.0, 1.0)),
     Progression("I-v-IV-I", (0, 4, 3, 0), ("mixolydian",), "folky, open", (0.0, 1.0)),
+    Progression("i-II-i-II", (0, 1, 0, 1), ("phrygian",), "hypnotic, eastern", (0.0, 1.0)),
+    Progression("i-II-III-II", (0, 1, 2, 1), ("phrygian",), "dark, driving", (0.3, 1.0)),
+    Progression("i-II-vii-i", (0, 1, 6, 0), ("phrygian",), "tense, psychedelic", (0.2, 1.0)),
+    Progression("i-VI-II-i", (0, 5, 1, 0), ("phrygian",), "brooding", (0.0, 1.0)),
+    Progression("i-iv-II-i", (0, 3, 1, 0), ("phrygian",), "ominous", (0.2, 1.0)),
+    Progression("i-III-II-i", (0, 2, 1, 0), ("phrygian",), "dark, rolling", (0.3, 1.0)),
 ]
 
 PROGRESSIONS_BY_NAME = {p.name: p for p in PROGRESSIONS}
+
+MAX_CUSTOM_CHORDS = 4   # a written progression has the library's length: one period for every layer
+
+
+def parse_progression(name: str, mode: str, fix_case: bool = False) -> Progression:
+    """A progression written in Roman numerals ("i-II-VI-VII"), checked
+    against the mode: 4 chords, each one of the mode's own chords with the
+    case matching its quality (upper = major, lower = minor) and no
+    diminished chords. Raises ValueError saying what is wrong. With
+    `fix_case`, a numeral in the wrong case ("iv" where the mode has "IV")
+    becomes the mode's own chord on that degree: same root movement, still
+    in key."""
+    tokens = [t.strip() for t in str(name).strip().split("-")]
+    if len(tokens) != MAX_CUSTOM_CHORDS:
+        raise ValueError(f"{name!r}: write exactly {MAX_CUSTOM_CHORDS} chords, e.g. i-VI-III-VII")
+    key = Key(0, parse_mode(mode))
+    degrees = []
+    for token in tokens:
+        if token.lower() not in ROMAN:
+            raise ValueError(f"{token!r} is not a Roman numeral I-VII")
+        degree = ROMAN.index(token.lower())
+        quality = diatonic_chord(key, degree, seventh=False).quality
+        expected = {"maj": ROMAN[degree].upper(), "min": ROMAN[degree]}.get(quality)
+        if expected is None:
+            raise ValueError(f"{token!r}: degree {degree + 1} is {quality} in {key.mode}; avoid it")
+        if token != expected and not fix_case:
+            raise ValueError(f"{token!r} is not in {key.mode}; that chord is {expected}")
+        tokens[len(degrees)] = expected
+        degrees.append(degree)
+    return Progression("-".join(tokens), tuple(degrees), (key.mode,), "", (0.0, 1.0))
+
+
+def mode_chords(mode: str) -> list[str]:
+    """The Roman numerals a written progression may use in a mode (its major
+    and minor chords; diminished ones left out)."""
+    key = Key(0, parse_mode(mode))
+    out = []
+    for degree in range(7):
+        quality = diatonic_chord(key, degree, seventh=False).quality
+        if quality in ("maj", "min"):
+            out.append(ROMAN[degree].upper() if quality == "maj" else ROMAN[degree])
+    return out
+
+
+def progression_named(name: str, mode: str) -> Progression | None:
+    """The library progression of that name when it suits the mode, else a
+    written one that passes parse_progression, else None."""
+    known = PROGRESSIONS_BY_NAME.get(name)
+    if known is not None and mode in known.modes:
+        return known
+    try:
+        return parse_progression(name, mode)
+    except ValueError:
+        return None
 
 
 def progressions_for(mode: str, energy: float | None = None) -> list[Progression]:

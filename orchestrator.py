@@ -319,12 +319,12 @@ def run_selftest(args) -> int:
             failures += 1
             print(f"[selftest] FAIL missing {fn}: {out}")
     # Live-coding blocks: every block of every style, plus every wrapper and a
-    # modulated effect on each, in a major and a minor key.
+    # modulated effect on each, in a major, a minor and a phrygian key.
     from music.blocks import BLOCKS
     from music.livecode import ROLE_FX, Track, allowed_wrappers
 
     for style, blocks in BLOCKS.items():
-        for key, degrees in (("A major", [0, 5, 3, 4]), ("E minor", [0, 5, 2, 6])):
+        for key, degrees in (("A major", [0, 5, 3, 4]), ("E minor", [0, 5, 2, 6]), ("F# phrygian", [0, 1, 5, 6])):
             harmony = Track("selftest", style, key, 120, degrees, 2).harmony()
             for block in blocks:
                 line = block.make(random.Random(0))

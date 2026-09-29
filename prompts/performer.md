@@ -4,6 +4,8 @@ Track: {track}
 
 {phase_help}
 
+{complexity}
+
 Good moves in this phase look like (adapt them to the lines that exist):
 {examples}
 

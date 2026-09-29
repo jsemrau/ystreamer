@@ -3,7 +3,7 @@ import random
 from music import presets as P
 from music.plan import (STYLES, arrange, plan_piece, validate_arrangement,
                         validate_piece, Piece)
-from music.theory import PROGRESSIONS_BY_NAME, Key
+from music.theory import PROGRESSIONS_BY_NAME, Key, progression_named
 
 
 def test_plan_piece_is_valid_and_sections_align_to_period():
@@ -58,14 +58,15 @@ def test_validate_piece_rejects_nonsense():
 def test_validate_piece_accepts_good_plan_and_fixes_progression_mode():
     fallback = plan_piece(random.Random(3), style="lofi")
     data = {"title": "Rain Letters", "style": "ambient", "key": "F lydian", "bpm": 70,
-            "progression": "i-VI-III-VII",  # minor progression, invalid for lydian
+            "progression": "i-VI-III-VII",  # minor numerals: become lydian's own chords on those degrees
             "sections": [{"name": "intro", "bars": 16, "energy": 0.2},
                          {"name": "verse", "bars": 33, "energy": 0.5},
                          {"name": "outro", "bars": 16, "energy": 9}]}
     piece, notes = validate_piece(data, fallback)
     assert piece.title == "Rain Letters"
     assert piece.key == "F lydian"
-    assert "lydian" in PROGRESSIONS_BY_NAME[piece.progression].modes
+    assert piece.progression == "I-vi-iii-vii"
+    assert progression_named(piece.progression, "lydian") is not None
     assert all(s.bars % piece.period == 0 for s in piece.sections)
     assert piece.sections[-1].energy == 1.0
 

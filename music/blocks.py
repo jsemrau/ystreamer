@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import mix
-from .livecode import LineSpec
+from .livecode import ROLE_FX, LineSpec, line_controls
 
 # The sounds the Director picks from, per part, for each track: the toolkit of
 # 1990s trance and house, without saws or organ. The chosen sound replaces the
@@ -40,6 +40,37 @@ LIVE_SOUNDS = {
 }
 
 
+# Parts that can carry the Director's hook, and how their tune slot looks in
+# a block body: '("<{motif}>*16" |+ "<{roots}>")' or '("{melody}" |+ "<{roots}>")'.
+HOOK_ROLES = ("acid", "lead", "arp", "keys")
+# Parts whose starting pattern the Director's sketch can set: tunes, the
+# bass line, and chord rhythms ('struct "{stab}"').
+SKETCH_ROLES = ("acid", "lead", "arp", "keys", "bass", "chords")
+_STRUCT_SLOT_RE = re.compile(r'struct "\{(\w+)\}"')
+_TUNE_SLOT_RE = re.compile(r'\("(<)?\{(\w+)\}(?:>\*\d+)?" \|\+ "<\{roots\}>"\)')
+
+
+def sketch_kinds(style: str) -> dict[str, str]:
+    """Role -> kind of pattern the Director's sketch can give it in this
+    style: "cycle", "phrase", "bassline" (tunes) or "rhythm" (chord hits)."""
+    out: dict[str, str] = {}
+    for block in BLOCKS.get(style, BLOCKS["lofi"]):
+        slot = block.sketch_slot()
+        if slot and block.role not in out:
+            out[block.role] = slot[1]
+    return out
+
+
+def hook_kinds(style: str) -> dict[str, str]:
+    """Role -> kind ("cycle" or "phrase") of the hooks a style's blocks can play."""
+    out: dict[str, str] = {}
+    for block in BLOCKS.get(style, BLOCKS["lofi"]):
+        tune = block.hook_slot()
+        if tune and block.role not in out:
+            out[block.role] = tune[1]
+    return out
+
+
 @dataclass
 class Block:
     name: str
@@ -53,10 +84,47 @@ class Block:
     # Degree pool for mutating melodic patterns (numbers the performer may use).
     pool: list[int] = field(default_factory=list)
 
-    def make(self, rng: random.Random, sounds: dict[str, str] | None = None) -> LineSpec:
+    def hook_slot(self) -> tuple[str, str] | None:
+        """(slot, kind) of the pattern that carries this block's tune, or None:
+        kind "cycle" is a note cycle played as 16ths ("<{motif}>*16"),
+        "phrase" a melody over the bar ("{melody}")."""
+        if self.drums or self.role not in HOOK_ROLES:
+            return None
+        m = _TUNE_SLOT_RE.search(self.body)
+        if not m or m.group(2) not in self.patterns:
+            return None
+        return m.group(2), "cycle" if m.group(1) else "phrase"
+
+    def sketch_slot(self) -> tuple[str, str] | None:
+        """(slot, kind) of the pattern the Director's sketch sets for this
+        block: its tune ("cycle", "phrase", or "bassline" for the bass) or its
+        chord rhythm ("rhythm", t for a hit, ~ for a rest)."""
+        if self.drums or self.role not in SKETCH_ROLES:
+            return None
+        m = _TUNE_SLOT_RE.search(self.body)
+        if m and m.group(2) in self.patterns:
+            return m.group(2), "cycle" if m.group(1) else ("bassline" if self.role == "bass" else "phrase")
+        m = _STRUCT_SLOT_RE.search(self.body)
+        if m and m.group(1) in self.patterns:
+            return m.group(1), "rhythm"
+        return None
+
+    def make(self, rng: random.Random, sounds: dict[str, str] | None = None,
+             hook: dict[str, str] | None = None, parts: dict | None = None,
+             motion: dict | None = None) -> LineSpec:
         """A new line from this block; `sounds` (part -> synth, the Director's
-        choice for the track) sets the synth of melodic parts."""
+        choice for the track) sets the synth of melodic parts, the track's
+        `hook` becomes the tune of the part it was written for, `parts` (role
+        -> {"kind", "pattern"}, the Director's sketch) the starting pattern of
+        the others, and `motion` (role -> {control: value}) sets knobs that
+        move on their own."""
         patterns = {slot: rng.choice(options) for slot, options in self.patterns.items()}
+        tune = self.hook_slot()
+        slot = self.sketch_slot()
+        if hook and tune and hook.get("role") == self.role and hook.get("kind", tune[1]) == tune[1]:
+            patterns[tune[0]] = hook["pattern"]
+        elif parts and slot and (parts.get(self.role) or {}).get("kind") == slot[1]:
+            patterns[slot[0]] = parts[self.role]["pattern"]
         body = self.body
         sound = (sounds or {}).get(self.role)
         palette = LIVE_SOUNDS.get(self.role, {})
@@ -77,9 +145,21 @@ class Block:
         gain = None if "struct" in body else mix.calibrated_gain(synth, self.role, chord="{chords}" in body)
         if gain is not None:
             fx = [[n, f"{gain:g}"] if n == "gain" else [n, v] for n, v in fx]
+        pfs = [list(p) for p in self.pfs]
+        for control, value in ((motion or {}).get(self.role) or {}).items():
+            if control == "gain":
+                continue
+            if any(n == control for n, _ in pfs):
+                pfs = [[n, value if n == control else v] for n, v in pfs]
+            elif any(n == control for n, _ in fx):
+                fx = [[n, value if n == control else v] for n, v in fx]
+            elif control in ROLE_FX.get(self.role, ()):
+                fx.append([control, value])
+            elif control in line_controls(LineSpec(self.role, body, patterns)):
+                pfs.append([control, value])     # a control the synth takes (e.g. acidres)
         return LineSpec(
             role=self.role, body=body, patterns=patterns,
-            fx=fx, pfs=[list(p) for p in self.pfs],
+            fx=fx, pfs=pfs,
             wrappers=list(self.wrappers), drums=self.drums, block=self.name,
             base_gain=dict((n, v) for n, v in fx).get("gain", ""),
         )
@@ -390,18 +470,19 @@ BLOCKS["darkwave"] = [
 BLOCKS["techno"] = _techno_blocks(hard=False)
 BLOCKS["hardcore"] = _techno_blocks(hard=True)
 
-# Per style: bars between edits (about 20-30 s; override with --edit-bars), how many lines a track builds up to, and
-# which roles open a track.
+# Per style: bars between edits (about 20-30 s; override with --edit-bars), how many lines a track builds up to,
+# how complex the peak gets (livecode.complexity: 1 per line, +0.5 per wrapper, moving knob, phrase that changes
+# bar to bar or 16th stream; a Switch Angel trance peak is about 22-26), and which roles open a track.
 STYLE_SETTINGS = {
-    "lofi": {"edit_bars": 8, "max_lines": 7, "openers": [["beat"], ["keys"], ["bass", "beat"]]},
-    "deephouse": {"edit_bars": 16, "max_lines": 7, "openers": [["beat"], ["beat", "bass"]]},
-    "trance": {"edit_bars": 16, "max_lines": 5, "openers": [["acid"], ["beat"], ["acid", "beat"]]},
-    "ambient": {"edit_bars": 8, "max_lines": 6, "openers": [["chords"], ["texture"], ["keys"]]},
-    "piano": {"edit_bars": 8, "max_lines": 5, "openers": [["keys"]]},
-    "downtempo": {"edit_bars": 8, "max_lines": 6, "openers": [["beat"], ["keys"]]},
-    "darkwave": {"edit_bars": 12, "max_lines": 7, "openers": [["bass"], ["beat"], ["bass", "beat"]]},
-    "techno": {"edit_bars": 16, "max_lines": 7, "openers": [["beat"], ["beat", "perc"]]},
-    "hardcore": {"edit_bars": 16, "max_lines": 6, "openers": [["beat"]]},
+    "lofi": {"edit_bars": 8, "max_lines": 7, "peak_complexity": 14, "openers": [["beat"], ["keys"], ["bass", "beat"]]},
+    "deephouse": {"edit_bars": 16, "max_lines": 7, "peak_complexity": 20, "openers": [["beat"], ["beat", "bass"]]},
+    "trance": {"edit_bars": 16, "max_lines": 7, "peak_complexity": 22, "openers": [["acid"], ["beat"], ["acid", "beat"]]},
+    "ambient": {"edit_bars": 8, "max_lines": 6, "peak_complexity": 10, "openers": [["chords"], ["texture"], ["keys"]]},
+    "piano": {"edit_bars": 8, "max_lines": 5, "peak_complexity": 8, "openers": [["keys"]]},
+    "downtempo": {"edit_bars": 8, "max_lines": 6, "peak_complexity": 14, "openers": [["beat"], ["keys"]]},
+    "darkwave": {"edit_bars": 12, "max_lines": 7, "peak_complexity": 18, "openers": [["bass"], ["beat"], ["bass", "beat"]]},
+    "techno": {"edit_bars": 16, "max_lines": 7, "peak_complexity": 20, "openers": [["beat"], ["beat", "perc"]]},
+    "hardcore": {"edit_bars": 16, "max_lines": 6, "peak_complexity": 18, "openers": [["beat"]]},
 }
 
 
