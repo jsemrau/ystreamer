@@ -35,11 +35,30 @@ UI_PORT="${YS_UI_PORT:-8765}"
 "$PY" -m stream.ui_server >> "$REPO/logs/ui.log" 2>&1 & PIDS+=($!)
 echo "[live] stream page: http://127.0.0.1:${UI_PORT}  (preview in a browser; log: logs/ui.log)"
 stop() {
+    [[ "$STOPPING" == 1 ]] && return        # a second Ctrl-C while stopping
     STOPPING=1
+    trap '' INT TERM
     echo; echo "[live] stopping..."
-    [[ -f "$PIDFILE" ]] && kill "$(cat "$PIDFILE")" 2>/dev/null
+    # The restart loop first (so it can't start the engine again), then the
+    # engine, which shuts down Tidal and SuperCollider, then everything else.
+    [[ -n "${LOOP_PID:-}" ]] && kill "$LOOP_PID" 2>/dev/null
+    local engine=""
+    [[ -f "$PIDFILE" ]] && engine="$(cat "$PIDFILE")" && kill "$engine" 2>/dev/null
     for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done
-    wait 2>/dev/null
+    # Wait for exactly these (a bare `wait` would also wait on the log tail,
+    # which only ends when this script does), at most 20 s, then force it.
+    local all=("${PIDS[@]}") left
+    [[ -n "$engine" ]] && all+=("$engine")
+    for _ in $(seq 40); do
+        left=()
+        for p in "${all[@]}"; do kill -0 "$p" 2>/dev/null && left+=("$p"); done
+        ((${#left[@]} == 0)) && break
+        sleep 0.5
+    done
+    if ((${#left[@]})); then
+        echo "[live] still running after 20 s, forcing: ${left[*]}"
+        kill -9 "${left[@]}" 2>/dev/null
+    fi
     rm -f "$PIDFILE"
     echo "[live] stopped"
     exit 0
@@ -61,7 +80,7 @@ trap stop INT TERM
         RESUME=(--resume)
         sleep 5
     done
-) & PIDS+=($!)
+) & LOOP_PID=$!; PIDS+=($LOOP_PID)
 
 # SuperCollider, Tidal and the local model need a moment before the stream.
 sleep 20
@@ -70,7 +89,7 @@ echo "[live] starting the stream (log: logs/stream.log) and the watchdog (log: l
 # The stream's health (keeping up? how much it sends) and warnings, here in
 # the terminal; tail stops with this script.
 tail -n0 -F --pid=$$ "$REPO/logs/stream.log" 2>/dev/null \
-    | grep --line-buffered -E '^\[stream\]|^Stream:|exited|Error|error' &
+    > >(grep --line-buffered -E '^\[stream\]|^Stream:|exited|Error|error') & PIDS+=($!)
 # If the stream part stops (no stream key, missing Chromium/Xvfb, ...), say
 # so here instead of only in its log.
 (
