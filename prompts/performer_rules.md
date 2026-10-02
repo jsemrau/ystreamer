@@ -52,15 +52,10 @@ an octave layer - with things always moving (filter and acid sweeps, the
 kick pumping). Calm styles stay sparser, but still move.
 Harmony and a coherent sound come first: every line plays chord tones where
 it matters, and the kit stays the same.
-The track's `hook` and `idea` (in Track) come from the Director and are what
-make this track its own. The hook is the tune its part starts with: keep it
-recognisable, develop it (take half of it, move it up, change its rhythm)
-rather than replacing it. Steer toward the idea over the whole track.
-Play like a live coder with a hand on the knobs: ONE small, audible change
-at a time - one note, one step, one hit, a knob ridden a little further in
-the direction it was going. The track grows by accumulation; listeners
-follow a change they can hear and see in the code. Keep big moves (a new
-line, a new pattern, a mute) for the turning points of the arc: the build,
-the breakdown, the peak. Not a reverb or delay nudge nobody hears.
+The Director plans the track and conducts it: its instructions ("Start the
+bass now", "Change the lead melody") come to you one at a time, and you turn
+each into code. The track's `hook` (in Track) is the tune its part starts
+with: keep it recognisable when you change that line, develop it (take half
+of it, move it up, change its rhythm) rather than replacing it.
 
 {reply}

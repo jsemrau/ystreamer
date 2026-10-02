@@ -15,7 +15,7 @@ follows another, recent keys, hooks and progressions to avoid, a random
 suggested key and a spark. The answers are checked with the stream's own
 checks (Director.review_piece): only a plan that needed no correction at
 all, with its own chords for the main part, the breakdown and the peak, a
-hook and an idea, and a sketch dense enough for a Switch Angel style build
+hook, plain cues for at least four parts of the track, and a sketch dense enough for a Switch Angel style build
 (3-5 more parts, 2+ moving knobs, an odd-length cycle, a lead phrase that
 changes bar to bar), goes into the training set. Near-duplicates (same key,
 chords and hook) are dropped.
@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
 from music import llm  # noqa: E402
+from music.llm import CACHE_BREAK  # noqa: E402
 from music.blocks import BLOCKS  # noqa: E402
 from music.director import Director  # noqa: E402
 from music.plan import STYLES, Piece, plan_piece  # noqa: E402
@@ -141,7 +142,9 @@ def check(req: dict, text: str) -> tuple[dict | None, str]:
     piece, notes = director.review_piece(dict(data), fallback, avoid)
     if notes:
         return None, "; ".join(notes)
-    missing = [f for f in ("progression", "hook", "idea", "narration", "title") if not data.get(f)]
+    missing = [f for f in ("progression", "hook", "narration", "title") if not data.get(f)]
+    if len(piece.cues) < 4:
+        missing.append("cues for at least 4 parts of the track")
     sp = data.get("section_progressions") or {}
     missing += [f"section_progressions.{s}" for s in ("breakdown", "chorus") if s not in sp]
     if missing:
@@ -189,10 +192,16 @@ def _read_jsonl(path: str) -> list[dict]:
 
 
 def _params(req: dict, effort: str) -> dict:
+    # The brief before CACHE_BREAK is the same for every request of a style
+    # and theme: cached (batches cache too, best effort), 1h as a batch runs long.
+    stable, _, rest = req["prompt"].partition(CACHE_BREAK)
+    content = [{"type": "text", "text": stable, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+    if rest:
+        content.append({"type": "text", "text": rest})
     return {"model": MODEL, "max_tokens": 16000,
             "system": Director.PIECE_SYSTEM,
             "output_config": {"effort": effort},
-            "messages": [{"role": "user", "content": req["prompt"]}]}
+            "messages": [{"role": "user", "content": content}]}
 
 
 def prepare(args) -> None:
@@ -334,7 +343,7 @@ def _finish(p: dict, answers: dict, usage: Counter, price_factor: float = 1.0) -
         for req, data in kept:
             f.write(json.dumps({"messages": [
                 {"role": "system", "content": Director.PIECE_SYSTEM},
-                {"role": "user", "content": req["prompt"]},
+                {"role": "user", "content": req["prompt"].replace(CACHE_BREAK, "\n")},
                 {"role": "assistant", "content": json.dumps(data, ensure_ascii=False)}],
                 "meta": {"custom_id": req["custom_id"], "style": req["style"], "theme": req["theme"],
                          "teacher": MODEL}}, ensure_ascii=False) + "\n")

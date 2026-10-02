@@ -544,7 +544,7 @@ def test_small_context_window_switches_to_compact_prompts(monkeypatch):
     edit = performer.next_edit(program)
     assert edit.source == "LLM"
     assert len(prompts[1]) < len(prompts[0]) - 1500
-    assert "`jux rev`" in prompts[1] and "a reversed copy" not in prompts[1]   # names kept, notes dropped
+    assert "`degradeBy 0.1`" in prompts[1] and "randomly drops" not in prompts[1]   # names kept, notes dropped
     assert any("compact prompts" in line for line in logs)
     performer.next_edit(program)
     assert len(prompts[2]) < len(prompts[0]) - 1500                          # stays compact
@@ -581,12 +581,12 @@ def test_gain_edits_stay_near_the_lines_level():
 
 
 def test_drum_lines_keep_their_kit():
-    program = _program_with("trance", "trance_beat")
-    ok = apply_edit(program, Edit("set_pattern", role="beat", name="hats", value="[~ 808oh]*4, hh*16"))
-    assert "808oh" in ok.statement("beat")
+    program = _program_with("trance", "trance_beat", "trance_hats")
+    ok = apply_edit(program, Edit("set_pattern", role="perc", name="hats", value="[~ 808oh]*4, hh*16"))
+    assert "808oh" in ok.statement("perc")
     for foreign in ("[~ arpy]*4", "cp*4", "[~ superpiano]*4", "[~ 808oh:7]*4"):
         with pytest.raises(EditError, match="kit"):
-            apply_edit(program, Edit("set_pattern", role="beat", name="hats", value=foreign))
+            apply_edit(program, Edit("set_pattern", role="perc", name="hats", value=foreign))
     performer = Performer(random.Random(0), style="trance", model_id="local", log=lambda *_: None)
     assert '"sounds":{' in performer._prompt(program)
 

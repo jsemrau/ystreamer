@@ -85,7 +85,8 @@ def parse_args():
     engine.add_argument("--judge", choices=["jevtypesafe", "none"], default=os.getenv("YS_JUDGE") or None,
                         help="Live engine: the LLM proposes 3 edits and this decision model picks one blind "
                              "(also among built-in candidates). Default: YS_JUDGE, else off.")
-    engine.add_argument("--piece-minutes", type=float, default=12.0)
+    engine.add_argument("--piece-minutes", type=float, default=None,
+                        help="Target length of a track (default: 5 live, 12 with the arranger engine).")
     engine.add_argument("--free-layer", action="store_true",
                         help="Let the LLM compose one extra counter-melody layer (key-safe, type-checked).")
     engine.add_argument("--no-custom-synths", action="store_true",
@@ -193,6 +194,7 @@ def build_performer(args, rng):
     from music import llm
     from music.director import Director
     from music.performer import Performer
+    from music.plan import LIVE_PIECE_MINUTES
 
     model_id = _style_and_model(args, "Performer")
     # The Director plans each track and writes its spoken intro; it needs a
@@ -200,7 +202,7 @@ def build_performer(args, rng):
     # planner plans for it).
     text_model = model_id and not (llm.resolve(model_id)[0] == "jevtypesafe" and llm.jev_style() == "decide")
     director = Director(model_id if text_model else None, rng, theme=args.theme, show_llm=args.show_llm,
-                        target_minutes=args.piece_minutes, style=args.style)
+                        target_minutes=args.piece_minutes or LIVE_PIECE_MINUTES, style=args.style)
     if args.judge == "none":
         args.judge = None
     judge = args.judge if text_model else None
@@ -220,7 +222,7 @@ def build_director(args, rng):
 
     model_id = _style_and_model(args, "Director")
     return Director(model_id, rng, theme=args.theme, show_llm=args.show_llm,
-                    target_minutes=args.piece_minutes, style=args.style)
+                    target_minutes=args.piece_minutes or 12.0, style=args.style)
 
 
 def run_dry(args) -> None:
@@ -321,15 +323,27 @@ def run_selftest(args) -> int:
     # Live-coding blocks: every block of every style, plus every wrapper and a
     # modulated effect on each, in a major, a minor and a phrygian key.
     from music.blocks import BLOCKS
-    from music.livecode import ROLE_FX, Track, allowed_wrappers
+    import copy
+
+    from music.blocks import _ARP_TOKEN_RE
+    from music.livecode import DEFAULT_VOICING, ROLE_FX, Track, allowed_wrappers, arp_sequences
+    from music.plan import VOICED_STYLES
 
     for style, blocks in BLOCKS.items():
+        voicing = "-7,0,2,4,7" if style in VOICED_STYLES else DEFAULT_VOICING
         for key, degrees in (("A major", [0, 5, 3, 4]), ("E minor", [0, 5, 2, 6]), ("F# phrygian", [0, 1, 5, 6])):
-            harmony = Track("selftest", style, key, 120, degrees, 2).harmony()
+            harmony = Track("selftest", style, key, 120, degrees, 2, voicing=voicing).harmony()
             for block in blocks:
-                line = block.make(random.Random(0))
+                line = block.make(random.Random(0), voicing=voicing)
                 variants = [line.render(harmony)]
-                for wrapper in allowed_wrappers(line):
+                # Every pattern variant (each gate, each arp run), not only the seed's pick.
+                arps = arp_sequences(voicing)
+                for slot, options in block.patterns.items():
+                    for option in options:
+                        other = copy.deepcopy(line)
+                        other.patterns[slot] = _ARP_TOKEN_RE.sub(lambda m: arps[m.group(1)], option)
+                        variants.append(other.render(harmony))
+                for wrapper in allowed_wrappers(line, style):
                     line.wrappers = [wrapper]
                     variants.append(line.render(harmony))
                 line.wrappers = []

@@ -41,7 +41,7 @@ def test_pieces_change_harmony_between_sections():
 
 
 def test_key_lift_only_on_last_of_several_choruses():
-    piece = plan_piece(random.Random(1), style="deephouse")
+    piece = plan_piece(random.Random(0), style="deephouse")     # a plan with several choruses
     assert apply_key_lift(piece)
     lifted = [i for i, s in enumerate(piece.sections) if s.key_shift]
     choruses = [i for i, s in enumerate(piece.sections) if s.name == "chorus"]

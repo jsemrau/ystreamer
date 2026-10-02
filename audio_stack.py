@@ -428,6 +428,60 @@ def local_llm_status() -> str:
 
 _llama_process: subprocess.Popen | None = None
 
+
+def serving_model() -> str | None:
+    """The model file the running llama-server loaded (its /props), or None."""
+    import requests
+
+    base = config.LOCAL_LLM_API_BASE.rstrip("/")
+    root = base[:-3] if base.endswith("/v1") else base
+    try:
+        return requests.get(f"{root}/props", timeout=2).json().get("model_path") or None
+    except (requests.exceptions.RequestException, ValueError, AttributeError):
+        return None
+
+
+def _own_llama_pids(port: int) -> list[int]:
+    """llama-servers this project starts (our binary) listening on `port`."""
+    binary = os.path.realpath(config.LLAMA_SERVER_BIN or "")
+    pids = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/cmdline", "rb") as f:
+                args = f.read().decode(errors="replace").split("\0")
+        except OSError:
+            continue
+        if args and binary and os.path.realpath(args[0]) == binary and "--port" in args \
+                and args[args.index("--port") + 1:args.index("--port") + 2] == [str(port)]:
+            pids.append(int(entry))
+    return pids
+
+
+def _stop_stale_llama(port: int) -> bool:
+    """Stop our own llama-server on `port` (it outlives the engine, see
+    ensure_local_llm_server); True once the port is free."""
+    pids = _own_llama_pids(port)
+    if not pids:
+        return False
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    for _ in range(60):
+        if local_llm_status() == "down":
+            return True
+        time.sleep(0.5)
+    for pid in _own_llama_pids(port):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    time.sleep(1)
+    return local_llm_status() == "down"
+
 # llama-server log lines -> loading stage shown to the user. The last log line
 # that matches wins; within a line, the more specific needle (listed first) wins.
 _LLAMA_STAGES = [
@@ -612,11 +666,28 @@ def ensure_local_llm_server(wait: bool = True) -> None:
     its model is loaded (use wait=False to boot the audio meanwhile, then call
     wait_for_local_llm)."""
     status = local_llm_status()
+    port = urllib.parse.urlparse(config.LOCAL_LLM_API_BASE).port or 8080
     if status != "down":
-        log(f"[llama-server] already running at {config.LOCAL_LLM_API_BASE}")
-        if wait:
-            wait_for_local_llm(config.LLM_LOAD_TIMEOUT)
-        return
+        # The server is started in its own session, so it outlives the engine
+        # and the next start finds it: reuse it only if it serves the model
+        # .env asks for (a changed LLAMA_GGUF_MODEL used to be ignored).
+        loaded = serving_model()
+        wanted = config.LLAMA_GGUF_MODEL
+        if loaded and wanted and os.path.realpath(loaded) != os.path.realpath(wanted):
+            if _stop_stale_llama(port):
+                log(f"[llama-server] the running server had {os.path.basename(loaded)}, .env asks for "
+                    f"{os.path.basename(wanted)}: stopped it, starting the right one")
+                status = "down"
+            else:
+                log(f"[llama-server] WARNING: the server at {config.LOCAL_LLM_API_BASE} serves "
+                    f"{os.path.basename(loaded)}, not {os.path.basename(wanted)} from .env, and it isn't one this "
+                    f"project started; stop it (it uses port {port}) to play the model in .env")
+        if status != "down":
+            log(f"[llama-server] already running at {config.LOCAL_LLM_API_BASE}"
+                + (f" ({os.path.basename(loaded)})" if loaded else ""))
+            if wait:
+                wait_for_local_llm(config.LLM_LOAD_TIMEOUT)
+            return
 
     if not config.LLAMA_GGUF_MODEL or not os.path.exists(config.LLAMA_GGUF_MODEL):
         log(f"[llama-server] not starting: LLAMA_GGUF_MODEL in .env is "

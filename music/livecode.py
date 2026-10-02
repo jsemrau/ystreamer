@@ -35,28 +35,46 @@ ROLES = list(ROLE_CHANNELS)
 # between two in-range numbers, e.g. "(slow 8 $ range 400 2400 sine)").
 FX_RANGES: dict[str, tuple[float, float]] = {
     "gain": (0.5, 1.15), "room": (0.0, 0.8), "size": (0.0, 0.95), "lpf": (200, 9000), "hpf": (20, 2000),
-    "resonance": (0.0, 0.5), "delay": (0.0, 0.6), "delaytime": (0.05, 1.0), "delayfeedback": (0.0, 0.7),
+    "resonance": (0.0, 0.5), "delay": (0.0, 0.6), "delaytime": (0.05, 1.0), "delayfeedback": (0.0, 0.5),
     "pan": (0.0, 1.0), "legato": (0.1, 2.0), "crush": (4.0, 16.0), "shape": (0.0, 0.5), "speed": (0.5, 2.0),
 }
 # Custom SynthDef controls (sent with pF).
 PF_RANGES: dict[str, tuple[float, float]] = {
-    "acid": (0.1, 0.95), "acidres": (0.08, 0.6), "accent": (0.0, 1.0), "drive": (0.5, 3.0), "gatedepth": (0.0, 1.0), "duckdepth": (0.0, 0.9),
+    "acid": (0.1, 0.95), "acidres": (0.08, 0.6), "detune": (0.05, 0.8), "accent": (0.0, 1.0), "drive": (0.5, 3.0), "gatedepth": (0.0, 1.0), "duckdepth": (0.0, 0.9),
 }
 
 # Wrappers an edit may add, per kind of line. Pitch-safe: only octave shifts.
+# Pitched lines only get wrappers that keep their notes on the chord that is
+# playing: no time shifts, speed-ups or delayed copies (they carry the old
+# chord's notes over a chord change, or stack a moving line on itself), so
+# the harmony stays clean the way Switch Angel's does. Chord-tone lines (arps,
+# acid, chords) may also play backwards or mirrored; a lead, whose passing
+# notes sit between the beats, may not (backwards puts them on the beats).
 MELODIC_WRAPPERS = [
-    "every 4 (fast 2)", "every 3 (0.25 <~)", "every 4 (0.125 ~>)", "sometimesBy 0.2 (degradeBy 0.5)",
-    "off 0.125 (|+ n 12)", "off 0.25 (|+ n 12)", "jux rev", "every 4 rev", "degradeBy 0.1",
-    "whenmod 8 6 (# lpf 800)", "every 2 (# room 0.5)", "every 4 (|+ n 12)", "chunk 4 (fast 2)",
+    "sometimesBy 0.2 (degradeBy 0.5)", "jux rev", "every 4 rev", "degradeBy 0.1",
+    "whenmod 8 6 (# lpf 800)", "every 2 (# room 0.5)", "every 4 (|+ n 12)",
 ]
+LEAD_WRAPPERS = ["sometimesBy 0.2 (degradeBy 0.5)", "degradeBy 0.1", "whenmod 8 6 (# lpf 800)",
+                 "every 2 (# room 0.5)", "every 4 (|+ n 12)"]
+# Earlier versions' melodic wrappers: still understood (e.g. to unwrap them
+# from a resumed track), never offered.
+RETIRED_WRAPPERS = ["every 4 (fast 2)", "every 3 (0.25 <~)", "every 4 (0.125 ~>)", "off 0.125 (|+ n 12)",
+                    "off 0.25 (|+ n 12)", "chunk 4 (fast 2)"]
 DRUM_WRAPPERS = [
     "every 4 (fast 2)", "degradeBy 0.1", "every 8 (0.25 <~)",
     "whenmod 8 7 (# crush 6)", "swingBy (1/8) 4", "swingBy (1/12) 4", "every 3 (# lpf 1500)",
     "sometimesBy 0.1 (echo 3 0.125 0.5)",
 ]
-BASS_WRAPPERS = ["every 3 (0.25 <~)", "every 4 (0.125 ~>)", "degradeBy 0.1", "sometimesBy 0.2 (degradeBy 0.5)",
-                 "whenmod 8 6 (# lpf 300)"]
-ALL_WRAPPERS = set(MELODIC_WRAPPERS) | set(DRUM_WRAPPERS) | set(BASS_WRAPPERS)
+# Club styles keep the drums straight, as Switch Angel does: the kick on
+# every beat and the backbeat where it belongs, never sped up, shifted,
+# swung, stuttered or thinned out by chance (that put the drums out of step
+# with the bass and acid). Variation is in the tone; fills come from the
+# arranger's fill line and the clap's fill choices.
+CLUB_DRUM_WRAPPERS = ["whenmod 8 7 (# crush 6)", "every 3 (# lpf 1500)", "whenmod 16 15 (# hpf 1200)"]
+CLUB_STYLES = ("trance", "techno", "hardcore", "deephouse", "darkwave")
+BASS_WRAPPERS = ["degradeBy 0.1", "sometimesBy 0.2 (degradeBy 0.5)", "whenmod 8 6 (# lpf 300)"]
+ALL_WRAPPERS = (set(MELODIC_WRAPPERS) | set(DRUM_WRAPPERS) | set(CLUB_DRUM_WRAPPERS) | set(BASS_WRAPPERS)
+                | set(RETIRED_WRAPPERS))
 
 # What each wrapper does to the sound, for the performer's prompt (a model
 # that only sees "off 0.25 (|+ n 12)" has to guess).
@@ -76,6 +94,7 @@ WRAPPER_NOTES = {
     "every 2 (# room 0.5)": "every other bar gets more reverb: the space pulses",
     "every 8 (0.25 <~)": "every 8th bar shifts early: a turnaround",
     "whenmod 8 7 (# crush 6)": "last bar of every 8 is bitcrushed: a gritty fill",
+    "whenmod 16 15 (# hpf 1200)": "last bar of every 16 goes thin (the low end filtered out): a lift into the next phrase",
     "swingBy (1/8) 4": "strong swing: laid-back hip-hop feel",
     "swingBy (1/12) 4": "light swing: loosens a stiff groove",
     "every 3 (# lpf 1500)": "every 3rd bar darker: subtle variation",
@@ -104,6 +123,7 @@ FX_NOTES = {
     "accent": "the 303 accent: accented steps (1) are louder, brighter, more resonant; a pattern like \"[0 0 1 0]*4\"",
     "drive": "grit on the acid: 1 clean, 2 dirty, 3 screaming",
     "gatedepth": "how hard the trance gate chops the chords",
+    "detune": "how wide the supersaw spreads: 0.1 nearly one saw, 0.3 the classic trance sound, 0.6 huge and seasick",
     "duckdepth": "sidechain pump from the kick: 0 none, 0.8 strong pumping",
 }
 
@@ -113,8 +133,17 @@ SYNTH_CONTROLS: dict[str, tuple[str, ...]] = {
     "ys_acid": ("acid", "acidres", "accent", "drive"),
     "ys_gatesaw": ("gatedepth", "duckdepth"),
     "ys_supersaw": ("duckdepth",),
+    "ys_hypersaw": ("detune", "duckdepth"),
 }
 _SYNTH_RE = re.compile(r'# s "(\w+)"')
+
+
+def line_synth(line: "LineSpec") -> str:
+    """The synth a line plays (its `synth` slot, or the `# s "..."` in its body)."""
+    m = _SYNTH_RE.search(line.body)
+    if not m or m.group(1) == "{synth}" or "synth" in line.patterns:
+        return line.patterns.get("synth", "")
+    return m.group(1)
 
 
 def line_controls(line: "LineSpec") -> list[str]:
@@ -140,17 +169,27 @@ ROLE_FX = {
 }
 
 
-def allowed_wrappers(line: "LineSpec") -> list[str]:
+def allowed_wrappers(line: "LineSpec", style: str | None = None) -> list[str]:
     if line.role == "texture":
         return []
     if line.drums:
-        return DRUM_WRAPPERS
+        return CLUB_DRUM_WRAPPERS if style in CLUB_STYLES else DRUM_WRAPPERS
     if line.role == "bass":
         return BASS_WRAPPERS
+    if line.role == "lead":
+        return LEAD_WRAPPERS
     return MELODIC_WRAPPERS
 
 # Pattern slots that aren't free mini-notation.
-CHOICE_SLOTS = {"gate": ["0", "1", "2", "3"]}   # trance gate: chopper, classic, two stutters
+CHOICE_SLOTS = {
+    "gate": ["0", "1", "2", "3"],                 # trance gate: chopper, classic, two stutters
+    # The clap is the backbeat (beats 2 and 4, as in Switch Angel's sets):
+    # it may drop out, go half-time, or fill the end of a phrase, but never
+    # wander onto the offbeats, which a free pattern let it do ("~ cp ~ cp ~ ~
+    # cp ~" is 8 steps: claps after beats 1 and 2).
+    "clap": ["~", "~ cp ~ cp", "~ ~ ~ cp", "~ cp ~ [cp cp]", "~ cp ~ <cp cp cp [cp cp]>",
+             "~ cp ~ <cp cp cp [~ cp cp cp]>"],
+}
 LOCKED_SLOTS = {"synth"}                         # chosen when the line is added
 
 # What a mini-notation pattern value may contain.
@@ -194,6 +233,41 @@ class LineSpec:
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
+# Chord voicings, as scale steps above the chord's root. The default is the
+# plain seventh chord the chill styles were made with; the club styles use
+# Switch Angel's consonant trance shapes (her chordshapes in strudel-scripts,
+# https://github.com/switchangel/strudel-scripts): triads, octaves and fifths,
+# no added sevenths or ninths to rub against the lines above them.
+DEFAULT_VOICING = "0,2,4,6"
+TRANCE_VOICINGS = {
+    "triad": "0,2,4",              # [1] triad
+    "add octave": "0,2,4,7",       # [57] big room
+    "open triad": "0,4,7,9",       # [6] open triad
+    "spread triad": "-7,0,2,4,7",  # [2] spread triad
+    "epic stack": "0,4,7,11,14",   # [58] epic trance stack
+    "anthem": "0,7,9,11",          # [26] fifth + upper triad
+}
+
+
+def voicing_steps(voicing: str) -> list[int]:
+    try:
+        steps = sorted({int(x) for x in str(voicing).split(",")})
+    except ValueError:
+        steps = []
+    return steps or [0, 2, 4, 6]
+
+
+def arp_sequences(voicing: str) -> dict[str, str]:
+    """Switch Angel's trancearp over a voicing: its notes forward (F),
+    backward (B), up and down, and around the root; all chord tones."""
+    tones = [t for t in voicing_steps(voicing) if -7 <= t <= 11] or [0, 2, 4]   # the arp's range
+    up = " ".join(map(str, tones))
+    down = " ".join(map(str, reversed(tones)))
+    updown = " ".join(map(str, tones + tones[-2:0:-1])) if len(tones) > 2 else up
+    pedal = " ".join(f"{tones[0]} {t}" for t in tones[1:]) if len(tones) > 1 else up
+    return {"up": up, "down": down, "updown": updown, "pedal": pedal}
+
+
 @dataclass
 class Track:
     """The musical frame of the current track: key, tempo, progression."""
@@ -217,10 +291,18 @@ class Track:
     # The rest of the Director's sketch (plan.Piece.parts / .motion).
     parts: dict = field(default_factory=dict)
     motion: dict = field(default_factory=dict)
+    # How each chord is voiced, as scale steps above its root (Switch Angel's
+    # chordshapes, e.g. "0,4,7,9" an open triad); every line playing
+    # {chords} uses it, and arps run through its notes.
+    voicing: str = DEFAULT_VOICING
+    # The style's variant (blocks.SUBGENRES) and its drum kit / bass rhythms.
+    subgenre: str = ""
+    kit: dict = field(default_factory=dict)
+    surprise: str = ""              # the art director's rule-break for this track (music/surprises.py)
 
     def make(self, block, rng) -> "LineSpec":
-        """A line from a block, with this track's sounds and sketch."""
-        return block.make(rng, self.sounds, self.hook, self.parts, self.motion)
+        """A line from a block, with this track's sounds, sketch, voicing and kit."""
+        return block.make(rng, self.sounds, self.hook, self.parts, self.motion, voicing=self.voicing, kit=self.kit)
 
     @property
     def cps(self) -> float:
@@ -229,9 +311,11 @@ class Track:
     def harmony(self) -> dict[str, str]:
         """Placeholders for line templates, all in scale-degree space."""
         key = Key.parse(self.key)
+        shape = voicing_steps(self.voicing)
+
         def stack(d: int) -> str:
             base = d - 7 if d > 3 else d        # chord stacks kept near the tonic
-            return "[" + ",".join(str(base + i) for i in (0, 2, 4, 6)) + "]"
+            return "[" + ",".join(str(base + i) for i in shape) + "]"
 
         def root_of(d: int) -> str:
             return str(d - 7 if d > 3 else d)
@@ -320,7 +404,7 @@ class Program:
 # ---------------------------------------------------------------------------
 
 EDIT_OPS = ("add", "remove", "mute", "unmute", "set_fx", "remove_fx", "set_pf", "set_pattern",
-            "wrap", "unwrap", "tempo")
+            "wrap", "unwrap", "tempo", "set_sound")
 
 
 @dataclass
@@ -345,6 +429,8 @@ class Edit:
             return f"{self.op} d{ROLE_CHANNELS.get(self.role, 0)} ({self.role})"
         if self.op == "tempo":
             return f"tempo -> {self.value} BPM"
+        if self.op == "set_sound":
+            return f'd{ROLE_CHANNELS.get(self.role, 0)}: s -> "{self.value}"'
         if self.op in ("wrap", "unwrap"):
             return f"{self.op} d{ROLE_CHANNELS.get(self.role, 0)} {'with' if self.op == 'wrap' else 'from'} `{self.name}`"
         if self.op == "remove_fx":
@@ -420,6 +506,23 @@ def line_complexity(line: "LineSpec") -> float:
 def complexity(program: "Program") -> float:
     """The complexity of what plays now: the sum over active lines."""
     return sum(line_complexity(program.lines[r]) for r in program.active_roles())
+
+
+_RHYTHM_RE = re.compile(r"^[t~_\s\[\]<>*!\d.]+$")
+# How far each part's degrees may go (7 = an octave above its own register),
+# so lines stay in their lane: no lead or arp climbing into the shrill zone,
+# no bass rising into the chords.
+ROLE_DEGREES = {"bass": (-7, 7), "acid": (-7, 11), "arp": (-7, 11), "lead": (-3, 11), "keys": (-7, 11),
+                "chords": (-7, 11)}
+
+
+def range_problem(role: str, value: str) -> str | None:
+    lo, hi = ROLE_DEGREES.get(role, (-14, 14))
+    degrees = [int(d) for d in _DEGREE_RE.findall(value)]
+    out = sorted({d for d in degrees if not lo <= d <= hi})
+    if out:
+        return f"degrees {out} are outside the {role}'s range ({lo} to {hi}): keep it in its register"
+    return None
 
 
 def harmony_problem(role: str, value: str) -> str | None:
@@ -529,10 +632,14 @@ def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
             line.patterns[edit.name] = str(edit.value)
             return new
         value = check_pattern(edit.value)
-        if not line.drums and re.search(r"[a-z]", value.replace("~", "")):
-            raise EditError("melodic patterns are scale degrees (numbers), not names")
-        if not line.drums:
-            problem = harmony_problem(line.role, value)
+        if f'struct "{{{edit.name}}}"' in line.body:
+            # A rhythm (chord stabs, gates): t a hit, ~ a rest, _ a hold.
+            if not _RHYTHM_RE.match(value) or "t" not in value:
+                raise EditError('a rhythm is t (hit), ~ (rest) and _ (hold), e.g. "~ t _ t ~ t t _"')
+        elif not line.drums:
+            if re.search(r"[a-z]", value.replace("~", "")):
+                raise EditError("melodic patterns are scale degrees (numbers), not names")
+            problem = harmony_problem(line.role, value) or range_problem(line.role, value)
             if problem:
                 raise EditError(problem)
         if line.drums:
@@ -540,12 +647,28 @@ def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
             # this slot (any other sample could be pitched, out of key, or
             # simply not belong to the track).
             allowed = kit_sounds(program.track.style, line.block, edit.name)
+            allowed |= {m for v in (program.track.kit or {}).get(edit.name, []) for m in _SOUND_RE.findall(v)}
             used = set(_SOUND_RE.findall(value))
             if allowed and not used <= allowed:
                 raise EditError(f"{sorted(used - allowed)} not in this line's kit; use {sorted(allowed)}")
         line.patterns[edit.name] = value
+    elif op == "set_sound":
+        # Another sound from the part's palette (blocks.LIVE_SOUNDS), on a line
+        # that plays one of them: the drums and special sounds keep theirs.
+        from .blocks import LIVE_SOUNDS
+
+        palette = LIVE_SOUNDS.get(role, {})
+        current = line_synth(line)
+        if edit.value not in palette:
+            raise EditError(f"{edit.value!r} isn't a {role} sound ({', '.join(palette) or 'none'})")
+        if current not in palette:
+            raise EditError(f"the {role} plays {current or 'its own sound'}, which doesn't change")
+        if "synth" in line.patterns:
+            line.patterns["synth"] = edit.value
+        else:
+            line.body = line.body.replace(f'# s "{current}"', f'# s "{edit.value}"')
     elif op == "wrap":
-        allowed = allowed_wrappers(line)
+        allowed = allowed_wrappers(line, program.track.style)
         if edit.name not in allowed:
             raise EditError(f"wrapper {edit.name!r} not allowed here")
         if edit.name in line.wrappers:

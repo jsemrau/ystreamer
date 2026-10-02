@@ -17,7 +17,7 @@
 > That makes each performance a controlled, explainable experiment in
 > machine creativity, scored against a random baseline performer. The reference
 > implementation is [`jsemrau/ystreamer`](https://github.com/jsemrau/ystreamer),
-> which streams 24/7 on YouTube as **@sleeplesscomposer**.
+> which streams 24/7 on YouTube as **@infinitrance**.
 
 ---
 
@@ -1561,4 +1561,4 @@ falls, the richness is coming from the code.
   `music/performer.py`, `music/director.py`, `music/live_engine.py`,
   `music/llm.py`, `prompts/performer.md`, `tidal/synthdefs.scd`,
   `eval/synth_levels.sh`, `docs/STYLE_KNOWLEDGE_PLAN.md`
-- The 24/7 stream: YouTube **@sleeplesscomposer**
+- The 24/7 stream: YouTube **@infinitrance**

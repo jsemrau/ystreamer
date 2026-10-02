@@ -75,6 +75,13 @@ LLAMA_SERVER_LOG = _env("LLAMA_SERVER_LOG", os.path.join(REPO_DIR, "logs", "llam
 # layers on the GPU (999 = all; "auto" leaves it to llama.cpp, which then
 # fits what it can on the GPUs and keeps the rest, e.g. a big MoE model's
 # experts, in RAM), and any extra flags (e.g. "-fa on --cache-type-k q8_0").
+# The channel's name, shown on the stream page, the poster and the channel art.
+CHANNEL_NAME = _env("YS_CHANNEL_NAME", "InfiniTrance")
+# The new trance supersaw (tidal/synthdefs.scd ys_hypersaw): off until you've
+# listened to it (python -m eval.sound_preview), then YS_HYPERSAW=1.
+HYPERSAW = _env("YS_HYPERSAW", "0") == "1"
+# The art director's surprises (music/surprises.py): at most one every N tracks.
+SURPRISE_EVERY = max(1, int(_env("YS_SURPRISE_EVERY", "2") or 2))
 LLAMA_CTX_SIZE = int(_env("LLAMA_CTX_SIZE", "16384"))
 LLAMA_GPU_LAYERS = _env("LLAMA_GPU_LAYERS", "999")
 LLAMA_SERVER_ARGS = _env("LLAMA_SERVER_ARGS", "")

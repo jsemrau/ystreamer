@@ -93,18 +93,25 @@ class RequestQueue:
 
 # ------------------------------------------------------------------ ratings
 # The host's thumbs (👍 = 1, 👎 = -1) on what is playing, from the stream
-# page: stamped with the time, so they can be matched to the music.
+# page: stamped with the time, so they can be matched to the music. A thumb
+# on one code line carries its role ("acid"); without one it rates it all.
 
 def _ratings_path() -> str:
     return os.path.join(config.RUNTIME_DIR, "ratings.jsonl")
 
 
-def submit_rating(value) -> dict | None:
+def submit_rating(value, role: str | None = None) -> dict | None:
+    from music.livecode import ROLE_CHANNELS
+
     try:
         rating = 1 if int(value) > 0 else -1
     except (TypeError, ValueError):
         return None
     record = {"rating": rating, "t": time.time()}
+    if role:
+        if role not in ROLE_CHANNELS:
+            return None
+        record["role"] = role
     os.makedirs(config.RUNTIME_DIR, exist_ok=True)
     with open(_ratings_path(), "a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
@@ -137,4 +144,5 @@ class RatingQueue(RequestQueue):
                 rating = 1 if int(record["rating"]) > 0 else -1
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 continue
-            self._pending.append({"rating": rating, "t": float(record.get("t", time.time()))})
+            self._pending.append({"rating": rating, "t": float(record.get("t", time.time())),
+                                  "role": record.get("role")})

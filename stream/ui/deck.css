@@ -1,0 +1,192 @@
+/* InfiniTrance stream page, after Switch Angel's screen. Designed on a fixed
+   1920x1080 stage that deck.js scales to the window. */
+
+:root {
+  --bg: #020407;
+  --ink: #a9dcff;            /* code */
+  --dim: #4f7391;            /* line numbers, operators */
+  --frame: rgba(120, 190, 240, 0.55);
+  --accent: #7cf2ff;         /* the style's colour (deck.js sets it) */
+  --accent2: #c792ff;
+  --kick: 0;                 /* 0..1, decays every beat (deck.js) */
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+  --pixel: "Silkscreen", var(--mono);
+}
+
+html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+body { color: var(--ink); font-family: var(--mono); font-variant-ligatures: none; }   /* "<-7" stays as typed */
+
+#stage { position: absolute; width: 1920px; height: 1080px; transform-origin: 0 0; }
+
+/* -------------------------------------------------------------- frames */
+/* A thin frame with two cut corners, glowing a little on every kick. */
+.frame {
+  position: absolute; box-sizing: border-box;
+  border: 2px solid var(--frame);
+  clip-path: polygon(0 0, calc(100% - 26px) 0, 100% 26px, 100% 100%, 26px 100%, 0 calc(100% - 26px));
+  background: rgba(4, 10, 18, 0.72);
+  box-shadow: inset 0 0 calc(30px * var(--kick)) rgba(124, 242, 255, 0.10);
+}
+.frame::before, .frame::after {           /* the diagonal edges of the cut corners */
+  content: ""; position: absolute; width: 37px; height: 2px; background: var(--frame);
+}
+.frame::before { top: 11px; right: -7px; transform: rotate(45deg); }
+.frame::after  { bottom: 11px; left: -7px; transform: rotate(45deg); }
+
+#editor { left: 28px; top: 28px; width: 1290px; height: 1024px; padding: 22px 18px 18px 8px; }
+#side { position: absolute; left: 1346px; top: 28px; width: 546px; height: 1024px; }
+
+/* -------------------------------------------------------------- code */
+#code { height: 100%; overflow: hidden; font-size: 25px; line-height: 1.45; }
+.ln { display: grid; grid-template-columns: 50px 1fr auto; align-items: start; }
+.ln .no { color: var(--dim); text-align: right; padding-right: 18px; user-select: none; }
+.ln .src { white-space: pre-wrap; word-break: break-word; }
+.ln.muted .src { opacity: 0.32; }
+.ln.edited .no { color: var(--accent); text-shadow: 0 0 8px var(--accent); }
+.ln.fresh { animation: fresh 2.4s ease-out; }
+@keyframes fresh {
+  0% { background: rgba(124, 242, 255, 0.22); box-shadow: inset 4px 0 0 var(--accent); }
+  100% { background: transparent; box-shadow: inset 4px 0 0 transparent; }
+}
+.caret { display: inline-block; width: 0.55em; height: 1.05em; vertical-align: text-bottom;
+         background: var(--accent); animation: blink 0.8s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+.t-str { color: #d6efff; }
+.t-num { color: #7cf2ff; }
+.t-fn  { color: #8fb4ff; }
+.t-op  { color: var(--dim); }
+.t-ch  { color: #ffffff; font-weight: 600; }
+.t-syn { color: #7d9bb6; }
+
+/* A knob in the code: name, a slider and its value (moving ones move). */
+.sl { display: inline-flex; align-items: center; gap: 7px; vertical-align: middle; margin: 0 2px; }
+.sl .trk { position: relative; display: inline-block; width: 74px; height: 6px; border-radius: 3px;
+           background: rgba(120, 190, 240, 0.25); }
+.sl .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: #4d7cff; }
+.sl .knob { position: absolute; top: -5px; width: 15px; height: 15px; margin-left: -7px; border-radius: 50%;
+            background: #eaf6ff; box-shadow: 0 0 8px rgba(124, 242, 255, 0.8); }
+.sl .val { color: #7cf2ff; min-width: 3.2em; font-weight: 400; }
+.sl.moving .knob { background: var(--accent); }
+
+/* The piano roll under a pattern: notes light up as they play. */
+.roll { display: block; grid-column: 2 / 4; width: 100%; height: 44px; margin: 4px 0 10px; }
+
+/* Thumbs per line: the host's view only. */
+.lrate { display: flex; gap: 2px; margin-left: 8px; opacity: 0.3; }
+.ln:hover .lrate, .lrate.on { opacity: 1; }
+.lrate button { padding: 0 4px; border: 0; border-radius: 5px; background: transparent; font-size: 14px;
+                cursor: pointer; filter: grayscale(1); }
+.lrate button:hover, .lrate button.on { background: rgba(255,255,255,0.14); filter: none; }
+
+/* -------------------------------------------------------------- side */
+#logo {
+  position: relative; height: 112px; display: flex; align-items: center; justify-content: center;
+  font-family: var(--pixel); font-weight: 700; font-size: 52px; letter-spacing: 0; color: #eef8ff;
+  text-transform: uppercase; white-space: nowrap;
+  text-shadow: 0 0 calc(4px + 18px * var(--kick)) rgba(124, 242, 255, 0.8), 0 4px 0 rgba(77, 124, 255, 0.55);
+}
+/* Each bar (and harder at a drop) the logo glitches: two offset copies. */
+#logo::before, #logo::after {
+  content: attr(data-text); position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; opacity: 0; pointer-events: none;
+}
+#logo::before { color: #ff4fd8; }
+#logo::after { color: #46f0ff; }
+#logo.glitch::before { opacity: 0.8; animation: glitch-a 0.18s steps(3) 1; }
+#logo.glitch::after { opacity: 0.8; animation: glitch-b 0.18s steps(3) 1; }
+#logo.glitch.hard::before, #logo.glitch.hard::after { animation-duration: 0.6s; animation-iteration-count: 2; }
+@keyframes glitch-a {
+  0% { transform: translate(-6px, 2px); clip-path: inset(10% 0 55% 0); }
+  50% { transform: translate(5px, -3px); clip-path: inset(60% 0 8% 0); }
+  100% { transform: translate(-2px, 1px); clip-path: inset(30% 0 40% 0); }
+}
+@keyframes glitch-b {
+  0% { transform: translate(6px, -2px); clip-path: inset(50% 0 20% 0); }
+  50% { transform: translate(-5px, 3px); clip-path: inset(5% 0 70% 0); }
+  100% { transform: translate(3px, 0); clip-path: inset(70% 0 5% 0); }
+}
+
+#visbox { left: 0; top: 130px; width: 546px; height: 530px; }
+#vis { position: absolute; left: 0; top: 0; width: 542px; height: 410px; }
+#now { position: absolute; left: 22px; right: 22px; top: 416px; font-size: 20px; line-height: 1.35; }
+/* The dancer stands in the visual, the cloud her aura; she bounces with the
+   kick and jumps at a drop. */
+#dancer { position: absolute; left: 0; right: 0; top: 18px; height: 392px; display: flex; justify-content: center;
+          align-items: flex-end; pointer-events: none;
+          transform: translateY(calc(-6px * var(--kick))) scale(calc(1 + 0.015 * var(--kick))); transform-origin: 50% 100%; }
+#dancer video { height: 100%; display: none; }
+#dancer video.on { display: block; }
+#dancer.jump { animation: jump 0.7s cubic-bezier(.3,1.6,.5,1) 1; }
+@keyframes jump { 0% { translate: 0 0; } 35% { translate: 0 -34px; } 100% { translate: 0 0; } }
+#now .title { font-family: var(--pixel); font-size: 24px; color: #eef8ff; white-space: nowrap; overflow: hidden;
+              text-overflow: ellipsis; }
+#now .meta { color: var(--accent); }
+#arc { position: absolute; left: 22px; right: 22px; bottom: 18px; display: grid; gap: 4px; }
+#arc .step { height: 8px; background: rgba(120, 190, 240, 0.18); position: relative; overflow: hidden; }
+#arc .step.done { background: rgba(124, 242, 255, 0.5); }
+#arc .step.now { background: rgba(120, 190, 240, 0.18); }
+#arc .step.now::after { content: ""; position: absolute; inset: 0; width: calc(100% * var(--p, 0));
+                        background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+
+#agentbox { left: 0; top: 678px; width: 546px; height: 346px; padding: 18px 22px; font-size: 19px; line-height: 1.45; }
+#agent-head { font-family: var(--pixel); font-size: 17px; color: var(--accent); letter-spacing: 0.04em;
+              margin-bottom: 12px; display: flex; gap: 10px; align-items: center; }
+#agent-head .rec { width: 12px; height: 12px; border-radius: 50%; background: #ff3b5c;
+                   box-shadow: 0 0 10px #ff3b5c; animation: blink 1.6s steps(2) infinite; }
+#agent-head .model { color: var(--dim); font-family: var(--mono); font-size: 15px; margin-left: auto; }
+#agent .row { margin-bottom: 8px; }
+#agent .k { color: var(--dim); }
+#agent .hears { color: #d6efff; font-style: italic; }
+#agent .move { color: #7cf2ff; }
+#agent .why { color: #a9dcff; }
+#agent .say { color: #f5d2ff; }
+#agent .row.cue { font-size: 24px; line-height: 1.3; margin-bottom: 12px; }
+#agent .row.cue .k { color: var(--accent); }
+#agent .row.cue .say { color: #ffffff; font-weight: 600; }
+#agent .thinking { color: var(--dim); }
+
+/* -------------------------------------------------------------- moments */
+/* A surprise sends glyphs (the live code, a few math signs, its own name)
+   flying out of the screen at the viewer (deck.js burst). */
+#fly { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; pointer-events: none; }
+/* "DROP", "BREAKDOWN", a new track: big, glitchy, gone in 2.5 s. */
+#moment { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+          pointer-events: none; }
+#moment span { font-family: var(--pixel); font-weight: 700; font-size: 150px; color: #fff; opacity: 0;
+               text-align: center; line-height: 1.05; white-space: pre-line;
+               text-shadow: -6px 0 #ff4fd8, 6px 0 #46f0ff, 0 0 40px var(--accent); }
+#moment.on span { animation: moment 2.6s cubic-bezier(.2,.9,.3,1) 1; }
+#moment::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 340px; margin-top: -170px;
+                  background: linear-gradient(transparent, rgba(2, 4, 7, 0.85) 25%, rgba(2, 4, 7, 0.85) 75%, transparent);
+                  opacity: 0; }
+#moment.on::before { animation: band 2.6s ease-out 1; }
+@keyframes band { 0% { opacity: 0; } 10% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
+#moment span { position: relative; }
+@keyframes moment {
+  0% { opacity: 0; transform: scale(1.6); filter: blur(12px); }
+  12% { opacity: 1; transform: scale(1); filter: blur(0); }
+  70% { opacity: 1; transform: scale(1.02); }
+  100% { opacity: 0; transform: scale(0.96); filter: blur(4px); }
+}
+#flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; mix-blend-mode: overlay; }
+#flash.on { animation: flash 0.7s ease-out 1; }
+@keyframes flash { 0% { opacity: 0.85; } 100% { opacity: 0; } }
+#stage.shake { animation: shake 0.45s linear 1; }
+@keyframes shake {
+  0%, 100% { translate: 0 0; } 20% { translate: -8px 4px; } 40% { translate: 7px -5px; }
+  60% { translate: -5px -3px; } 80% { translate: 4px 3px; }
+}
+
+/* -------------------------------------------------------------- host box */
+#ask { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 10; display: flex;
+       gap: 6px; align-items: center; padding: 6px; border-radius: 10px; background: rgba(4, 10, 18, 0.92);
+       border: 1px solid var(--frame); font-family: var(--mono); }
+#ask input { width: min(32vw, 360px); padding: 7px 11px; border-radius: 6px; border: 1px solid var(--frame);
+             background: rgba(255,255,255,0.05); color: var(--ink); font-size: 14px; outline: none; font-family: inherit; }
+#ask button { padding: 7px 14px; border-radius: 6px; border: 0; background: var(--accent); color: #031018;
+              font-weight: 700; font-size: 14px; cursor: pointer; font-family: inherit; }
+#ask button.rate { padding: 7px 9px; background: rgba(255,255,255,0.08); }
+#ask-note { position: absolute; left: 0; right: 0; bottom: 100%; margin-bottom: 6px; text-align: center;
+            color: var(--dim); font-size: 13px; pointer-events: none; }
+body.capture #ask, body.capture .lrate { display: none; }

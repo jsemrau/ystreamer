@@ -23,25 +23,28 @@ from dataclasses import dataclass, field
 import config
 
 from . import llm, runtime
-from .blocks import STYLE_SETTINGS, Block, blocks_for, find_block
-from .livecode import (ALL_WRAPPERS, BASS_WRAPPERS, CHOICE_SLOTS, DRUM_WRAPPERS, EDIT_OPS, FX_RANGES,
-                       FX_NOTES, LOCKED_SLOTS, MELODIC_WRAPPERS, PF_RANGES, ROLE_CHANNELS, ROLE_FX,
+from .llm import CACHE_BREAK
+from .blocks import STYLE_SETTINGS, Block, blocks_for, find_block, subgenre
+from .livecode import (ALL_WRAPPERS, BASS_WRAPPERS, CHOICE_SLOTS, CLUB_DRUM_WRAPPERS, CLUB_STYLES, DRUM_WRAPPERS,
+                       EDIT_OPS, FX_RANGES,
+                       FX_NOTES, LEAD_WRAPPERS, LOCKED_SLOTS, MELODIC_WRAPPERS, PF_RANGES, ROLE_CHANNELS, ROLE_FX,
                        WRAPPER_NOTES, Edit, EditError,
                        Program, Track, allowed_wrappers, apply_edit, complexity, line_controls)
 from .narrator import clean_narration
-from .plan import DEFAULT_LIVE_PLAN, arc_summary, live_plan, plan_piece, sounds_summary
+from .plan import (DEFAULT_LIVE_PLAN, LIVE_PIECE_MINUTES, arc_summary, fit_live_plan, live_plan, plan_piece,
+                   sounds_summary)
 
 # Which roles come in first, per style (after the opener).
 ROLE_ORDER = {
     "lofi": ["beat", "keys", "bass", "lead", "texture", "perc", "acid", "arp"],
     "deephouse": ["beat", "bass", "keys", "perc", "lead", "chords", "arp", "texture"],
-    "trance": ["acid", "beat", "bass", "chords", "lead", "arp", "texture"],
+    "trance": ["acid", "beat", "bass", "perc", "chords", "lead", "arp", "texture"],
     "ambient": ["chords", "texture", "keys", "lead", "arp", "bass", "beat"],
     "piano": ["keys", "lead", "bass", "chords", "arp", "texture"],
     "downtempo": ["beat", "keys", "bass", "lead", "arp", "texture"],
     "darkwave": ["bass", "beat", "chords", "lead", "arp", "keys", "texture"],
     "techno": ["beat", "perc", "bass", "acid", "chords", "arp", "texture", "lead"],
-    "hardcore": ["beat", "perc", "acid", "lead", "arp", "chords", "texture"],
+    "hardcore": ["beat", "perc", "bass", "acid", "lead", "arp", "chords", "texture"],
 }
 
 PHASES = ("build", "groove", "breakdown", "rebuild", "groove2", "outro")
@@ -63,6 +66,14 @@ class SetState:
     plan: list = field(default_factory=list)
     step: int = 0
     phase_start: float = 0.0   # the bar (Tidal cycle) the current phase began
+    # The Director's instructions per phase (plan.Piece.cues) and the ones
+    # still to carry out in the phase playing now.
+    cues: dict = field(default_factory=dict)
+    cue_queue: list = field(default_factory=list)
+    # The track's surprise (music/surprises.py): which have fired, and for a
+    # fake drop the plan step where it falls back.
+    surprise_done: list = field(default_factory=list)
+    fake_step: int = -1
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -75,6 +86,27 @@ class SetState:
             state.step = next((i for i, (p, _) in enumerate(state.plan) if p == state.phase), 0)
         return state
 
+
+
+
+PHASE_LABELS = {"groove2": "peak"}
+
+def builtin_cues(piece) -> dict[str, list[str]]:
+    """Plain instructions for a track when no Director wrote any: the turns a
+    live set takes, named after the parts the track has."""
+    hook = (piece.hook or {}).get("role") or "lead"
+    return {
+        "groove": [{"say": f"Change the {hook} pattern"}, {"do": "knob", "part": "chords", "knob": "lpf",
+                                                          "to": [1200, 4500, 16], "say": "Open the chord filter slowly"}],
+        "breakdown": [{"do": "stop", "part": "beat", "say": "Drop the kick"},
+                      {"do": "stop", "part": "bass", "say": "Drop the bass"}],
+        "rebuild": [{"do": "bring back", "part": "bass", "say": "Bring the bass back"},
+                    {"do": "bring back", "part": "beat", "say": "Bring the kick back"}],
+        "groove2": [{"say": f"Change the {hook} melody"},
+                    {"do": "knob", "part": hook, "knob": "lpf", "to": 6000, "say": f"Brighter: open the {hook} filter"}],
+        "outro": [{"do": "stop", "part": hook, "say": f"Take out the {hook}"},
+                  {"do": "stop", "part": "bass", "say": "Drop the bass"}],
+    }
 
 class Performer:
     def __init__(self, rng: random.Random, style: str = "lofi", model_id: str | None = None, log=print,
@@ -99,6 +131,10 @@ class Performer:
         self._last_piece = None
         self.track_narration = ""   # the Director's spoken line for the current track
         self.track_mood = ""
+        # Called as on_surprise(name) when one of the track's surprises fires
+        # (the engine records it).
+        self.on_surprise = None
+        self._track_surprise = ""
         # Called as on_arc(before, after, why) when the arc moves on (the
         # engine narrates these moments).
         self.on_arc = None
@@ -127,6 +163,8 @@ class Performer:
         # context window turned out to be too small for the full one.
         self._compact = False
         self._complexity_now: float | None = None   # measured at each edit
+        self.line_ratings: dict[str, int] = {}       # the host's 👍 (1) / 👎 (-1) per line, this track
+        self._knob_streak = 0                         # knob-only edits in a row (see KNOB_OPS)
         # The judge's last answer details (probabilities per option, confidence)
         # and, per track, the share of its probability given to the LLM's ideas.
         self.last_judgement: dict = {}
@@ -161,14 +199,26 @@ class Performer:
             settings["edit_bars"] = self.edit_bars
         return settings
 
+    # Edits that only turn a knob. After MAX_KNOB_STREAK of them in a row the
+    # next move must change the music itself (notes, rhythm, lines): a long
+    # run of filter and drive nudges sounds like nothing is happening.
+    KNOB_OPS = ("set_fx", "set_pf", "remove_fx")
+    MAX_KNOB_STREAK = 2
+
+    def must_change_music(self) -> bool:
+        return self._knob_streak >= self.MAX_KNOB_STREAK
+
     def applied(self, edit: Edit) -> None:
         """Called by the engine once an edit is actually playing."""
+        self._knob_streak = self._knob_streak + 1 if edit.op in self.KNOB_OPS else 0
         who = "you" if edit.source in ("LLM", "jevtypesafe") else "the built-in performer"
         self.recent.append(f"- {edit.describe()} ({who}, {self.state.phase})"
                            + (f": {edit.reason}" if edit.reason else ""))
 
     def new_track(self, previous: Track | None) -> Track:
         self.recent.clear()
+        self.line_ratings = {}
+        self._knob_streak = 0
         if previous is not None:
             self.report_stats()
         if self.locked_style is None:
@@ -184,7 +234,7 @@ class Performer:
             self.director.style = self.style
             piece = self.director.next_piece(prev_piece)
         else:
-            piece = plan_piece(self.rng, prev_piece, style=self.style)
+            piece = plan_piece(self.rng, prev_piece, style=self.style, target_minutes=LIVE_PIECE_MINUTES)
         self._last_piece = piece
         self.track_narration = getattr(piece, "narration", "") or ""
         self.track_mood = piece.mood
@@ -201,25 +251,54 @@ class Performer:
             other = progression_named(name, mode) if name and name != main.name else None
             if other is not None:
                 progressions[part] = {"name": other.name, "degrees": list(other.degrees)}
+        cues = {p: list(c) for p, c in (piece.cues or {}).items()} or builtin_cues(piece)
+        plan = fit_live_plan(live_plan(piece), piece.cps, getattr(self.director, "target_minutes", LIVE_PIECE_MINUTES))
+        fake_step = -1
+        if piece.surprise == "fake_drop":
+            # 8 bars of peak, back into a short breakdown, then the real drop.
+            at = next((i for i, (p, _) in enumerate(plan) if p == "groove2"), None)
+            if at is not None:
+                plan[at:at] = [["groove2", 8], ["breakdown", 8], ["rebuild", 16]]
+                fake_step = at + 1
+        if piece.surprise == "tempo_lift":
+            cues["rebuild"] = [{"do": "tempo", "to": piece.bpm + 2, "say": "Faster: +2 BPM"},
+                               {"do": "tempo", "to": piece.bpm + 4, "say": "Faster still: +4 BPM"}] + cues.get("rebuild", [])
         self.state = SetState(tracks_played=self.state.tracks_played + (1 if previous else 0),
                               target_lines=self.rng.randint(max(3, self.settings["max_lines"] - 1),
                                                             self.settings["max_lines"]),
-                              plan=live_plan(piece), phase_start=self.bar())
+                              plan=plan, phase_start=self.bar(), fake_step=fake_step,
+                              cues=cues, cue_queue=list(cues.get("build", [])))
         self.log("🧭 Arc plan: " + arc_summary(self.state.plan))
+        if piece.subgenre:
+            self.log(f"🎛  Subgenre: {piece.subgenre} {self.style} ({subgenre(self.style, piece.subgenre).get('about', '')})")
         if piece.sounds:
             self.log("🎹 Sounds: " + sounds_summary(piece.sounds))
         if piece.hook:
             self.log(f"🎣 Hook ({piece.hook['role']}): {piece.hook['pattern']}")
-        if piece.idea:
-            self.log(f"💡 Idea: {piece.idea}")
+        if piece.cues:
+            self.log("🎬 Cues: " + " | ".join(f"{PHASE_LABELS.get(p, p)}: " + "; ".join(
+                c.get("say", "") if isinstance(c, dict) else str(c) for c in cues) for p, cues in piece.cues.items()))
         if piece.parts:
             self.log("✏️  Sketch: " + " · ".join(f"{r} {p['pattern']}" for r, p in piece.parts.items()))
         if piece.motion:
             self.log("🎛  Moving: " + " · ".join(f"{r}.{c} {v}" for r, cs in piece.motion.items() for c, v in cs.items()))
-        return Track(title=piece.title, style=self.style, key=piece.key, bpm=piece.bpm,
+        from .livecode import DEFAULT_VOICING, TRANCE_VOICINGS
+        from .plan import VOICED_STYLES
+
+        voicing = DEFAULT_VOICING
+        if self.style in VOICED_STYLES:
+            # The Director's choice, or another of the trance shapes than last time.
+            name = piece.voicing if piece.voicing in TRANCE_VOICINGS else self.rng.choice(
+                [n for n in TRANCE_VOICINGS if TRANCE_VOICINGS[n] != getattr(previous, "voicing", "")]
+                or list(TRANCE_VOICINGS))
+            voicing = TRANCE_VOICINGS[name]
+            self.log(f"🎹 Voicing: {name} ({voicing})")
+        self._track_surprise = piece.surprise
+        return Track(title=piece.title, style=self.style, key=piece.key, bpm=piece.bpm, voicing=voicing,
                      degrees=degrees, bars_per_chord=piece.cycles_per_chord, progressions=progressions,
                      sounds=dict(piece.sounds), hook=dict(piece.hook), idea=piece.idea,
-                     parts=dict(piece.parts), motion=dict(piece.motion))
+                     parts=dict(piece.parts), motion=dict(piece.motion), subgenre=piece.subgenre,
+                     kit=dict(subgenre(self.style, piece.subgenre).get("kit", {})), surprise=piece.surprise)
 
     # Which progression plays in each phase of the arc.
     HARMONY_PARTS = {"build": "main", "groove": "main", "breakdown": "breakdown", "rebuild": "breakdown",
@@ -245,7 +324,12 @@ class Performer:
             advice = "plenty going on: refine what plays rather than adding"
         else:
             advice = "about right: keep it moving"
-        return f"Complexity now {now:.1f}, about {target:.0f} suits this phase: {advice}."
+        note = f"Complexity now {now:.1f}, about {target:.0f} suits this phase: {advice}."
+        if self.must_change_music():
+            note += (f"\nYour last {self._knob_streak} moves only turned knobs: this move must change the music "
+                     "itself - notes or rhythm (set_pattern), a line in or out (add, mute, unmute, remove), or "
+                     "a wrapper. Knob moves are refused this time.")
+        return note
 
     def harmony_for_phase(self, track: Track) -> tuple[str, dict] | None:
         """(part, {"name", "degrees"}) for the current phase, or None when the
@@ -315,6 +399,15 @@ class Performer:
         st.phase_start = self.bar()
         if st.phase == "breakdown":
             st.muted_for_breakdown = []          # each breakdown brings back what it muted
+        st.cue_queue = list(st.cues.get(st.phase, []))      # the Director's instructions for this part
+        if st.fake_step >= 0 and st.step == st.fake_step - 1:
+            st.cue_queue = []                                # the fake peak: the real one's cues wait
+        if st.step == st.fake_step and "fake_drop" not in st.surprise_done:
+            self.surprise_fired("fake_drop")
+        if st.phase == "rebuild" and self.surprise_due("tempo_lift"):
+            self.surprise_fired("tempo_lift")
+        if st.phase == "groove" and self.surprise_due("three_note_hook"):
+            self.surprise_fired("three_note_hook")
         self.log(f"🧭 Arc: {before} → {st.phase} ({why})")
         runtime.ui_event("arc", before=before, after=st.phase, why=why)
         if self.on_arc is not None:
@@ -337,6 +430,9 @@ class Performer:
         request = self.requests.take() if self.requests is not None else None
         if request is not None:
             return self._answer_request(program, request["text"])
+        if self.state.cue_queue:
+            # The Director's next instruction for this part of the track.
+            return self._carry_out(program, self.state.cue_queue.pop(0))
         edit = None
         if self.model_id and self._skip_llm <= 0:
             started, late_before = time.monotonic(), self.stats["late"]
@@ -364,25 +460,35 @@ class Performer:
 
     # ------------------------------------------------------------ requests
 
-    def note_rating(self, rating: int, edit: str) -> None:
-        """The host rated what is playing: keep it with the recent edits, so
-        the model builds on what was liked and steers away from what wasn't."""
+    def note_rating(self, rating: int, edit: str, role: str | None = None, line: str = "") -> None:
+        """The host rated what is playing, or one line of it: keep it with the
+        recent edits, so the model builds on what was liked and steers away
+        from what wasn't. A 👎 line is the built-in performer's next one to
+        change; a 👍 line is left alone while others need work."""
         thumb = "👍 liked" if rating > 0 else "👎 disliked"
-        self.recent.append(f"- the host {thumb} what played after: {edit}" if edit
-                           else f"- the host {thumb} what is playing")
+        if role:
+            self.line_ratings[role] = rating
+            code = line if len(line) <= 160 else line[:157] + "..."
+            advice = "keep it as it is" if rating > 0 else "change it (or take it out) at your next move"
+            self.recent.append(f"- the host {thumb} the {role} line ({code}): {advice}")
+        else:
+            self.recent.append(f"- the host {thumb} what played after: {edit}" if edit
+                               else f"- the host {thumb} what is playing")
 
     def request_waiting(self) -> bool:
         return self.requests is not None and self.requests.pending()
 
-    def _answer_request(self, program: Program, text: str) -> Edit:
-        """The host asked for something: review it and make the move that
-        best answers it (the model if there is one, else simple rules)."""
-        self.log(f"📨 Request from the host: {text!r}")
-        runtime.append_thought(f"📨 request: {text}")
+    def _answer_request(self, program: Program, text: str, who: str = "host") -> Edit:
+        """The host asked for something, or the Director gave an instruction
+        (who="director"): turn it into the move that best carries it out (the
+        model if there is one, else simple rules)."""
+        director = who == "director"
+        self.log(f"🎬 Director: {text}" if director else f"📨 Request from the host: {text!r}")
+        runtime.append_thought(f"🎬 director: {text}" if director else f"📨 request: {text}")
         edit = None
         if self.model_id and llm.resolve(self.model_id)[0] != "jevtypesafe":
             started, late_before = time.monotonic(), self.stats["late"]
-            edit = self._llm_edit(program, request=text)
+            edit = self._llm_edit(program, request=text, who=who)
             self._note_latency(time.monotonic() - started, late=self.stats["late"] > late_before,
                                answered=edit is not None)
         if edit is None:
@@ -390,14 +496,84 @@ class Performer:
         edit.request = text
         if edit.source.startswith("LLM"):
             self.stats["llm"] += 1
-            edit.source = "LLM, request"
+            edit.source = "LLM, director" if director else "LLM, request"
         self.state.edits_in_phase += 1
         self.state.edits_in_track += 1
         if edit.op == "mute" and self.state.phase == "breakdown":
             self.state.muted_for_breakdown.append(edit.role)
-        self.log(f"📨 Performer: {edit.review or edit.reason}")
-        runtime.ui_event("request", text=text, review=edit.review or edit.reason, edit=edit.describe(),
-                         source=edit.source)
+        self.log(f"{'🎬' if director else '📨'} Performer: {edit.review or edit.reason}")
+        runtime.ui_event("cue" if director else "request", text=text, review=edit.review or edit.reason,
+                         edit=edit.describe(), source=edit.source)
+        return edit
+
+    def _carry_out(self, program: Program, cue) -> Edit:
+        """The Director's instruction as code. A precise cue (which part,
+        block, sound, pattern, knob value) is played exactly as given; what
+        it leaves open (a new melody "busier, in 16ths") and a plain sentence
+        go to the Performer (the model, or simple rules) to write."""
+        cue = cue if isinstance(cue, dict) else {"say": str(cue)}
+        edit = self._cue_edit(program, cue)
+        if edit is None:
+            text = cue.get("say", "")
+            if cue.get("part") and cue.get("do"):
+                text += f" (the {cue['part']} line)"
+            return self._answer_request(program, text, who="director")
+        edit.source, edit.request, edit.review = "director", cue["say"], cue["say"]
+        self.state.edits_in_phase += 1
+        self.state.edits_in_track += 1
+        if edit.op == "mute" and self.state.phase == "breakdown":
+            self.state.muted_for_breakdown.append(edit.role)
+        self.log(f"🎬 Director: {cue['say']}")
+        runtime.append_thought(f"🎬 director: {cue['say']}")
+        runtime.ui_event("cue", text=cue["say"], review="", edit=edit.describe(), source="director")
+        return edit
+
+    def _cue_edit(self, program: Program, cue: dict) -> Edit | None:
+        """The edit a precise cue asks for, if it can be played as it stands;
+        None leaves it to the Performer."""
+        do, role = cue.get("do"), cue.get("part")
+        line = program.lines.get(role) if role else None
+        edit = None
+        if do == "start" and line is not None and line.muted or do == "bring back" and line is not None and line.muted:
+            edit = Edit("unmute", role=role)
+        elif do == "start" and line is None:
+            block = find_block(self.style, cue.get("block", "")) or next(
+                (b for b in blocks_for(self.style) if b.role == role), None)
+            if block is None or self.melodic_problem(program, role) \
+                    or len(program.active_roles()) >= self.settings["max_lines"]:
+                return None
+            track = program.track
+            sounds = {**track.sounds, role: cue["sound"]} if cue.get("sound") else track.sounds
+            new = block.make(self.rng, sounds, track.hook, track.parts, track.motion, voicing=track.voicing)
+            slot = cue.get("slot") or (block.sketch_slot() or (None,))[0]
+            if cue.get("pattern") and slot in new.patterns:
+                new.patterns[slot] = cue["pattern"]
+            edit = Edit("add", role=role, line=new)
+        elif do == "stop" and line is not None and not line.muted and len(program.active_roles()) > 1:
+            edit = Edit("mute", role=role)
+        elif do == "pattern" and line is not None and cue.get("pattern"):
+            block = find_block(self.style, line.block)
+            slot = cue.get("slot") or ((block.sketch_slot() or (None,))[0] if block else None)
+            if slot in line.patterns:
+                edit = Edit("set_pattern", role=role, name=slot, value=cue["pattern"])
+        elif do == "knob" and line is not None:
+            to = cue["to"]
+            value = f"(slow {to[2]} $ range {to[0]:g} {to[1]:g} sine)" if isinstance(to, list) else f"{to:g}"
+            op = "set_fx" if cue["knob"] in FX_RANGES and cue["knob"] in ROLE_FX.get(role, ()) else "set_pf"
+            edit = Edit(op, role=role, name=cue["knob"], value=value)
+        elif do == "sound" and line is not None:
+            edit = Edit("set_sound", role=role, value=cue["sound"])
+        elif do == "wrap" and line is not None:
+            edit = Edit("wrap", role=role, name=cue["wrap"])
+        elif do == "tempo":
+            edit = Edit("tempo", value=f"{cue['to']:g}")
+        if edit is None:
+            return None
+        try:
+            apply_edit(program, edit, self.settings["max_lines"])
+        except EditError as e:
+            self.log(f"[Performer] the Director's cue {cue['say']!r} can't be played as given ({e})")
+            return None
         return edit
 
     def _builtin_request(self, program: Program, text: str) -> Edit:
@@ -405,15 +581,34 @@ class Performer:
         a part, darker/brighter, faster/slower. Anything else: say so."""
         words = text.lower()
         roles = {"bass": "bass", "sub": "bass", "kick": "beat", "beat": "beat", "drum": "beat",
-                 "hat": "perc", "perc": "perc", "clap": "beat", "lead": "lead", "melod": "lead",
+                 "hat": "perc", "perc": "perc", "clap": "perc", "lead": "lead", "melod": "lead",
                  "hook": "lead", "chord": "chords", "pad": "chords", "string": "chords", "keys": "keys",
                  "piano": "keys", "arp": "arp", "acid": "acid", "303": "acid", "texture": "texture",
                  "noise": "texture", "vinyl": "texture"}
         role = next((r for w, r in roles.items() if w in words), None)
+        if role == "perc" and "perc" not in program.lines and "beat" in program.lines and "clap" in words:
+            role = "beat"                         # styles that keep the clap on the beat line
         active = program.active_roles()
         line = program.lines.get(role) if role else None
         edit = None
-        if any(w in words for w in ("faster", "speed up", "tempo up", "more energy")):
+        starts = ("start", "bring in", "introduce", "add ", "enter", "let the")
+        changes = ("change", "new ", "vary", "switch", "different", "another")
+        if role and line is not None and line.muted and ("back" in words or any(w in words for w in starts)):
+            edit = Edit("unmute", role=role, review=f"bringing the {role} back in")
+        elif role and line is None and any(w in words for w in starts):
+            if any(b.role == role for b in blocks_for(self.style)) and len(active) < self.settings["max_lines"] \
+                    and not self.melodic_problem(program, role):
+                edit = self._add(program, role)
+                edit.review = f"starting the {role}"
+        elif role and line is not None and not line.muted and any(w in words for w in changes):
+            edit = self._pattern_edit(role, line)
+            if edit is not None:
+                edit.review = f"a new {edit.name} for the {role}: {edit.value}"
+        elif role and line is not None and not line.muted and "take out" in words and len(active) > 1:
+            edit = Edit("mute", role=role, review=f"taking the {role} out")
+        if edit is not None:
+            pass
+        elif any(w in words for w in ("faster", "speed up", "tempo up", "more energy")):
             edit = Edit("tempo", value=str(program.track.bpm + 4), review="a little faster, +4 BPM")
         elif any(w in words for w in ("slower", "slow down", "tempo down", "calmer")):
             edit = Edit("tempo", value=str(program.track.bpm - 4), review="a little slower, -4 BPM")
@@ -475,16 +670,57 @@ class Performer:
         return Edit("add", role=role, line=program.track.make(block, self.rng),
                     reason=f"bring in the {block.name.replace('_', ' ')}")
 
+    def surprise_fired(self, name: str, detail: str = "") -> None:
+        """A surprise just happened: once per track, logged and shown."""
+        from .surprises import SURPRISES
+
+        self.state.surprise_done.append(name)
+        label, about, _ = SURPRISES[name]
+        self.log(f"✨ Surprise: {label} ({about}){' ' + detail if detail else ''}")
+        runtime.append_thought(f"✨ surprise: {label}")
+        runtime.ui_event("surprise", name=name, label=label, about=about)
+        if self.on_surprise is not None:
+            self.on_surprise(name)
+
+    def surprise_due(self, name: str) -> bool:
+        return self.state.surprise_done.count(name) == 0 and getattr(self, "_track_surprise", "") == name
+
+    MELODIC_ROLES = ("acid", "arp", "lead", "keys")
+
+    def melodic_problem(self, program: Program, role: str) -> str | None:
+        """Why another melodic line (acid, arp, lead, keys) can't come in: the
+        style allows only so many above the bass and chords at once."""
+        limit = self.settings.get("max_melodic")
+        if not limit or role not in self.MELODIC_ROLES:
+            return None
+        playing = [r for r in program.active_roles() if r in self.MELODIC_ROLES and r != role]
+        if len(playing) >= limit:
+            return (f"{', '.join(playing)} already carry the melody ({limit} at most in {self.style}): "
+                    f"mute or remove one first")
+        return None
+
     def _missing_roles(self, program: Program) -> list[str]:
         """Roles not playing yet, in the order a track builds up; the part
-        carrying the Director's hook comes first, so the hook is always heard."""
-        available = {b.role for b in blocks_for(self.style)}
+        carrying the Director's hook comes first, so the hook is always heard.
+        Melodic roles over the style's limit are left out."""
+        available = [b.role for b in blocks_for(self.style)]
         order = [r for r in ROLE_ORDER.get(self.style, list(ROLE_CHANNELS)) if r in available]
+        # Every part the style has blocks for can come in, even one the order
+        # forgot (hardcore once had no bass in it, so no track ever had one).
+        order += [r for r in dict.fromkeys(available) if r not in order]
+        # The style's order, but no decoration (texture) before a part the
+        # Director sketched, so a full track never leaves a sketched part out;
+        # the hook's part first of all.
+        sketched = set(program.track.parts or {})
+        if sketched & set(order) and "texture" in order and "texture" not in sketched:
+            order.remove("texture")
+            last = max(i for i, r in enumerate(order) if r in sketched)
+            order.insert(last + 1, "texture")
         hook_role = (program.track.hook or {}).get("role")
         if hook_role in order:
             order.remove(hook_role)
             order.insert(0, hook_role)
-        return [r for r in order if r not in program.lines]
+        return [r for r in order if r not in program.lines and not self.melodic_problem(program, r)]
 
     def _builtin_edit(self, program: Program) -> Edit:
         st, rng = self.state, self.rng
@@ -528,6 +764,39 @@ class Performer:
         """One small revision to a playing line."""
         rng = self.rng
         roles = program.active_roles() or list(program.lines)
+        # The host's thumbs: a 👎 line is the one to change now (once);
+        # 👍 lines are left alone while there are others to work on.
+        disliked = [r for r in roles if self.line_ratings.get(r, 0) < 0]
+        if disliked:
+            role = disliked[0]
+            self.line_ratings.pop(role)
+            line = program.lines[role]
+            for make in (lambda: self._pattern_edit(role, line) if line.patterns else None,
+                         lambda: self._fx_edit(role, line, calm), lambda: self._wrap_edit(role, line)):
+                edit = make()
+                if edit is None:
+                    continue
+                try:
+                    apply_edit(program, edit, self.settings["max_lines"])
+                    edit.reason = f"the host didn't like the {role}: {edit.reason}" if edit.reason else edit.reason
+                    return edit
+                except EditError:
+                    continue
+        roles = [r for r in roles if self.line_ratings.get(r, 0) <= 0] or roles
+        if self.must_change_music():
+            # Enough knob turns: change notes or rhythm, or add a variation.
+            for _ in range(20):
+                role = rng.choice(roles)
+                line = program.lines[role]
+                edit = (self._pattern_edit(role, line) if line.patterns and rng.random() < 0.75
+                        else self._wrap_edit(role, line))
+                if edit is None:
+                    continue
+                try:
+                    apply_edit(program, edit, self.settings["max_lines"])
+                    return edit
+                except EditError:
+                    continue
         # Stay with the knob being ridden about half the time, so a ride
         # builds over several edits instead of scattering across lines.
         last = self._last_ride
@@ -754,7 +1023,7 @@ class Performer:
         if own and self.rng.random() < (0.6 if len(own) >= 2 else 0.2):
             w = self.rng.choice(own)
             return Edit("unwrap", role=role, name=w, reason=f"take off `{w}`")
-        options = [w for w in allowed_wrappers(line) if w not in line.wrappers]
+        options = [w for w in allowed_wrappers(line, self.style) if w not in line.wrappers]
         if not options:
             return None
         w = self.rng.choice(options)
@@ -808,15 +1077,16 @@ class Performer:
             return max(window, config.LOCAL_PERFORMER_WAIT_SECONDS)
         return window
 
-    def _llm_edit(self, program: Program, request: str = "") -> Edit | None:
+    def _llm_edit(self, program: Program, request: str = "", who: str = "host") -> Edit | None:
         deadline = time.monotonic() + self._wait_seconds(program)
         # A host's request, then (after a rejected reply) a correction.
-        extra = REQUEST_SECTION.format(request=request) if request else ""
+        extra = ((DIRECTOR_SECTION if who == "director" else REQUEST_SECTION).format(request=request)
+                 if request else "")
         schema = self._edit_schema(program, review=bool(request))
         asks = (f"next edit for '{program.track.title}' ({self.state.phase}, "
                 f"{len(program.active_roles())} line{'' if len(program.active_roles()) == 1 else 's'} playing)")
         if request:
-            asks = f"the host's request {request!r}"
+            asks = f"the Director's instruction {request!r}" if who == "director" else f"the host's request {request!r}"
         for attempt in (1, 2):
             remaining = deadline - time.monotonic()
             try:
@@ -861,6 +1131,10 @@ class Performer:
 
         def offer(edit: Edit | None) -> None:
             if edit is None or len(out) >= limit or edit.describe() in seen:
+                return
+            if edit.op in ("add", "unmute") and self.melodic_problem(program, edit.role):
+                return
+            if edit.op in self.KNOB_OPS and self.must_change_music():
                 return
             try:
                 apply_edit(program, edit, self.settings["max_lines"])
@@ -1133,13 +1407,14 @@ class Performer:
             for slot in slots:
                 value = {"enum": CHOICE_SLOTS[slot]} if slot in CHOICE_SLOTS else {"type": "string", "maxLength": 60}
                 options.append(variant("set_pattern", role={"const": role}, name={"const": slot}, value=value))
+            knobs_ok = not self.must_change_music()
             fx = [n for n in ROLE_FX.get(role, list(FX_RANGES)) if n in FX_RANGES]
-            if fx:
+            if fx and knobs_ok:
                 options.append(variant("set_fx", role={"const": role}, name={"enum": fx}, value=text))
             controls = line_controls(line)
-            if controls:
+            if controls and knobs_ok:
                 options.append(variant("set_pf", role={"const": role}, name={"enum": controls}, value=text))
-            wraps = [w for w in allowed_wrappers(line) if w not in line.wrappers]
+            wraps = [w for w in allowed_wrappers(line, self.style) if w not in line.wrappers]
             if wraps and len(line.wrappers) < 3:
                 options.append(variant("wrap", role={"const": role}, name={"enum": wraps}))
             if line.wrappers:
@@ -1155,6 +1430,8 @@ class Performer:
         name = str(data.get("name", "")).strip()
         if op == "set_fx" and name in PF_RANGES and name not in FX_RANGES:
             op = "set_pf"            # a synth control sent as an effect (e.g. acidres)
+        if op in self.KNOB_OPS and self.must_change_music():
+            raise EditError(f"{self._knob_streak} knob turns in a row: change notes, rhythm or lines now")
         value = _clamp_value(op, name, str(data.get("value", "")).strip(), program)
         edit = Edit(op, role=role, name=name, value=value,
                     reason=" ".join(str(data.get("reason", "")).split())[:200],
@@ -1167,12 +1444,17 @@ class Performer:
             lo, hi = gain_range(program.lines[role])
             if _NUM_RE.match(edit.value):
                 edit.value = f"{max(lo, min(hi, float(edit.value))):g}"
+        if op == "unmute" and self.melodic_problem(program, role):
+            raise EditError(self.melodic_problem(program, role))
         if op == "add":
             block = find_block(self.style, str(data.get("block", "")))
             if block is None:
                 raise EditError(f"unknown block {data.get('block')!r}")
             edit.role = block.role
             edit.line = program.track.make(block, self.rng)
+            problem = self.melodic_problem(program, edit.role)
+            if problem:
+                raise EditError(problem)
             hook_role = (program.track.hook or {}).get("role")
             if (hook_role and hook_role not in program.lines and edit.role != hook_role
                     and len(program.active_roles()) + 1 >= self.settings["max_lines"]):
@@ -1188,7 +1470,7 @@ class Performer:
         used_fx: set[str] = set()
         for role, line in program.lines.items():
             fx_ok = [n for n in ROLE_FX.get(role, list(FX_RANGES)) if n in FX_RANGES]
-            wraps_ok = [w for w in allowed_wrappers(line) if w not in line.wrappers]
+            wraps_ok = [w for w in allowed_wrappers(line, self.style) if w not in line.wrappers]
             entry = {"line": f"d{line.channel}", "patterns": {k: v for k, v in line.patterns.items()
                                                                if k not in LOCKED_SLOTS}}
             if line.muted:
@@ -1220,7 +1502,9 @@ class Performer:
                         "(remove or mute one first)") if full else json.dumps(addable)
         template = _load_prompt("performer.md")
         return template.format(
-            track=json.dumps(program.track.to_dict()), phase=self.state.phase,
+            # The system rules and the track (the same for a whole track) come
+            # first: Claude caches them up to here.
+            track=json.dumps(program.track.to_dict()), cache_break=CACHE_BREAK, phase=self.state.phase,
             phase_help=PHASE_HELP[self.state.phase], edits_in_phase=self.state.edits_in_phase,
             complexity=self.complexity_note(program),
             bars_left=round(self.phase_bars_left()), phase_bars=self.step_bars(),
@@ -1234,7 +1518,7 @@ class Performer:
             # The full glossary is in the fixed rules; a compact prompt (small
             # context windows) gets just the names and ranges in play here.
             wrapper_notes="" if not self._compact else (
-                "\nWrappers: " + _wrapper_notes(wrap_kinds, used_wrappers, names_only=True).replace("\n", " ")
+                "\nWrappers: " + _wrapper_notes(wrap_kinds, used_wrappers, names_only=True, style=self.style).replace("\n", " ")
                 + "\nRanges: " + ", ".join(f"{n} {lo:g}-{hi:g}" for n, (lo, hi) in {**FX_RANGES, **PF_RANGES}.items()
                                             if n in used_fx)),
         )
@@ -1248,10 +1532,12 @@ class Performer:
         if self._compact:
             glossary = "(compact prompt: the wrappers and ranges in play are listed with the lines)"
         else:
+            groups = _wrapper_kinds(self.style)
+            offered = {w for ws in groups.values() for w in ws}
             glossary = ("Wrappers (a line takes those of its group, see `wrap_with`):\n"
-                        + "\n".join(f"- {kind}: " + ", ".join(f"`{w}`" for w in ws)
-                                     for kind, ws in _WRAPPER_KINDS.items())
-                        + "\n\n" + "\n".join(f"- `{w}`: {note}" for w, note in sorted(WRAPPER_NOTES.items()))
+                        + "\n".join(f"- {kind}: " + ", ".join(f"`{w}`" for w in ws) for kind, ws in groups.items())
+                        + "\n\n" + "\n".join(f"- `{w}`: {note}" for w, note in sorted(WRAPPER_NOTES.items())
+                                               if w in offered)
                         + "\n\nEffects and controls (a line takes those in its `can_set_fx` / `controls`):\n"
                         + "\n".join(f"- `{n}` [{lo:g}-{hi:g}]: {FX_NOTES[n]}"
                                      for n, (lo, hi) in {**FX_RANGES, **PF_RANGES}.items() if n in FX_NOTES))
@@ -1262,25 +1548,30 @@ class Performer:
         return f"{self._SYSTEM}\n\n{rules}"
 
 
-_WRAPPER_KINDS = {"drum wrappers": DRUM_WRAPPERS, "bass wrappers": BASS_WRAPPERS,
-                  "melodic wrappers": MELODIC_WRAPPERS}
+def _wrapper_kinds(style: str | None) -> dict[str, list[str]]:
+    """The wrapper groups for a style (club drums stay straight)."""
+    return {"drum wrappers": CLUB_DRUM_WRAPPERS if style in CLUB_STYLES else DRUM_WRAPPERS,
+            "bass wrappers": BASS_WRAPPERS, "melodic wrappers": MELODIC_WRAPPERS, "lead wrappers": LEAD_WRAPPERS}
 
 
 def _wrapper_kind(line) -> str:
-    return "drum wrappers" if line.drums else "bass wrappers" if line.role == "bass" else "melodic wrappers"
+    if line.drums:
+        return "drum wrappers"
+    return {"bass": "bass wrappers", "lead": "lead wrappers"}.get(line.role, "melodic wrappers")
 
 
-def _wrapper_notes(kinds: set[str], extra: set[str], names_only: bool = False) -> str:
+def _wrapper_notes(kinds: set[str], extra: set[str], names_only: bool = False, style: str | None = None) -> str:
     """Each wrapper once, grouped by the kind of line it can go on."""
     out = []
-    for kind, names in _WRAPPER_KINDS.items():
+    groups = _wrapper_kinds(style)
+    for kind, names in groups.items():
         if kind in kinds:
             if names_only:
                 out.append(f"{kind[0].upper()}{kind[1:]}: " + "; ".join(f"`{w}`" for w in names))
                 continue
             out.append(f"{kind[0].upper()}{kind[1:]}:")
             out.extend(f"- `{w}`: {WRAPPER_NOTES[w]}" for w in names)
-    shown = {w for k in kinds for w in _WRAPPER_KINDS[k]}
+    shown = {w for k in kinds for w in groups[k]}
     out.extend(f"- `{w}`: {WRAPPER_NOTES[w]}" for w in sorted(extra - shown) if w in WRAPPER_NOTES)
     return "\n".join(out)
 
@@ -1335,6 +1626,19 @@ window: +3 dB at most) and the track's style. If it can't be done as asked,
 or would hurt the music, make the closest good move instead and say so.
 Start your reply with `"review"`: one sentence to the host, what you'll do
 and why (or why not exactly as asked)."""
+
+
+DIRECTOR_SECTION = """
+
+## The Director's instruction
+
+The Director, who plans this track, says: "{request}"
+
+Carry it out: make the ONE edit that does what the Director says, in code,
+within the rules above (harmony, the kit, the gain window: +3 dB at most).
+If it can't be done exactly (the part isn't there, or it would break the
+harmony), make the closest move that serves it and say so. Start your reply
+with `"review"`: one short sentence, what you're doing in the code."""
 
 
 REPLY_SINGLE = """## Reply

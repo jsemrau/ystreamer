@@ -1,4 +1,4 @@
-// sleepless composer: stream UI.
+// InfiniTrance: stream UI.
 // Polls ui.json (written by the engine, served by stream/ui_server.py) and
 // draws the live code, the agents' decisions and a beat-synced visual.
 "use strict";
@@ -30,11 +30,13 @@ const ICONS = {
   track:     '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M6 2l8-1v10a2 2 0 11-2-2V4L7 5v8a2 2 0 11-2-2V2z"/></svg>',
   request:   '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M1 7l14-6-5 14-2-6z"/></svg>',
   arranger:  '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M2 2h2v12H2zm5 4h2v8H7zm5-3h2v11h-2z"/></svg>',
+  surprise:  '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M8 0l1.8 5.2L15 7l-5.2 1.8L8 14l-1.8-5.2L1 7l5.2-1.8z"/></svg>',
+  cue:       '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M8 1l2.2 4.6 5 .7-3.6 3.5.9 5L8 12.4 3.5 14.8l.9-5L.8 6.3l5-.7z"/></svg>',
   rating:    '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M8 14s-6-3.6-6-8a3.5 3.5 0 016-2.4A3.5 3.5 0 0114 6c0 4.4-6 8-6 8z"/></svg>',
 };
 const AGENT_NAMES = { director: "Director", performer: "Performer", judge: "Judge", narrator: "Narrator",
                       arc: "Arc", track: "New track", request: "Host request", arranger: "Arranger",
-                      rating: "Host rating" };
+                      rating: "Host rating", cue: "Director", surprise: "Surprise" };
 
 let ui = null;              // latest ui.json
 let shownEvents = new Set();
@@ -139,6 +141,9 @@ function updateArcFill() {
 }
 setInterval(updateArcFill, 1000);
 
+// The host's 👍 / 👎 per line (role -> 1 | -1), for the track being played.
+let lineRatings = {}, ratedTrack = "";
+
 function renderCode() {
   $("tempo").innerHTML = highlight(ui.tempo_line || "");
   const now = performance.now();
@@ -149,11 +154,20 @@ function renderCode() {
     lastCode[line.channel] = line.text;
     return line;
   });
+  // A new track starts with no line ratings.
+  const title = (ui.track && ui.track.title) || "";
+  if (title !== ratedTrack) { ratedTrack = title; lineRatings = {}; }
   const html = rows.map((line) => {
     const cls = ["line", line.edited ? "edited" : "", line.muted ? "muted" : "",
                  typing[line.channel] ? "fresh" : ""].join(" ");
+    const r = lineRatings[line.role];
+    const thumbs = line.role && line.role !== "arranger"
+      ? `<span class="lrate${r ? " on" : ""}">` +
+        `<button data-role="${esc(line.role)}" data-rating="1" class="${r > 0 ? "on" : ""}" title="I like the ${esc(line.role)}">👍</button>` +
+        `<button data-role="${esc(line.role)}" data-rating="-1" class="${r < 0 ? "on" : ""}" title="I don't like the ${esc(line.role)}">👎</button></span>`
+      : "";
     return `<div class="${cls}" data-ch="${line.channel}"><span class="no">${line.channel}</span>` +
-           `<span class="src">${line.muted ? "-- " : ""}${highlight(line.text)}</span></div>`;
+           `<span class="src">${line.muted ? "-- " : ""}${highlight(line.text)}</span>${thumbs}</div>`;
   }).join("");
   $("code").innerHTML = html || `<div class="line"><span class="no"></span><span class="src" style="color:var(--muted)">-- an empty room. the first line is on its way…</span></div>`;
   $("comment").textContent = ui.comment ? `-- ${ui.comment}` : "";
@@ -190,7 +204,8 @@ function card(ev, old, fresh) {
   const kind = ev.agent;
   const colour = { director: "var(--director)", performer: "var(--performer)", judge: "var(--judge)",
                    narrator: "var(--narrator)", arc: "var(--arc)", track: "var(--accent)",
-                   request: "var(--director)", arranger: "var(--arc)", rating: "var(--narrator)" }[kind] || "var(--accent)";
+                   request: "var(--director)", arranger: "var(--arc)", rating: "var(--narrator)",
+                   cue: "var(--director)", surprise: "var(--accent2)" }[kind] || "var(--accent)";
   let meta = "", body = "";
   if (kind === "performer") {
     const src = ev.source || "";
@@ -223,10 +238,16 @@ function card(ev, old, fresh) {
     meta = `<span class="badge ${src.startsWith("LLM") ? "ai" : "random"}">${src.startsWith("LLM") ? "AI review" : "built-in"}</span>`;
     body = `<div class="asked">${esc(ev.text)}</div>` + `<div class="move">${esc(ev.edit)}</div>` +
            (ev.review ? `<div class="why">${esc(ev.review)}</div>` : "");
+  } else if (kind === "surprise") {
+    body = `<div class="why"><b>${esc(ev.label)}</b></div><div class="note">${esc(ev.about)}</div>`;
+  } else if (kind === "cue") {
+    body = `<div class="asked">${esc(ev.text)}</div>` + `<div class="move">${esc(ev.edit)}</div>` +
+           (ev.review ? `<div class="why">${esc(ev.review)}</div>` : "");
   } else if (kind === "arranger") {
     body = `<div class="why">${esc(ev.text)}</div>`;
   } else if (kind === "rating") {
-    body = `<div class="why">${ev.rating > 0 ? "👍 the host likes this" : "👎 the host doesn't like this"}</div>` +
+    const what = ev.role ? `the ${esc(ev.role)}` : "this";
+    body = `<div class="why">${ev.rating > 0 ? `👍 the host likes ${what}` : `👎 the host doesn't like ${what}`}</div>` +
            (ev.edit ? `<div class="move">${esc(ev.edit)}</div>` : "");
   } else if (kind === "track") {
     body = `<div class="why"><b>${esc(ev.title)}</b> · ${esc(ev.style)} · ${esc(ev.key)} · ${Math.round(ev.bpm || 0)} bpm</div>` +
@@ -278,6 +299,13 @@ function renderFooter() {
   $("stats").innerHTML = chips.join("");
 }
 
+// The channel's name (YS_CHANNEL_NAME), wherever the page shows it.
+function renderChannel() {
+  if (!ui.channel) return;
+  document.querySelectorAll(".channel-name").forEach((el) => { if (el.textContent !== ui.channel) el.textContent = ui.channel; });
+  document.title = `${ui.channel} · live`;
+}
+
 async function poll() {
   try {
     const r = await fetch(`ui.json?t=${Date.now()}`, { cache: "no-store" });
@@ -286,7 +314,7 @@ async function poll() {
       const changed = !ui || next.updated !== ui.updated;
       ui = next;
       if (params.get("style")) ui.track = Object.assign({}, ui.track || {}, { style: params.get("style") });
-      if (changed) { renderTop(); renderCode(); renderFooter(); renderPoster(); }
+      if (changed) { renderTop(); renderCode(); renderFooter(); renderPoster(); renderChannel(); }
       renderFeed();      // also refreshes "time ago" and thinking timers
     }
   } catch (e) { /* engine not up yet: keep the last frame */ }
@@ -487,6 +515,25 @@ document.querySelectorAll("#ask .rate").forEach((b) => b.addEventListener("click
   }
   setTimeout(() => { note.textContent = ""; }, 6000);
 }));
+
+// 👍 / 👎 on one code line: POST /rate with its role. The code is redrawn
+// twice a second, so one listener on the panel catches every line's buttons.
+$("code").addEventListener("click", async (e) => {
+  const b = e.target.closest(".lrate button");
+  if (!b) return;
+  const role = b.dataset.role, rating = Number(b.dataset.rating), note = $("ask-note");
+  try {
+    const r = await fetch("/rate", { method: "POST", headers: { "Content-Type": "application/json" },
+                                     body: JSON.stringify({ rating, role }) });
+    if (r.ok) lineRatings[role] = rating;
+    note.textContent = r.ok ? `${rating > 0 ? "👍" : "👎"} the ${role}: noted, the performer hears it`
+                            : "couldn't send it";
+  } catch (err) {
+    note.textContent = "couldn't reach the page server";
+  }
+  renderCode();
+  setTimeout(() => { note.textContent = ""; }, 6000);
+});
 
 // The host's request box: POST /request, picked up at the Performer's next edit.
 $("ask").addEventListener("submit", async (e) => {

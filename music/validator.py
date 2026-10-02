@@ -11,6 +11,7 @@ If GHCi or the Tidal library isn't installed, `available` is False and
 
 from __future__ import annotations
 
+import re
 import subprocess
 import threading
 from queue import Empty, Queue
@@ -24,6 +25,7 @@ class TidalTypeChecker:
         self._out: Queue[str] = Queue()
         self._lock = threading.Lock()
         self._counter = 0
+        self._events_ready = False
         self._start()
 
     def _start(self) -> None:
@@ -78,6 +80,38 @@ class TidalTypeChecker:
         if "error" in output.lower():
             return output.strip()[-800:]
         return ""
+
+    _EVENT_RE = re.compile(r"^EV (\S+) (\S+) (.*?) \| (.*)$")
+    _NOTE_RE = re.compile(r"Just (-?[\d.]+)n")
+    _SOUND_RE = re.compile(r'Just "([^"]*)"')
+
+    def events(self, expr: str, start: float, end: float) -> list[list] | None:
+        """The notes a pattern plays from cycle `start` to `end`, from Tidal
+        itself: [[onset, offset, note or None, sound], ...] (onsets in the
+        span only). None if GHCi isn't there or the pattern doesn't evaluate."""
+        if not self.available:
+            return None
+        if not self._events_ready:
+            self._run(["import qualified Data.Map as YsMap"])
+            self._events_ready = True
+        show = ('(\\e -> putStrLn $ "EV " ++ show (fromRational (start $ wholeOrPart e) :: Double) ++ " " '
+                '++ show (fromRational (stop $ wholeOrPart e) :: Double) ++ " " ++ show (YsMap.lookup "n" (value e)) '
+                '++ " | " ++ show (YsMap.lookup "s" (value e)))')
+        query = (f"mapM_ {show} $ filter eventHasOnset $ queryArc (({expr}) :: ControlPattern) "
+                 f"(Arc {start!r} {end!r})")
+        output = self._run([query], timeout=10)
+        if output is None or "error" in output.lower():
+            return None
+        out = []
+        for line in output.splitlines():
+            m = self._EVENT_RE.match(line.strip())
+            if not m:
+                continue
+            note = self._NOTE_RE.search(m.group(3))
+            sound = self._SOUND_RE.search(m.group(4))
+            out.append([round(float(m.group(1)), 4), round(float(m.group(2)), 4),
+                        float(note.group(1)) if note else None, sound.group(1) if sound else ""])
+        return out
 
     def close(self) -> None:
         if self._proc and self._proc.poll() is None:

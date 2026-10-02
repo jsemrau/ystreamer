@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InfiniTrance · live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="deck.css">
+</head>
+<body>
+<!-- The stream page after Switch Angel's screen: the live code fills the
+     left, each pattern with its piano roll and every knob as a slider; on
+     the right the channel's name, a visual that plays with the music, and
+     the agent at work where her camera is. -->
+<div id="stage">
+  <section id="editor" class="frame">
+    <div id="code"></div>
+  </section>
+
+  <aside id="side">
+    <div id="logo" class="channel-name" data-text="InfiniTrance">InfiniTrance</div>
+    <div id="visbox" class="frame">
+      <canvas id="vis" width="560" height="410"></canvas>
+      <!-- The dancer (stream/make_dancer.py): one clip per part of the arc. -->
+      <div id="dancer">
+        <video data-clip="wave" src="dancer/wave.webm" muted loop playsinline preload="auto"></video>
+        <video data-clip="dance" src="dancer/dance.webm" muted loop playsinline preload="auto"></video>
+        <video data-clip="groove" src="dancer/groove.webm" muted loop playsinline preload="auto"></video>
+      </div>
+      <div id="now"></div>
+      <div id="arc"></div>
+    </div>
+    <div id="agentbox" class="frame">
+      <div id="agent-head"></div>
+      <div id="agent"></div>
+    </div>
+  </aside>
+
+  <canvas id="fly" width="1920" height="1080"></canvas>
+  <div id="moment"><span></span></div>
+  <div id="flash"></div>
+</div>
+
+<form id="ask" autocomplete="off">
+  <input id="ask-text" maxlength="200" placeholder="Ask the performer… e.g. more bass">
+  <button type="submit">Send</button>
+  <button type="button" class="rate" data-rating="1" title="I like what's playing">👍</button>
+  <button type="button" class="rate" data-rating="-1" title="I don't like what's playing">👎</button>
+  <span id="ask-note"></span>
+</form>
+<script src="deck.js"></script>
+</body>
+</html>

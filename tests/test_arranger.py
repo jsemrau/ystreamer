@@ -14,7 +14,7 @@ from music.sessionlog import SessionLog
 from test_sessionlog import _SimClock, _SyncPool
 
 
-def _run(tmp_path, style, seed=4, ratings=None, on_edit=None):
+def _run(tmp_path, style, seed=2, ratings=None, on_edit=None):
     log = SessionLog(directory=str(tmp_path / "s"), session_id="t")
     clock, sent = _SimClock(), []
     performer = Performer(random.Random(seed), style=style, log=lambda *_: None)
@@ -108,3 +108,31 @@ def test_the_page_server_takes_ratings(runtime_dir):
         assert queue.take()["rating"] == 1
     finally:
         server.shutdown()
+
+
+def test_a_thumb_on_one_line_is_kept_with_that_line(runtime_dir):
+    queue = RatingQueue()
+    noted = []
+
+    def on_edit(performer):
+        if performer.state.phase == "groove" and not noted:      # the bass plays by the groove
+            noted.append(host_requests.submit_rating(-1, "bass"))
+
+    records, _ = _run(runtime_dir, "trance", ratings=queue, on_edit=on_edit)
+    rated = [r for r in records if r["type"] == "rating"]
+    assert rated and rated[0]["role"] == "bass" and rated[0]["line"].startswith("d2 $")
+    assert list(export_edits.ratings(str(runtime_dir / "s")))[0]["role"] == "bass"
+    assert host_requests.submit_rating(1, "not-a-part") is None
+
+
+def test_a_disliked_line_is_the_built_in_performers_next_change():
+    from test_livecode import _program_with
+
+    performer = Performer(random.Random(0), style="trance", log=lambda *_: None)
+    program = _program_with("trance", "trance_beat", "rolling_bass", "piano_stabs", "acid")
+    performer.note_rating(-1, "", role="acid", line=program.statement("acid"))
+    assert "👎 disliked the acid line" in performer.recent[-1]
+    edit = performer._tweak(program)
+    assert edit.role == "acid" and "acid" not in performer.line_ratings
+    performer.note_rating(1, "", role="bass", line=program.statement("bass"))
+    assert all(performer._tweak(program).role != "bass" for _ in range(10))     # 👍: left alone

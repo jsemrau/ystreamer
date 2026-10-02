@@ -58,7 +58,7 @@ def main() -> int:
     mode = "logo" if args.logo else "banner" if args.banner else "poster"
     w, h = {"logo": (800, 800), "banner": (2048, 1152), "poster": (1280, 720)}[mode]
     args.out = args.out or os.path.join(config.RUNTIME_DIR, {"poster": "thumbnail"}.get(mode, mode) + ".png")
-    url = f"http://127.0.0.1:{args.port}/?{mode}=1" + (f"&style={args.style}" if args.style else "")
+    url = f"http://127.0.0.1:{args.port}/index.html?{mode}=1" + (f"&style={args.style}" if args.style else "")
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
         # Headless Chrome's viewport is shorter than its window, so render in a

@@ -17,9 +17,12 @@ import time
 from collections import deque
 from typing import Callable
 
+import config
+
 from . import runtime
 from .engine import Clock
-from .livecode import ROLE_CHANNELS, Edit, EditError, Program, apply_edit, changed_statements, complexity
+from .livecode import (FX_RANGES, PF_RANGES, ROLE_CHANNELS, Edit, EditError, Program, apply_edit,
+                       changed_statements, complexity)
 from .mix import FADE_OUT_BARS
 from .performer import Performer, SetState
 from .plan import arc_summary, sounds_summary
@@ -53,10 +56,18 @@ class LiveEngine:
         self._recent_edits: deque = deque(maxlen=32)      # (time, describe, source)
         self.groove_complexity: list[float] = []   # complexity after each groove edit, per track
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="performer")
+        # The piano rolls on the stream page: what each line plays over the
+        # next ROLL_CYCLES bars, asked of Tidal itself (type_checker.events),
+        # in the background so the music never waits on it.
+        self._roll_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="rolls")
+        self._rolls_until = 0.0
+        self._rolls_pending = None
         # Narration lines are written in the background so the music never waits.
         self._voice_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="narrator")
         self._last_reason = ""
         performer.on_arc = self._on_arc
+        performer.on_surprise = lambda name: self.program and self._record(
+            "surprise", **self._track_info(self.program), surprise=name, phase=performer.state.phase)
         performer.bar_now = self.clock.cycle   # the arc moves on by bars
 
     # ------------------------------------------------------------ session log
@@ -105,6 +116,37 @@ class LiveEngine:
                      peak_complexity=max(values) if values else None,
                      code=[program.statement(r) for r in program.lines], program=program.to_dict())
 
+    def _surprise_turn(self, program: Program) -> Program:
+        """The surprises that happen as the arc turns: the last peak a whole
+        step up (key_lift), the breakdown down to one line (solo_breakdown)."""
+        perf, phase = self.performer, self.performer.state.phase
+        if phase == self._arranged_phase:
+            return program
+        new = None
+        if phase == "groove2" and perf.surprise_due("key_lift"):
+            last = max(i for i, (p, _) in enumerate(perf.arc_plan()) if p == "groove2")
+            if perf.state.step == last:
+                from .theory import Key, transpose_key
+
+                new = copy.deepcopy(program)
+                new.track.key = transpose_key(Key.parse(new.track.key), 2).name
+                fired = ("key_lift", f"{program.track.key} -> {new.track.key}")
+        elif phase == "breakdown" and perf.surprise_due("solo_breakdown"):
+            hook = (program.track.hook or {}).get("role")
+            solo = next((r for r in ("acid", hook) if r and r in program.active_roles()), None)
+            if solo:
+                new = copy.deepcopy(program)
+                for role in new.active_roles():
+                    if role != solo:
+                        new.lines[role].muted = True
+                        perf.state.muted_for_breakdown.append(role)
+                fired = ("solo_breakdown", f"the {solo} alone")
+        if new is None or not self._send([new.statement(r) for r in new.lines]):
+            return program
+        perf.surprise_fired(*fired)
+        self._publish(new, None, "")
+        return new
+
     def _fill_for_the_drop(self, program: Program) -> tuple[Program, list[str]]:
         """When the groove lands (club styles), the stack lands with it:
         parts still missing (the Director's sketched parts first) come in and
@@ -120,19 +162,38 @@ class LiveEngine:
         new = copy.deepcopy(program)
         limit = self.performer.settings["max_lines"] - (2 if phase == "groove" else 0)
         landing = []
+        perf = self.performer
+        # Surprises at the drop: what is held back, and the cues that bring it in.
+        held: set[str] = set()
+        if phase == "groove2" and perf.surprise_due("kickless_drop") and "beat" in new.lines:
+            held = {"beat"}
+        elif phase == "groove2" and perf.surprise_due("stripped_peak"):
+            keep = {"beat", "bass", "perc", (new.track.hook or {}).get("role")}
+            held = {r for r in new.lines if r not in keep}
+        for role in held:
+            if role in new.lines and not new.lines[role].muted:
+                new.lines[role].muted = True
+                landing.append(role)
         for role, line in new.lines.items():
-            if line.muted and len(new.active_roles()) < limit:
+            if (line.muted and role not in held and len(new.active_roles()) < limit
+                    and not self.performer.melodic_problem(new, role)):
                 line.muted = False
                 landing.append(role)
         sketched = set(new.track.parts) | {(new.track.hook or {}).get("role")}
         missing = sorted(self.performer._missing_roles(new), key=lambda r: r not in sketched)
         for role in missing:
-            if len(new.active_roles()) >= limit:
+            if len(new.active_roles()) >= limit or held:
                 break
             new.lines[role] = new.track.make(self.performer._block_for(role), self.performer.rng)
             landing.append(role)
         if not landing or not self._type_ok([new.statement(r) for r in landing]):
             return program, []
+        if held:
+            name = "kickless_drop" if held == {"beat"} else "stripped_peak"
+            # They come back one move at a time, before anything else.
+            back = [{"do": "bring back", "part": r, "say": f"Bring the {r} back"} for r in sorted(held)]
+            perf.state.cue_queue[:0] = back
+            perf.surprise_fired(name, f"(held back: {', '.join(sorted(held))})")
         self.log(f"🎚 The drop brings in: {', '.join(landing)}")
         return new, landing
 
@@ -157,6 +218,9 @@ class LiveEngine:
                 self._send(landed)
             return
         breath = [r for r in arranger.BREATH_ROLES if r in program.active_roles()] if plan["breath"] else []
+        if breath and self.performer.surprise_due("silent_bar"):
+            breath = list(program.active_roles())          # a whole bar of silence, every line
+            self.performer.surprise_fired("silent_bar")
         if breath:
             self._send([arranger.silence(ROLE_CHANNELS[r]) for r in breath] +
                        [s for s in plan["statements"] if s.startswith(f"d{arranger.RISER} ")] +
@@ -220,17 +284,25 @@ class LiveEngine:
             if rating is None:
                 return
             program, t = self.program, rating["t"]
-            before = [e for e in self._recent_edits if e[0] <= t]
+            role = rating.get("role")
+            if role and role not in program.lines:
+                role = None                       # the line went before the thumb arrived
+            # The last change before the thumb: to that line, when one line is rated.
+            tag = f"d{ROLE_CHANNELS[role]}" if role else ""
+            before = [e for e in self._recent_edits if e[0] <= t and (not role or tag in e[1] or f"({role})" in e[1])]
             last = before[-1] if before else None
             edit = last[1] if last else ""
             thumb = "👍" if rating["rating"] > 0 else "👎"
-            self.log(f"{thumb} The host {'likes' if rating['rating'] > 0 else 'dislikes'} this"
+            what = f"the {role} ({tag})" if role else "this"
+            self.log(f"{thumb} The host {'likes' if rating['rating'] > 0 else 'dislikes'} {what}"
                      + (f" (the last change: {edit})" if edit else ""))
-            runtime.append_thought(f"{thumb} host rating" + (f" after: {edit}" if edit else ""))
-            runtime.ui_event("rating", rating=rating["rating"], edit=edit)
-            self.performer.note_rating(rating["rating"], edit)
+            runtime.append_thought(f"{thumb} host rating" + (f" on the {role}" if role else "")
+                                   + (f" after: {edit}" if edit else ""))
+            runtime.ui_event("rating", rating=rating["rating"], edit=edit, role=role)
+            line = program.statement(role) if role else ""
+            self.performer.note_rating(rating["rating"], edit, role=role, line=line)
             self._record("rating", **self._track_info(program), rating=rating["rating"], rated_at=t,
-                         phase=self.performer.state.phase, last_edit=edit,
+                         phase=self.performer.state.phase, last_edit=edit, role=role, line=line or None,
                          last_edit_source=last[2] if last else None,
                          seconds_since_edit=round(t - last[0], 1) if last else None,
                          code=[program.statement(r) for r in program.lines])
@@ -245,6 +317,8 @@ class LiveEngine:
             if time.monotonic() - last_beat > 5:
                 runtime.heartbeat()
                 last_beat = time.monotonic()
+                if self._rolls_until and self.clock.cycle() > self._rolls_until - 3:
+                    self._refresh_rolls()
             self._sleep(min(remaining, 1.0))
 
     def _wait_for(self, future) -> None:
@@ -300,9 +374,37 @@ class LiveEngine:
             lines.append(f"-- {comment}")
         runtime.write_overlay(now_playing, lines, width=120, max_lines=26)
         self._publish_ui(program, highlight, comment)
+        self._refresh_rolls(program)
         runtime.save_state({"mode": "live", "program": program.to_dict(), "performer": st.to_dict(),
                             "phase_elapsed": self.performer.phase_bars(),
                             "style": self.performer.style, "saved_at": time.time()})
+
+    ROLL_CYCLES = 8
+
+    def _refresh_rolls(self, program: Program | None = None) -> None:
+        """Ask Tidal (in the background) what every playing line does over the
+        next ROLL_CYCLES bars, for the page's piano rolls."""
+        checker = self.type_checker
+        if checker is None or not getattr(checker, "available", False) or not hasattr(checker, "events"):
+            return
+        program = copy.deepcopy(program or self.program)
+        if program is None:
+            return
+        if self._rolls_pending is not None and not self._rolls_pending.done():
+            return
+        start = float(math.floor(self.clock.cycle()))
+        end = start + self.ROLL_CYCLES
+        self._rolls_until = end
+
+        def work():
+            lines = {}
+            for role in program.active_roles():
+                events = checker.events(program.expression(role), start, end)
+                if events:
+                    lines[str(ROLE_CHANNELS[role])] = sorted(events)
+            runtime.ui_update(rolls={"from": start, "to": end, "lines": lines})
+
+        self._rolls_pending = self._roll_pool.submit(work)
 
     def _publish_ui(self, program: Program, highlight: str | None, comment: str) -> None:
         """The snapshot the stream page draws (stream/ui)."""
@@ -327,15 +429,15 @@ class LiveEngine:
         if perf.judge:
             models["judge"] = perf.judge
         runtime.ui_update(
-            channel="sleepless composer",
+            channel=config.CHANNEL_NAME,
             track={"title": track.title, "style": track.style, "key": track.key, "bpm": track.bpm,
-                   "mood": perf.track_mood},
+                   "mood": perf.track_mood, "subgenre": track.subgenre},
             phase=perf.state.phase, plan=[{"phase": p, "bars": b} for p, b in perf.arc_plan()],
             step=perf.state.step, phase_start=perf.state.phase_start,
             clock={"ref_time": self.clock.ref_time, "ref_cycle": self.clock.ref_cycle, "cps": self.clock.cps,
                    "now": self.clock._now()},
             tempo_line=program.tempo_statement(), code=code, comment=comment,
-            models=models,
+            models=models, ranges={**FX_RANGES, **PF_RANGES},      # the page's inline sliders
             stats={"edits": sum(v for k, v in stats.items() if k not in ("judge_llm", "judge_builtin")),
                    "llm": stats.get("llm", 0), "judged": judged, "judge_llm": stats.get("judge_llm", 0),
                    "judge_mass": (sum(perf.judge_mass) / len(perf.judge_mass)) if perf.judge_mass else None},
@@ -534,12 +636,14 @@ class LiveEngine:
             # pace, the same one the performer's deadline uses.
             self.performer.advance_phase(program)
             program = self.program = self._follow_harmony(program)
+            program = self.program = self._surprise_turn(program)
             program, landing = self._fill_for_the_drop(program)
             self.program = program
             self._arrange(program, landing)
             next_cycle += self.performer.edit_bars_now()
         self.performer.report_stats()
         self._pool.shutdown(wait=False, cancel_futures=True)
+        self._roll_pool.shutdown(wait=False, cancel_futures=True)
         self._voice_pool.shutdown(wait=False, cancel_futures=True)
 
 

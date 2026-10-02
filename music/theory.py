@@ -11,6 +11,8 @@ doesn't depend on Tidal's scale-name table.
 from __future__ import annotations
 
 import itertools
+import json
+import os
 from dataclasses import dataclass
 
 NOTE_NAMES = ["c", "cs", "d", "ef", "e", "f", "fs", "g", "af", "a", "bf", "b"]
@@ -169,11 +171,12 @@ class Progression:
     modes: tuple[str, ...]
     mood: str
     energy: tuple[float, float]  # energy range it suits
+    weight: int = 1              # how common it is (NRG-CP file count), for weighted picks
 
 
 # Every progression has exactly 4 chords, so all layers share one period.
 # None of them lands on a diminished triad in its listed modes (checked by tests).
-PROGRESSIONS: list[Progression] = [
+_CURATED: list[Progression] = [
     # minor
     Progression("i-VI-III-VII", (0, 5, 2, 6), ("minor",), "moody, dreamy", (0.0, 1.0)),
     Progression("i-iv-VI-v", (0, 3, 5, 4), ("minor",), "melancholic, lofi", (0.0, 0.8)),
@@ -219,7 +222,50 @@ PROGRESSIONS: list[Progression] = [
     Progression("i-III-II-i", (0, 2, 1, 0), ("phrygian",), "dark, rolling", (0.3, 1.0)),
 ]
 
-PROGRESSIONS_BY_NAME = {p.name: p for p in PROGRESSIONS}
+# The library: the progressions of the NRG-CP dataset (WaivOps / Patchbanks,
+# CC BY 4.0, https://doi.org/10.5281/zenodo.15304989), mined by
+# eval/mine_nrg.py into music/data/nrg_progressions.json: every 4-chord
+# cycle found in at least NRG_MIN_FILES of its 30,943 EDM / trance files,
+# weighted by how often. The curated list above lends its moods where a name
+# matches, and stands in if the data file is missing.
+NRG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "nrg_progressions.json")
+NRG_MIN_FILES = 8
+NRG_PER_MODE = 30
+
+
+def _library() -> list[Progression]:
+    try:
+        with open(NRG_PATH, encoding="utf-8") as f:
+            mined = json.load(f)["progressions"]
+    except (OSError, ValueError, KeyError):
+        return list(_CURATED)
+    curated = {p.name: p for p in _CURATED}
+    merged: dict[str, Progression] = {}
+    for mode, items in mined.items():
+        if mode not in MODES:
+            continue
+        for name, count in items[:NRG_PER_MODE]:
+            if count < NRG_MIN_FILES or len(set(name.split("-"))) < 2:
+                continue
+            try:
+                p = parse_progression(name, mode)
+            except ValueError:
+                continue
+            known = curated.get(name)
+            if name in merged:          # the same numerals fit another mode too
+                old = merged[name]
+                merged[name] = Progression(name, old.degrees, old.modes + (mode,), old.mood, old.energy,
+                                           old.weight + count)
+            else:
+                merged[name] = Progression(name, p.degrees, (mode,), known.mood if known else "",
+                                           known.energy if known else (0.0, 1.0), count)
+    if not all(any(m in p.modes for p in merged.values()) for m in MODES):
+        return list(_CURATED)
+    return sorted(merged.values(), key=lambda p: -p.weight)
+
+
+PROGRESSIONS: list[Progression] = []          # filled below, once parse_progression exists
+PROGRESSIONS_BY_NAME: dict[str, Progression] = {}
 
 MAX_CUSTOM_CHORDS = 4   # a written progression has the library's length: one period for every layer
 
@@ -249,6 +295,8 @@ def parse_progression(name: str, mode: str, fix_case: bool = False) -> Progressi
             raise ValueError(f"{token!r} is not in {key.mode}; that chord is {expected}")
         tokens[len(degrees)] = expected
         degrees.append(degree)
+    if len(set(degrees)) < 2:
+        raise ValueError(f"{name!r} is one chord the whole time: use at least two different chords")
     return Progression("-".join(tokens), tuple(degrees), (key.mode,), "", (0.0, 1.0))
 
 
@@ -274,6 +322,10 @@ def progression_named(name: str, mode: str) -> Progression | None:
         return parse_progression(name, mode)
     except ValueError:
         return None
+
+
+PROGRESSIONS.extend(_library())
+PROGRESSIONS_BY_NAME.update({p.name: p for p in PROGRESSIONS})
 
 
 def progressions_for(mode: str, energy: float | None = None) -> list[Progression]:

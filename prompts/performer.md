@@ -1,4 +1,5 @@
 Track: {track}
+{cache_break}
 
 ## Phase: {phase} ({edits_in_phase} edits so far, about {bars_left} of its planned {phase_bars} bars left)
 

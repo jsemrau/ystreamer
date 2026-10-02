@@ -18,6 +18,7 @@ from collections import deque
 import config
 
 from . import feedback, llm, runtime
+from .llm import CACHE_BREAK
 from .narrator import clean_narration
 from . import presets as P
 from .melody import STEPS_PER_CYCLE
@@ -77,6 +78,8 @@ class Director:
         self.recent_progressions: deque[str] = deque(maxlen=4)
         self.recent_keys: deque[str] = deque(maxlen=4)
         self.recent_hooks: deque[str] = deque(maxlen=4)
+        self.recent_surprises: deque[str] = deque(maxlen=4)
+        self._since_surprise = config.SURPRISE_EVERY      # the first track may have one
         self.consecutive_failures = 0
         # After this many failures in a row, stop asking the LLM for a while.
         self.failure_backoff = 3
@@ -92,12 +95,12 @@ class Director:
             return False
         return True
 
-    def _ask(self, kind: str, system: str, user: str) -> dict | None:
+    def _ask(self, kind: str, system: str, user: str, cache_ttl: str = "") -> dict | None:
         started = time.monotonic()
         try:
             agent, asks = _AGENTS.get(kind, ("Director", kind))
             reply = llm.converse(agent, self.model_id, system, user, log=self.log, asks=asks,
-                                 show_full=self.show_llm)
+                                 show_full=self.show_llm, cache_ttl=cache_ttl)
             data = llm.extract_json(reply)
             self.consecutive_failures = 0
             data["_seconds"] = time.monotonic() - started
@@ -148,18 +151,60 @@ class Director:
 
     PIECE_SYSTEM = "You are a concise music director. Reply with JSON only."
 
+    def surprise_due(self) -> bool:
+        return self._since_surprise >= config.SURPRISE_EVERY - 1
+
+    def _surprise_line(self) -> str:
+        from .surprises import SURPRISES
+
+        if not self.surprise_due():
+            return ("No surprise in this track (the stream keeps them rare): leave `surprise` out and let the "
+                    "music flow.")
+        recent = ", ".join(self.recent_surprises) or "none"
+        menu = "\n".join(f"  - `{n}`: {about} ({when})" for n, (_, about, when) in SURPRISES.items())
+        return ("This track may have ONE surprise, a rule-break the listener notices, chosen from the menu "
+                f"below to suit the track (or \"none\" if none fits). Played recently, don't repeat: {recent}.\n"
+                + menu)
+
+    def choose_surprise(self, piece: Piece, data: dict | None, notes: list[str]) -> None:
+        """Keep the Director's surprise if it's allowed; when one is due and the
+        Director didn't decide (no model), the built-in planner picks one."""
+        from .plan import live_plan
+        from .surprises import SURPRISES, problem
+
+        plan = live_plan(piece)
+        asked = str((data or {}).get("surprise") or "").strip().lower().replace(" ", "_").replace("-", "_")
+        piece.surprise = ""
+        if asked and asked != "none":
+            why = ("not this track (they're kept rare)" if not self.surprise_due()
+                   else "played recently" if asked in self.recent_surprises
+                   else problem(asked, piece.style, plan, piece.hook))
+            if why:
+                notes.append(f"surprise {asked!r} dropped: {why}")
+            else:
+                piece.surprise = asked
+        elif not asked and data is None and self.surprise_due():
+            options = [n for n in SURPRISES if n not in self.recent_surprises
+                       and not problem(n, piece.style, plan, piece.hook)]
+            piece.surprise = self.rng.choice(options) if options else ""
+        if piece.surprise:
+            self.recent_surprises.append(piece.surprise)
+            self._since_surprise = 0
+        else:
+            self._since_surprise += 1
+
     def piece_prompt(self, previous: Piece | None, fallback: Piece, avoid: dict) -> str:
-        """The prompt asking for the next track's idea (also used to build
+        """The prompt asking for the next track and its cues (also used to build
         training data, eval/distill_director.py)."""
         style = self.style if self.style in STYLES else None
         cfg = STYLES[style] if style else None
         return _load_prompt("director_piece.md").format(
-            theme=self.theme,
+            theme=self.theme, target_minutes=round(self.target_minutes),
             style_line=(f"Style: {style} ({cfg['bpm'][0]}-{cfg['bpm'][1]} BPM, modes: {', '.join(cfg['modes'])})."
                         if cfg else "Choose `style` from `styles` and include it."),
             options=json.dumps(director_vocabulary(style)),
             previous=json.dumps({k: previous.to_dict()[k] for k in
-                                 ("title", "style", "key", "bpm", "progression", "mood", "hook", "idea")})
+                                 ("title", "style", "subgenre", "key", "bpm", "progression", "mood", "hook")})
             if previous else "none (this is the first track)",
             previous_shape=" → ".join(f"{s.name} {s.bars}" for s in previous.sections)
             if previous and previous.sections else "none",
@@ -168,7 +213,10 @@ class Director:
             recent_progressions=", ".join(self.recent_progressions) or "none",
             avoid=", ".join(sorted(avoid["progressions"] | avoid["presets"])) or "nothing",
             suggested_key=self._suggest_key(style or fallback.style, previous).name,
+            surprise_line=self._surprise_line(),
             spark=self.rng.choice(SPARKS),
+            # Above it the brief, the same for every track: Claude caches it.
+            cache_break=CACHE_BREAK,
         )
 
     def review_piece(self, data: dict, fallback: Piece, avoid: dict) -> tuple[Piece, list[str]]:
@@ -225,15 +273,20 @@ class Director:
                               disliked=avoid["progressions"],
                               target_minutes=self.target_minutes)
         piece = fallback
+        data = None
         if self._llm_available():
             prompt = self.piece_prompt(previous, fallback, avoid)
-            data = self._ask("piece", self.PIECE_SYSTEM, prompt)
+            # A track is ~5 minutes: the 5-minute cache would just miss it.
+            data = self._ask("piece", self.PIECE_SYSTEM, prompt, cache_ttl="1h")
             if data:
                 piece, notes = self.review_piece(data, fallback, avoid)
+                self.choose_surprise(piece, data, notes)
                 if notes:
                     self.log(f"[Director] corrected LLM piece plan: {'; '.join(notes)}")
                 self._think("Next piece", f"'{piece.title}', {piece.style}, {piece.key}, {piece.bpm:.0f} BPM, "
                                           f"{piece.progression}, {piece.mood}", data)
+        if not data:
+            self.choose_surprise(piece, None, [])
         self.recent_progressions.append(piece.progression)
         self.recent_keys.append(piece.key)
         if piece.hook:

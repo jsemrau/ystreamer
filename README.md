@@ -234,6 +234,93 @@ most 3 wrappers per line and 4-6 lines at once, depending on the style.
 Only the changed line is re-evaluated, just like a live coder pressing
 Ctrl-Enter on one line.
 
+The Director conducts: with each track it writes precise instructions for
+every part of the arc, naming the part, the block, the sound, the pattern
+or the knob value from the style's own lists ("Start the chords: piano
+stabs, DX7 / Rhodes electric piano", "The acid's acid from 0.3 to 0.9 over
+16 bars", "The chords to the DX7-style bell chords", "Drop the kick"). Every
+name is checked against the style (a sound the named block can't play moves
+to a block that can), and the Performer plays a precise cue exactly as
+given, one per move; what a cue leaves open ("new lead pattern: busier,
+16ths") it writes itself. The page shows the instruction, the code and the
+Performer's answer. Once a part's instructions are done, the Performer
+plays on by itself until the next part.
+
+The Director also acts as art director with a **surprise menu**
+(`music/surprises.py`): rule-breaks built only from safe moves, at most one
+every `YS_SURPRISE_EVERY` tracks (default 2), never one of the last four, and
+only what the track can take: a fake drop (8 bars of peak, then back into a
+breakdown), a kickless drop, a bar of silence before the drop, the last peak
+a whole step up, a breakdown down to one line, a stripped peak that rebuilds
+move by move, a tempo lift through the build-up, a three-note hook. Code
+places each at its moment; the page shows it (FAKE DROP, KEY CHANGE, ...)
+and throws the live code at the viewer: tokens of the program, a few math
+signs and the surprise's name fly out of the screen in 3D, glowing, and
+vanish before the glass (`?moment=KEY%20CHANGE` previews it). The session
+log records each surprise next to your ratings.
+
+Against repetition, in every style:
+
+- A track is about 5 minutes (`--piece-minutes`), and its shape (where the
+  peaks and breakdowns fall) differs from the previous track's.
+- At most two knob turns in a row (filter, reverb, acid knob, drive): the
+  next move changes the music itself, notes or rhythm, a line in or out, or
+  a variation. The model is told so; the built-in performer and the judge's
+  options follow it.
+- Every part a style has can come in, and the Director's sketched parts come
+  in before decoration.
+- A progression has at least two different chords, and the chords change
+  every one or two bars in every style.
+
+### Trance harmony, after Switch Angel
+
+The club styles' harmony follows Switch Angel's
+[strudel-scripts](https://github.com/switchangel/strudel-scripts) and her
+live trance demo, translated to Tidal:
+
+- **Voicings** from her `chordshapes`: each track stacks its chords one way
+  (triad, add octave, open triad, spread triad, epic stack, anthem), no added
+  sevenths (`livecode.TRANCE_VOICINGS`; the Director may choose).
+- **Arps** after `trancearp`: 16ths running up, down, up-and-down or around
+  the root through the voicing's own notes, so they only play chord tones.
+- **Chord gates** after `trancegate`: seeded random 16-step gates, each hit
+  held to the next and clipped to 70% (`blocks.TRANCE_GATES`).
+- **Echoes** after `dly`: delay feedback stays low (at most 0.5).
+- **Straight drums:** the kick alone on d1, every beat; hats and claps on
+  d8, about 8 dB quieter and above the low end; the clap only on the
+  backbeat (or its fills). Club drum lines are never sped up, shifted,
+  swung or stuttered, only filtered or crushed.
+- **Few melodies:** at most two melodic lines (acid, arp, lead, keys) above
+  the bass and the gated chords; density comes from gates, knobs and rhythm.
+- **Clean variations:** pitched lines get no time shifts, speed-ups or
+  delayed copies (they drag a chord's notes over the next chord); a lead
+  doesn't play backwards (its passing notes would land on the beat); every
+  part stays in its register.
+
+Trance comes in **subgenres** (`blocks.SUBGENRES`), each with its own tempo,
+drum kit (hat and clap patterns), bass rhythm, sounds and voicings:
+progressive (126-132 BPM, offbeat bass, soft hats, e-piano and bells),
+uplifting (136-140, rolling bass, supersaw chords and lead, epic voicings),
+psy (142-146, galloping bass, busy hats, square-wave leads) and acid
+(134-140, the 303 up front, house piano). The Director picks one per track,
+a different one from the last.
+
+The **supersaw** (`ys_hypersaw`): seven band-limited saws with the JP-8000's
+detune curve, filtered, stereo, ducked under the kick (a `detune` knob from
+0.1 to 0.8). Listen before it goes on air: `python -m eval.sound_preview`
+renders four 8-bar demos to `recordings/preview/` (the supersaw on chords,
+as a lead, the old buzzy saw and today's house piano for comparison); then
+`YS_HYPERSAW=1` in `.env` lets uplifting trance use it.
+
+The **progressions** come from [NRG-CP](https://doi.org/10.5281/zenodo.15304989)
+(WaivOps / Patchbanks, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)):
+30,943 eight-bar EDM and trance MIDI files, of which 15,285 are four-chord
+cycles in one of the six modes. `eval/mine_nrg.py` reads them as Roman
+numerals into `music/data/nrg_progressions.json`; the library is the
+progressions found in at least 8 files, weighted by how often (minor:
+`i-VI-III-VII` 446 files, `i-VII-VI-VI` 247, `i-VII-v-VI` 211, ...). Only
+the progressions are used, not the dataset's rhythms or voicings.
+
 With an LLM (`--llm local|claude|jevtypesafe`), the model sees the whole
 program and picks each edit itself (prompt: `prompts/performer.md`), with
 a short reason and sometimes a line of narration. If a reply is unusable,
@@ -398,6 +485,13 @@ the Performer sees it among its recent moves ("the host 👎 disliked what
 played after: ..."), so a model builds on what you like within the track.
 Over time this is the taste data to tune and train on.
 
+Each code line has its own 👍 / 👎 too (on your view only: the captured
+stream, `?capture=1`, doesn't show them). A thumb on a line is kept with that
+line's code and its last change; the Performer reads "the host 👎 disliked
+the acid line (...): change it (or take it out) at your next move", the
+built-in performer changes a 👎 line at its next tweak and leaves 👍 lines
+alone. Line ratings start fresh with each track.
+
 ## Transitions (the arranger)
 
 In club styles the arranger adds what a producer does between sections: a
@@ -485,6 +579,24 @@ intimate late-night radio voice, and shown as a subtitle on the stream:
   the built-in planner only announces titles.
 
 ## Going live on YouTube
+
+### The stream page
+
+The stream shows `stream/ui/deck.html`, after Switch Angel's screen: the live
+code fills the left, every pattern with a piano roll of what it plays (asked
+of Tidal itself, so it is exact; the notes light up as they sound) and every
+knob as a slider (moving ones move). On the right: the channel's name
+(`YS_CHANNEL_NAME`), a particle cloud that plays with the music, and the
+agent at work where her camera is. The arc's turning points get their moment:
+DROP (with a flash and a shake), BREAKDOWN, a new track. The logo glitches on
+every bar. In the visual dances a dancer (her clip follows the arc: she
+waves hello as a track builds, dances through the groove, gives it all at
+the peak, waves goodbye in the outro; each loop lasts a whole number of bars,
+and she jumps at the drop). The clips in `stream/ui/dancer/` are cut out of
+studio footage by `python -m stream.make_dancer <clip> <out.webm>` (the light
+backdrop made transparent, a rim of light added). `?moment=DROP` previews one. `YS_UI_PAGE=index.html` streams the
+earlier look (wave field and the agents' feed), which also renders the
+thumbnail, banner and logo (`stream/thumbnail.py`).
 
 1. In YouTube Studio → **Go live** → **Stream**, copy the stream key into
    `.env` as `YT_STREAM_KEY`. The local model and the judge need

@@ -75,7 +75,8 @@ STYLES = {
     "trance": {
         # After Switch Angel's live-coded trance: 138 BPM, four-on-the-floor,
         # rolling bass, gated supersaw arps, breakdown -> build -> drop.
-        "bpm": (134, 140), "modes": ["minor", "phrygian", "dorian"], "cycles_per_chord": 2,
+        # (126-146 over its subgenres: progressive 126-132 ... psy 142-146, blocks.SUBGENRES)
+        "bpm": (126, 146), "modes": ["minor", "phrygian", "dorian"], "cycles_per_chord": 2,
         # The acid line is the heart of it (Switch Angel's Strudel acid trance):
         # a squelchy 16th saw line, a kick, and everything pumping on the kick.
         "presets": {"pad": "saw_pad", "keys": "piano", "bass": "acid_line", "melody": "saw_lead",
@@ -104,7 +105,7 @@ STYLES["darkwave"] = {**STYLES["trance"], "bpm": (110, 128), "cycles_per_chord":
                       "energy_order": ["bass", "drums", "pad", "arp", "melody", "texture", "keys"]}
 
 for _name, _bpm in (("techno", (138, 150)), ("hardcore", (160, 185))):
-    STYLES[_name] = {**STYLES["trance"], "bpm": _bpm, "cycles_per_chord": 4,
+    STYLES[_name] = {**STYLES["trance"], "bpm": _bpm, "cycles_per_chord": 2,
                      "openers": [["drums"], ["drums", "bass"]],
                      "energy_order": ["drums", "bass", "arp", "pad", "texture", "melody", "keys"]}
 
@@ -128,6 +129,10 @@ for _cfg in STYLES.values():
                 for role, name in _cfg["presets"].items()}
     _cfg["palette"], _cfg["presets"] = _palette, _presets
 
+# Styles whose chords use Switch Angel's trance voicings (livecode.TRANCE_VOICINGS)
+# instead of seventh chords.
+VOICED_STYLES = {"trance", "techno", "hardcore", "darkwave"}
+
 # Theme words that select a style (checked in this order).
 THEME_STYLE_KEYWORDS = [
     ("hardcore", ("hardcore", "gabber", "gabba", "speedcore", "frenchcore", "terrorcore", "rotterdam")),
@@ -150,6 +155,10 @@ def style_from_theme(theme: str | None) -> str | None:
         if any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", text) for w in words):
             return style
     return None
+
+# A live track's target length: long enough to build and drop, short enough
+# that the next track's key, chords, hook and sound come before it wears thin.
+LIVE_PIECE_MINUTES = 5.0
 
 SECTION_TYPES = ["intro", "verse", "build", "chorus", "breakdown", "bridge", "outro"]
 
@@ -214,6 +223,14 @@ class Piece:
     # and moving from the start, like a live-coded set.
     parts: dict[str, dict] = field(default_factory=dict)
     motion: dict[str, dict] = field(default_factory=dict)
+    voicing: str = ""   # a name in livecode.TRANCE_VOICINGS (club styles); "" = the style's default
+    subgenre: str = ""  # a name in blocks.SUBGENRES[style] (its tempo, kit, sounds, voicings)
+    surprise: str = ""  # one rule-break from music/surprises.py, or "" (most tracks)
+    # The Director's instructions to the Performer, per part of the live arc
+    # (build, groove, breakdown, rebuild, groove2, outro): short and plain,
+    # "Now start the bass", "Change the melody"; the Performer turns each
+    # into code, one per move.
+    cues: dict[str, list[dict]] = field(default_factory=dict)
 
     def energy_order(self) -> list[str]:
         """Order in which layers come in as energy rises, starting with the opening."""
@@ -296,9 +313,15 @@ def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | N
     else:
         key = Key(rng.randrange(12), rng.choice(cfg["modes"]))
 
-    lo, hi = cfg["bpm"]
+    from .blocks import SUBGENRES
+
+    # A subgenre (not the previous track's) brings its own tempo range.
+    variants = [v for v in SUBGENRES.get(style, {}) if not previous or v != previous.subgenre] or list(
+        SUBGENRES.get(style, {}))
+    variant = rng.choice(variants) if variants else ""
+    lo, hi = SUBGENRES[style][variant]["bpm"] if variant else cfg["bpm"]
     bpm = float(rng.randint(lo, hi))
-    if previous is not None:
+    if previous is not None and not variant:
         # Keep tempo changes between pieces gentle.
         bpm = float(max(lo, min(hi, previous.bpm + rng.randint(-8, 8))))
 
@@ -308,7 +331,8 @@ def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | N
     pool = progressions_for(key.mode)
     candidates = ([p for p in pool if p.name not in avoid and p.name not in disliked]
                   or [p for p in pool if p.name not in disliked] or pool)
-    progression = rng.choice(candidates)
+    # As common as they are in dance music (NRG-CP counts, theory.PROGRESSIONS).
+    progression = rng.choices(candidates, weights=[p.weight for p in candidates])[0]
 
     piece = Piece(
         title=f"{rng.choice(TITLE_WORDS_A)} {rng.choice(TITLE_WORDS_B)}",
@@ -320,8 +344,10 @@ def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | N
         mood=rng.choice(MOODS),
         sections=[],
         seed=rng.randrange(1_000_000),
+        subgenre=variant,
     )
-    piece.sections = _default_sections(piece, target_minutes)
+    piece.sections = _default_sections(piece, target_minutes,
+                                       avoid=[s.name for s in previous.sections] if previous else None)
     _add_variety(piece, rng, avoid | disliked, previous)
     return piece
 
@@ -371,10 +397,16 @@ def sounds_summary(sounds: dict[str, str]) -> str:
 
 
 def choose_sounds(piece: Piece, rng: random.Random, previous: Piece | None = None) -> None:
-    """Pick the live engine's sound per part for this piece, not repeating
-    the previous piece's where there's a choice."""
+    """Pick the live engine's sound per part for this piece (the subgenre's
+    sounds first), not repeating the previous piece's where there's a choice."""
+    from .blocks import subgenre, subgenre_sounds
+
     piece.sounds = {}
-    for role, options in STYLE_SOUNDS.get(piece.style, {}).items():
+    preferred = subgenre_sounds(piece.style, piece.subgenre)
+    voicings = subgenre(piece.style, piece.subgenre).get("voicings")
+    if voicings:
+        piece.voicing = rng.choice(voicings)
+    for role, options in {**STYLE_SOUNDS.get(piece.style, {}), **preferred}.items():
         fresh = [o for o in options if previous is None or o != previous.sounds.get(role)] or options
         piece.sounds[role] = rng.choice(fresh)
 
@@ -416,6 +448,21 @@ MIN_BUILD_BARS = 16
 # For a track resumed from a state saved before arcs were planned.
 DEFAULT_LIVE_PLAN = [["build", 32], ["groove", 64], ["breakdown", 32], ["rebuild", 32], ["groove2", 64],
                      ["outro", 32]]
+
+
+def fit_live_plan(plan: list[list], cps: float, target_minutes: float) -> list[list]:
+    """Trim a live arc that runs well over the target length (slow styles,
+    where even the shortest sections take long), longest steps first, never
+    below the steps' minimums (MIN_BUILD_BARS for build and rebuild, 8)."""
+    plan = [list(step) for step in plan]
+    target = target_minutes * 60 * cps                     # in bars
+    floor = lambda p: MIN_BUILD_BARS if p in ("build", "rebuild") else 8
+    while sum(b for _, b in plan) > 1.15 * target:
+        trimmable = [s for s in plan if s[1] - 8 >= floor(s[0])]
+        if not trimmable:
+            break
+        max(trimmable, key=lambda s: s[1])[1] -= 8
+    return plan
 
 
 def arc_summary(plan) -> str:
@@ -481,15 +528,17 @@ ARC_SHAPES = [
 ]
 
 
-def _default_sections(piece: Piece, target_minutes: float) -> list[Section]:
+def _default_sections(piece: Piece, target_minutes: float, avoid: list[str] | None = None) -> list[Section]:
     """The built-in planner's shape: the style's own arc or one of
-    ARC_SHAPES, chosen per piece, so pieces don't all have the same shape."""
+    ARC_SHAPES, chosen per piece and never the shape in `avoid` (the
+    previous piece's section names), stretched to about target_minutes."""
     period = piece.period
-    arc = random.Random(piece.seed).choice([STYLES.get(piece.style, {}).get("arc", DEFAULT_ARC)] + ARC_SHAPES)
-    base_bars = sum(m for _, _, m in arc) * period
-    seconds_per_bar = 1.0 / piece.cps
-    scale = max(1, round(target_minutes * 60 / (base_bars * seconds_per_bar)))
-    return [Section(name, bars=m * period * scale, energy=e) for name, e, m in arc]
+    shapes = [STYLES.get(piece.style, {}).get("arc", DEFAULT_ARC)] + ARC_SHAPES
+    fresh = [a for a in shapes if [name for name, _, _ in a] != list(avoid or [])] or shapes
+    arc = random.Random(piece.seed).choice(fresh)
+    base_seconds = sum(m for _, _, m in arc) * period / piece.cps
+    factor = target_minutes * 60 / base_seconds
+    return [Section(name, bars=max(1, round(m * factor)) * period, energy=e) for name, e, m in arc]
 
 
 def arrange(piece: Piece, section: Section, rng: random.Random, max_layers: int = 6) -> Arrangement:
@@ -532,18 +581,18 @@ _HOOK_TOKEN_RE = re.compile(r"^(~|-?\d{1,2})$")
 
 # Controls that hold a rhythm (the 303 accent pattern), not a knob position.
 _PATTERN_CONTROLS = {"accent"}
-_RHYTHM_RE = re.compile(r"^[t~\s\[\]<>*!\d.]+$")
+_RHYTHM_RE = re.compile(r"^[t~_\s\[\]<>*!\d.]+$")
 
 
 def _part_problem(role: str, kind: str, pattern: str) -> str | None:
     """Why a sketch pattern of this kind can't play, or None. Tunes are
     scale degrees on chord tones where it matters (livecode.harmony_problem);
     a chord rhythm is t (hit) and ~ (rest)."""
-    from .livecode import harmony_problem
+    from .livecode import harmony_problem, range_problem
 
     if kind == "rhythm":
         if not _RHYTHM_RE.match(pattern) or "t" not in pattern:
-            return "a chord rhythm is t (hit) and ~ (rest), e.g. \"~ t ~ t ~ t [~ t] ~\""
+            return "a chord rhythm is t (hit), ~ (rest) and _ (hold), e.g. \"~ t _ t ~ t t _\""
         return None
     if kind == "cycle":
         tokens = pattern.split()
@@ -551,9 +600,176 @@ def _part_problem(role: str, kind: str, pattern: str) -> str | None:
             return "a cycle is 3-16 space-separated degrees or ~"
     if not any(t.lstrip("-").isdigit() for t in re.split(r"[\s\[\]<>*!]+", pattern)):
         return "no notes"
-    if any(abs(int(d)) > 14 for d in re.findall(r"(?<![*!])-?\d+", pattern)):
-        return "degrees go from -7 to 14"
-    return harmony_problem({"cycle": "acid", "bassline": "bass"}.get(kind, "lead"), pattern)
+    return (harmony_problem({"cycle": "acid", "bassline": "bass"}.get(kind, "lead"), pattern)
+            or range_problem(role, pattern))
+
+
+# Names the Director may use for the parts of the live arc.
+_CUE_PHASES = {"build": "build", "intro": "build", "groove": "groove", "verse": "groove", "breakdown": "breakdown",
+               "rebuild": "rebuild", "build up": "rebuild", "buildup": "rebuild", "peak": "groove2",
+               "groove2": "groove2", "drop": "groove2", "chorus": "groove2", "outro": "outro"}
+MAX_CUES_PER_PHASE = 5
+
+
+# What a cue may tell the Performer to do, and the plain names of the parts.
+CUE_ACTIONS = ("start", "stop", "bring back", "pattern", "knob", "sound", "wrap", "tempo")
+CUE_PARTS = {"kick": "beat", "beat": "beat", "drums": "beat", "hats": "perc", "claps": "perc",
+             "hats and claps": "perc", "perc": "perc", "bass": "bass", "chords": "chords", "stabs": "chords",
+             "keys": "keys", "acid": "acid", "arp": "arp", "lead": "lead", "pad": "texture", "texture": "texture"}
+PART_NAMES = {"beat": "kick", "perc": "hats and claps", "texture": "pad"}
+
+
+def _sound_name(part: str, sound: str) -> str:
+    from .blocks import LIVE_SOUNDS
+
+    return LIVE_SOUNDS.get(part, {}).get(sound, sound).split(" (")[0].split(",")[0]
+
+
+def cue_text(cue: dict) -> str:
+    """A precise cue in plain, exact words: what, which part, with what."""
+    part = PART_NAMES.get(cue.get("part", ""), cue.get("part", ""))
+    do = cue.get("do")
+    if do == "start":
+        what = ", ".join(x for x in (cue.get("block", "").replace("_", " "),
+                                     _sound_name(cue["part"], cue["sound"]) if cue.get("sound") else "") if x)
+        return f"Start the {part}" + (f": {what}" if what else "") + (f" · {cue['pattern']}" if cue.get("pattern") else "")
+    if do == "stop":
+        return f"Drop the {part}"
+    if do == "bring back":
+        return f"Bring the {part} back"
+    if do == "pattern":
+        return f"New {part} pattern" + (f": {cue['pattern']}" if cue.get("pattern") else "")
+    if do == "wrap":
+        from .livecode import WRAPPER_NOTES
+
+        return f"The {part}: {cue.get('wrap')}" + (f" ({WRAPPER_NOTES[cue['wrap']].split(':')[0]})"
+                                                    if cue.get("wrap") in WRAPPER_NOTES else "")
+    if do == "knob":
+        to = cue.get("to")
+        return (f"The {part}'s {cue.get('knob')} from {to[0]:g} to {to[1]:g} over {to[2]} bars" if isinstance(to, list)
+                else f"The {part}'s {cue.get('knob')} to {to:g}")
+    if do == "sound":
+        return f"The {part} to the {_sound_name(cue['part'], cue['sound'])}"
+    if do == "tempo":
+        return f"Tempo to {cue.get('to')} BPM"
+    return ""
+
+
+def validate_cue(raw, style: str) -> tuple[dict | None, str]:
+    """One instruction: a plain sentence ({"say"}), or a precise one: {"do",
+    "part", and what it needs: "block", "sound", "pattern", "knob" + "to",
+    "wrap", "say"}, every name checked against the style's own blocks,
+    sounds, knobs and wrappers. A detail that doesn't fit is dropped (noted)
+    and the cue keeps its words for the Performer to interpret."""
+    from .blocks import BLOCKS, LIVE_SOUNDS, sketch_kinds
+    from .livecode import ALL_WRAPPERS, FX_RANGES, PF_RANGES, RETIRED_WRAPPERS, ROLE_FX, EditError, _check_number
+
+    if isinstance(raw, str):
+        say = " ".join(raw.split())[:90]
+        return ({"say": say}, "") if say else (None, "empty cue")
+    if not isinstance(raw, dict):
+        return None, "a cue is a sentence or {do, part, ...}"
+    say = " ".join(str(raw.get("say") or "").split())[:90]
+    do = str(raw.get("do", "")).strip().lower()
+    part = CUE_PARTS.get(str(raw.get("part", "")).strip().lower(), str(raw.get("part", "")).strip().lower())
+    blocks = [b for b in BLOCKS.get(style, []) if b.role == part]
+    if do not in CUE_ACTIONS:
+        return ({"say": say}, f"unknown cue action {do!r}") if say else (None, f"unknown cue action {do!r}")
+    if do != "tempo" and not blocks:
+        why = f"{style} has no {part!r}"
+        return ({"say": say}, why) if say else (None, why)
+    cue: dict = {"do": do, "part": part}
+    problems = []
+    if raw.get("block") and do == "start":
+        if any(b.name == raw["block"] for b in blocks):
+            cue["block"] = raw["block"]
+        else:
+            problems.append(f"no {part} block {raw['block']!r}")
+    if raw.get("sound") and do in ("start", "sound"):
+        if raw["sound"] in LIVE_SOUNDS.get(part, {}):
+            cue["sound"] = raw["sound"]
+        else:
+            problems.append(f"{raw['sound']!r} isn't a {part} sound")
+    if do == "start" and cue.get("sound"):
+        # The sound only reaches a block that plays one of the part's sounds
+        # (the acid arp stays acid): pick one that can, if the named one can't.
+        from . import mix
+
+        def takes_sound(block) -> bool:
+            own = {mix.synth_of(block.body), *(block.patterns.get("synth") or [])}
+            return bool(own & set(LIVE_SOUNDS.get(part, {})))
+
+        named = next((b for b in blocks if b.name == cue.get("block")), None)
+        if named is None or not takes_sound(named):
+            able = next((b for b in blocks if takes_sound(b)), None)
+            if able is not None:
+                if named is not None:
+                    problems.append(f"{named.name} can't play {cue['sound']}; using {able.name}")
+                cue["block"] = able.name
+    if raw.get("pattern") and do in ("start", "pattern"):
+        kind = sketch_kinds(style).get(part)
+        pattern = str(raw["pattern"]).strip()
+        problem = _part_problem(part, kind, pattern) if kind else None
+        if problem:
+            problems.append(f"{part} pattern: {problem}")
+        else:
+            cue["pattern"] = pattern
+            if raw.get("slot"):
+                cue["slot"] = str(raw["slot"])
+    if do == "knob":
+        knob, to = str(raw.get("knob", "")).strip().lower(), raw.get("to")
+        limits = FX_RANGES.get(knob) if knob in ROLE_FX.get(part, ()) else PF_RANGES.get(knob)
+        try:
+            if not limits or knob == "gain":
+                raise EditError(f"{knob!r} isn't a {part} knob")
+            if isinstance(to, list):
+                _check_number(f"(slow {int(to[2])} $ range {float(to[0]):g} {float(to[1]):g} sine)", *limits)
+                cue["to"] = [float(to[0]), float(to[1]), int(to[2])]
+            else:
+                _check_number(f"{float(to):g}", *limits)
+                cue["to"] = float(to)
+            cue["knob"] = knob
+        except (EditError, TypeError, ValueError, IndexError) as e:
+            problems.append(f"knob: {e}")
+    if do == "wrap":
+        if raw.get("wrap") in ALL_WRAPPERS and raw.get("wrap") not in RETIRED_WRAPPERS:
+            cue["wrap"] = raw["wrap"]
+        else:
+            problems.append(f"unknown wrapper {raw.get('wrap')!r}")
+    if do == "tempo":
+        try:
+            cue["to"] = float(raw.get("to"))
+        except (TypeError, ValueError):
+            problems.append("tempo needs a number")
+    if do == "sound" and "sound" not in cue or do == "knob" and "knob" not in cue or do == "wrap" and "wrap" not in cue:
+        cue = {"say": say} if say else None
+    if cue is not None and cue.get("do"):
+        # A precise cue says exactly what it does (the Director's own words,
+        # often imagery, stay for plain cues only).
+        cue["say"] = cue_text(cue) if cue.get("do") != "pattern" or cue.get("pattern") or not say else say
+    elif cue is not None:
+        cue["say"] = say
+    return cue, "; ".join(problems)
+
+
+def validate_cues(raw, style: str = "trance") -> tuple[dict[str, list[dict]], list[str]]:
+    """The Director's instructions: {part of the arc: [cue, ...]} (validate_cue)."""
+    if not isinstance(raw, dict):
+        return {}, (["cues: expected {section: [instruction, ...]}"] if raw else [])
+    out: dict[str, list[dict]] = {}
+    notes = []
+    for name, items in raw.items():
+        phase = _CUE_PHASES.get(str(name).strip().lower())
+        if phase is None:
+            notes.append(f"cues for unknown section {name!r}")
+            continue
+        for item in items if isinstance(items, list) else [items]:
+            cue, why = validate_cue(item, STYLES.get(style) and style or "trance")
+            if why:
+                notes.append(f"cue {name}: {why}")
+            if cue is not None and len(out.get(phase, [])) < MAX_CUES_PER_PHASE:
+                out.setdefault(phase, []).append(cue)
+    return out, notes
 
 
 def validate_hook(raw, style: str) -> tuple[dict[str, str], str]:
@@ -589,8 +805,12 @@ def validate_parts(raw, style: str) -> tuple[dict[str, dict], list[str]]:
     if not isinstance(raw, dict):
         return {}, (["parts: expected {role: pattern}"] if raw else [])
     kinds, out, notes = sketch_kinds(style), {}, []
+    # A part named by its kind of pattern ("bassline", "rhythm") means the
+    # part that plays that kind here.
+    by_kind = {k: r for r, k in kinds.items() if list(kinds.values()).count(k) == 1}
     for role, pattern in raw.items():
         role = str(role).strip().lower()
+        role = by_kind.get(role, role) if role not in kinds else role
         if role not in kinds:
             notes.append(f"part {role!r} can't be sketched in {style} ({', '.join(sorted(kinds))} can)")
             continue
@@ -696,8 +916,18 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
             notes.append(f"invalid key {key_text!r}")
     key = Key.parse(piece.key)
 
+    from .blocks import SUBGENRES
+
+    if piece.style != fallback.style:
+        piece.subgenre = next(iter(SUBGENRES.get(piece.style, {})), "")
+    name = str(data.get("subgenre") or "").strip().lower()
+    if name:
+        if name in SUBGENRES.get(piece.style, {}):
+            piece.subgenre = name
+        else:
+            notes.append(f"unknown subgenre {name!r}")
     if "bpm" in data:
-        lo, hi = STYLES[piece.style]["bpm"]
+        lo, hi = SUBGENRES[piece.style][piece.subgenre]["bpm"] if piece.subgenre else STYLES[piece.style]["bpm"]
         piece.bpm = float(round(_clamp(data["bpm"], lo, hi, piece.bpm)))
 
     # A progression from the library, or one the Director wrote itself; both
@@ -752,11 +982,19 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
             energy = _clamp(raw.get("energy", 0.5), 0.05, 1.0, 0.5)
             sections.append(Section(name=name, bars=max(1, periods) * period, energy=round(energy, 2)))
         if len(sections) >= 3:
+            # Not much longer than asked: a long track wears thin.
+            seconds = sum(s.bars for s in sections) / piece.cps
+            if seconds > 1.5 * target_minutes * 60:
+                factor = target_minutes * 60 / seconds
+                for s in sections:
+                    s.bars = max(1, round(s.bars / period * factor)) * period
+                notes.append(f"sections shortened from {seconds / 60:.0f} to about {target_minutes:.0f} minutes")
             piece.sections = sections
         else:
             notes.append("sections rejected")
-    else:
-        # Style/tempo may have changed: rebuild the default arc to fit.
+    elif piece.style != fallback.style or piece.period != fallback.period or piece.bpm != fallback.bpm:
+        # Style or tempo changed: rebuild the default arc to fit (the same
+        # choice the fallback made, so it still differs from the last piece's).
         piece.sections = _default_sections(piece, target_minutes)
 
     raw_instruments = data.get("instruments")
@@ -801,6 +1039,17 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
     if "motion" in data:
         piece.motion, motion_notes = validate_motion(data.get("motion"), piece.style)
         notes.extend(motion_notes)
+    if "cues" in data:
+        piece.cues, cue_notes = validate_cues(data.get("cues"), piece.style)
+        notes.extend(cue_notes)
+    voicing = str(data.get("voicing") or "").strip().lower()
+    if voicing:
+        from .livecode import TRANCE_VOICINGS
+
+        if voicing in TRANCE_VOICINGS and piece.style in VOICED_STYLES:
+            piece.voicing = voicing
+        else:
+            notes.append(f"voicing {voicing!r} rejected")
     idea = " ".join(str(data.get("idea") or "").split())
     if idea:
         piece.idea = idea[:200]
@@ -859,12 +1108,32 @@ def validate_arrangement(data: dict, piece: Piece, fallback: Arrangement, max_la
     return arrangement, notes
 
 
+def block_catalogue(style: str) -> dict[str, dict[str, str]]:
+    """Part -> block -> what it is, for the Director's precise cues: its
+    sound and an example of its pattern."""
+    from . import mix
+    from .blocks import BLOCKS, LIVE_SOUNDS
+
+    out: dict[str, dict[str, str]] = {}
+    for block in BLOCKS.get(style, []):
+        synth = mix.synth_of(block.body) or (block.patterns.get("synth") or [""])[0]
+        sound = LIVE_SOUNDS.get(block.role, {}).get(synth, synth.replace("ys_", "").replace("_", " "))
+        slot = block.sketch_slot()
+        example = (block.patterns.get(slot[0]) or [""])[0] if slot else ""
+        if block.drums:
+            example = " | ".join(f"{k}: {v[0]}" for k, v in block.patterns.items())
+        part = PART_NAMES.get(block.role, block.role)
+        out.setdefault(part, {})[block.name] = (sound or "drums") + (f"; e.g. {example}" if example and "{" not in example
+                                                                       else "")
+    return out
+
+
 def director_vocabulary(style: str | None) -> dict:
     """What the Director may choose from for a piece: the style's tempo and
     modes, the chords each mode allows for written progressions (with a few
     examples), the live sounds, and which parts can carry a hook."""
-    from .blocks import BLOCKS, hook_kinds, sketch_kinds
-    from .livecode import FX_RANGES, PF_RANGES, ROLE_FX, line_controls
+    from .blocks import BLOCKS, STYLE_SETTINGS, SUBGENRES, hook_kinds, sketch_kinds, subgenre_sounds
+    from .livecode import FX_RANGES, PF_RANGES, ROLE_FX, TRANCE_VOICINGS, line_controls
 
     styles = [style] if style in STYLES else list(STYLES)
     knobs = {}
@@ -885,6 +1154,13 @@ def director_vocabulary(style: str | None) -> dict:
         "sounds": LIVE_SOUNDS,
         "hook_parts": {s: hook_kinds(s) for s in styles},
         "sketch_parts": {s: sketch_kinds(s) for s in styles},
+        "subgenres": {s: {n: f"{v['bpm'][0]}-{v['bpm'][1]} BPM; {v['about']}; sounds: "
+                             + ", ".join(f"{r} {'/'.join(o)}" for r, o in subgenre_sounds(s, n).items())
+                          for n, v in SUBGENRES.get(s, {}).items()} for s in styles if SUBGENRES.get(s)},
+        "blocks": {s: block_catalogue(s) for s in styles},
+        "max_melodic": {s: STYLE_SETTINGS[s].get("max_melodic") for s in styles if STYLE_SETTINGS[s].get("max_melodic")},
+        "voicings": ({name: f"scale steps above the chord root: {shape}" for name, shape in TRANCE_VOICINGS.items()}
+                     if any(s in VOICED_STYLES for s in styles) else {}),
         "knobs": knobs,
     }
 

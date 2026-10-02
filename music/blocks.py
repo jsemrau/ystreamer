@@ -15,8 +15,36 @@ import random
 import re
 from dataclasses import dataclass, field
 
+import config
+
 from . import mix
-from .livecode import ROLE_FX, LineSpec, line_controls
+from .livecode import DEFAULT_VOICING, ROLE_FX, LineSpec, arp_sequences, line_controls
+
+_ARP_TOKEN_RE = re.compile(r"\{(up|down|updown|pedal)\}")
+
+
+def trance_gate(seed: int, density: float = 1.0, cycles: int = 1) -> str:
+    """Switch Angel's trancegate as a struct pattern: 16 steps a bar, each
+    on with probability 1 - 0.5 / (density + 0.5) (her rand * density,
+    rounded), seeded so it repeats; each hit holds until the next one (her
+    fill) and the line's legato shortens it (her clip .7). Over several
+    cycles it alternates bar by bar."""
+    rng = random.Random(seed)
+    bars = []
+    for _ in range(cycles):
+        steps = [rng.random() * (density + 0.5) >= 0.5 for _ in range(16)]
+        steps[0] = steps[0] or not any(steps)
+        tokens, started = [], False
+        for on in steps:
+            tokens.append("t" if on else ("_" if started else "~"))
+            started = started or on
+        bars.append(" ".join(tokens))
+    return bars[0] if cycles == 1 else "<" + " ".join(f"[{b}]" for b in bars) + ">"
+
+
+# Her favourite gate seeds (tgate's table) at a few densities.
+TRANCE_GATES = [trance_gate(45, 1.0), trance_gate(116, 1.0), trance_gate(99, 1.5), trance_gate(53, 0.7),
+                trance_gate(107, 1.0, cycles=2), trance_gate(8, 1.5, cycles=2)]
 
 # The sounds the Director picks from, per part, for each track: the toolkit of
 # 1990s trance and house, without saws or organ. The chosen sound replaces the
@@ -34,10 +62,16 @@ LIVE_SOUNDS = {
     "arp": {"ys_pluck": "plucked arp (Balearic / Cafe del Mar)",
             "ys_glass": "bell arp",
             "ys_pulselead": "square-wave arp"},
+    # (ys_hypersaw, the trance supersaw, joins chords, lead and arp below
+    # when config.HYPERSAW is on.)
     # Atmosphere only: quiet, far behind the chords and the lead.
     "texture": {"ys_air": "airy breath, far in the background",
                 "ys_softpad": "soft pad bed, far in the background"},
 }
+if config.HYPERSAW:
+    LIVE_SOUNDS["chords"]["ys_hypersaw"] = "trance supersaw chords (seven detuned saws)"
+    LIVE_SOUNDS["lead"]["ys_hypersaw"] = "trance supersaw lead"
+    LIVE_SOUNDS["arp"]["ys_hypersaw"] = "supersaw arp"
 
 
 # Parts that can carry the Director's hook, and how their tune slot looks in
@@ -111,7 +145,7 @@ class Block:
 
     def make(self, rng: random.Random, sounds: dict[str, str] | None = None,
              hook: dict[str, str] | None = None, parts: dict | None = None,
-             motion: dict | None = None) -> LineSpec:
+             motion: dict | None = None, voicing: str = DEFAULT_VOICING, kit: dict | None = None) -> LineSpec:
         """A new line from this block; `sounds` (part -> synth, the Director's
         choice for the track) sets the synth of melodic parts, the track's
         `hook` becomes the tune of the part it was written for, `parts` (role
@@ -119,6 +153,15 @@ class Block:
         the others, and `motion` (role -> {control: value}) sets knobs that
         move on their own."""
         patterns = {slot: rng.choice(options) for slot, options in self.patterns.items()}
+        # The subgenre's kit: its hat, clap and bass-rhythm variants instead.
+        for slot in patterns:
+            if kit and kit.get(slot) and (self.drums or self.role == "bass"):
+                patterns[slot] = rng.choice(kit[slot])
+        # Arp variants name a run through the track's voicing ("{up}", "{down}",
+        # ...: Switch Angel's trancearp), so they play its chord tones only.
+        arps = arp_sequences(voicing)
+        patterns = {slot: _ARP_TOKEN_RE.sub(lambda m: arps.get(m.group(1), m.group(0)), v)
+                    for slot, v in patterns.items()}
         tune = self.hook_slot()
         slot = self.sketch_slot()
         if hook and tune and hook.get("role") == self.role and hook.get("kind", tune[1]) == tune[1]:
@@ -254,10 +297,13 @@ BLOCKS: dict[str, list[Block]] = {
     ],
     # ---------------------------------------------------------------- trance
     "trance": [
-        Block("trance_beat", "beat", 's "[{kick}, {hats}, {clap}]"',
-              {"kick": ["ys_kick909*4"], "hats": ["[~ 808oh]*4", "[~ 808oh]*4, hh*16", "[~ hh]*4"],
-               "clap": ["~", "~ cp ~ cp"]},
+        # The kick alone, on every beat; hats and claps on their own line,
+        # quieter and above the low end, so neither fights the kick.
+        Block("trance_beat", "beat", 's "{kick}"', {"kick": ["ys_kick909*4"]},
               fx=[["gain", "1.0"]], drums=True),
+        Block("trance_hats", "perc", 's "[{hats}, {clap}]"',
+              {"hats": ["[~ 808oh]*4", "[~ 808oh]*4, hh*16", "[~ hh]*4"], "clap": ["~ cp ~ cp", "~"]},
+              fx=[["gain", "0.8"], ["hpf", "500"]], drums=True),
         Block("acid", "acid",
               'n (scale "{mode}" ("<{motif}>*16" |+ "<{roots}>") {root} - 12) # s "ys_acid"',
               {"motif": ["0 4 0 9 7", "0 7 0 2", "0 2 0 4 7", "0 4 0 9 7 11", "0 0 7 2 4"]},
@@ -273,10 +319,12 @@ BLOCKS: dict[str, list[Block]] = {
                  wrappers=['(|* gain "[0.67 0.91 1 1]*4")']),
         # No saw or organ sounds: 90s M1 piano stabs carry the chords (a pad
         # is only a quiet bed, see soft_bed), and a glass lead.
+        # The chords through Switch Angel's trance gate (TRANCE_GATES), each
+        # hit held to the next and clipped to 70%; the voicing is the track's.
         Block("piano_stabs", "chords",
               'struct "{stab}" $ n (scale "{mode}" "<{chords}>" {root}) # s "ys_housepiano"',
-              {"stab": ["~ t ~ t ~ t ~ t", "t ~ ~ t ~ ~ t ~", "~ ~ t ~ ~ t ~ t", "[~ t]*4"]},
-              fx=[["gain", "0.8"], ["legato", "0.5"], ["room", "0.35"], ["lpf", "(slow 16 $ range 2500 4500 sine)"]],
+              {"stab": TRANCE_GATES + ["~ t ~ t ~ t ~ t"]},
+              fx=[["gain", "0.8"], ["legato", "0.7"], ["room", "0.3"], ["lpf", "(slow 16 $ range 2500 4500 sine)"]],
               wrappers=['(|* gain "[0.67 0.91 1 1]*4")']),
         _melodic("glass_lead", "lead", "ys_glass", "melody",
                  ["0 ~ ~ 2 ~ ~ 4 ~", "4 ~ 2 ~ 0 ~ ~ ~", "7 ~ ~ 4 ~ 2 ~ 0",
@@ -292,11 +340,12 @@ BLOCKS: dict[str, list[Block]] = {
                   ["delayfeedback", "0.3"], ["pan", "(slow 4 $ range 0.3 0.7 sine)"]],
               pfs=[["acid", "(slow 12 $ range 0.3 0.65 cosine)"]],
               wrappers=['(|* gain "[0.67 0.91 1 1]*4")'], pool=[0, 2, 4, 6, 7, 9, 11]),
+        # Switch Angel's trancearp: 16ths running through the voicing's notes.
         Block("pluck_16", "arp",
               'n (scale "{mode}" ("<{arp}>*16" |+ "<{roots}>") {root} + 12) # s "ys_pluck"',
-              {"arp": ["0 2 4 7", "0 4 7 9 7 4", "7 4 2 0", "0 7 2 9 4"]},
+              {"arp": ["{up}", "{updown}", "{down}", "{pedal}"]},
               fx=[["gain", "0.85"], ["lpf", "(slow 8 $ range 1500 5000 sine)"], ["delay", "0.3"],
-                  ["delaytime", "0.375"], ["delayfeedback", "0.35"], ["room", "0.3"]],
+                  ["delaytime", "0.375"], ["delayfeedback", "0.09"], ["room", "0.3"]],
               wrappers=['(|* gain "[0.67 0.91 1 1]*4")'], pool=[0, 2, 4, 6, 7, 9]),
         Block("soft_bed", "texture", 'n (scale "{mode}" "<{chords}>" {root}) # s "ys_softpad"', {},
               fx=[["gain", "0.6"], ["legato", "1.1"], ["lpf", "1800"], ["room", "0.6"], ["size", "0.9"]]),
@@ -470,13 +519,82 @@ BLOCKS["darkwave"] = [
 BLOCKS["techno"] = _techno_blocks(hard=False)
 BLOCKS["hardcore"] = _techno_blocks(hard=True)
 
+# Subgenres: a style's variants, each with its own tempo, drum kit (hat and
+# clap patterns), bass rhythms, preferred sounds and chord voicings, so
+# tracks of one style don't all sound alike. The kit's patterns replace the
+# block's own variants for those slots (Block.make), and the Performer's drum
+# edits may use the kit's sounds. Hypersaw sounds only count when
+# config.HYPERSAW is on (subgenre_sounds).
+SUBGENRES = {
+    "trance": {
+        "progressive": {
+            "about": "deep and rolling: offbeat bass, soft hats, e-piano and bells, long filter rides",
+            "bpm": (126, 132),
+            "kit": {"hats": ["[~ hh27]*4", "[~ hh27]*4, [~ ~ hh27 ~]*4", "[~ 808oh]*2 [~ hh27]*2"],
+                    "clap": ["~ ~ ~ cp", "~ cp ~ cp"],
+                    "rhythm": ["[~ 0]*4", "[~ 0 ~ 0]*4", "[~ 0 0 ~]*4"]},
+            "sounds": {"chords": ["ys_epiano", "ys_glass"], "lead": ["ys_glass", "ys_pluck"],
+                       "arp": ["ys_pluck", "ys_glass"]},
+            "voicings": ["open triad", "spread triad", "triad"],
+        },
+        "uplifting": {
+            "about": "big and euphoric: rolling bass, supersaw chords and lead, epic voicings, a long breakdown",
+            "bpm": (136, 140),
+            "kit": {"hats": ["[~ 808oh]*4, hh*16", "[~ 808oh]*4"],
+                    "clap": ["~ cp ~ cp", "~ cp ~ <cp cp cp [cp cp]>"],
+                    "rhythm": ["[~ 0 0 0]*4", "[~ 0 0 0]*3 [~ 0 0 7]"]},
+            "sounds": {"chords": ["ys_hypersaw", "ys_housepiano"], "lead": ["ys_hypersaw", "ys_pulselead"],
+                       "arp": ["ys_pluck", "ys_glass"]},
+            "voicings": ["epic stack", "anthem", "add octave"],
+        },
+        "psy": {
+            "about": "driving and hypnotic: galloping bass on the three 16ths after every kick, busy hats, "
+                     "phrygian, acid and square-wave leads, few chords",
+            "bpm": (142, 146),
+            "kit": {"hats": ["hh*16", "[~ hh]*4, hh*16", "[hh hh 808oh hh]*4"],
+                    "clap": ["~ cp ~ cp", "~"],
+                    "rhythm": ["[~ 0 0 0]*4", "[~ 0 0 0]*3 [~ 0 7 0]"]},
+            "sounds": {"lead": ["ys_pulselead", "ys_glass"], "arp": ["ys_pulselead", "ys_pluck"],
+                       "chords": ["ys_glass", "ys_epiano"]},
+            "voicings": ["triad", "open triad"],
+        },
+        "acid": {
+            "about": "the 303 up front: the acid line carries the track, house piano stabs, a plain kick",
+            "bpm": (134, 140),
+            "kit": {"hats": ["[~ 808oh]*4", "[~ hh]*4, hh*8"],
+                    "clap": ["~ cp ~ cp", "~ ~ ~ cp"],
+                    "rhythm": ["[~ 0 0 0]*4", "[~ 0 ~ 0]*4"]},
+            "sounds": {"chords": ["ys_housepiano", "ys_epiano"], "lead": ["ys_glass", "ys_pulselead"],
+                       "arp": ["ys_pluck"]},
+            "voicings": ["triad", "add octave"],
+        },
+    },
+}
+
+
+def subgenre(style: str, name: str | None) -> dict:
+    return SUBGENRES.get(style, {}).get(name or "", {})
+
+
+def subgenre_sounds(style: str, name: str | None) -> dict[str, list[str]]:
+    """The subgenre's preferred sounds that can play now (the supersaw only
+    once it's switched on)."""
+    out = {}
+    for role, options in subgenre(style, name).get("sounds", {}).items():
+        playable = [o for o in options if o in LIVE_SOUNDS.get(role, {})]
+        if playable:
+            out[role] = playable
+    return out
+
+
 # Per style: bars between edits (about 20-30 s; override with --edit-bars), how many lines a track builds up to,
 # how complex the peak gets (livecode.complexity: 1 per line, +0.5 per wrapper, moving knob, phrase that changes
-# bar to bar or 16th stream; a Switch Angel trance peak is about 22-26), and which roles open a track.
+# bar to bar or 16th stream; a Switch Angel trance peak, 6 lines with gates and moving knobs, is about 16-18), how many melodic lines (acid, arp,
+# lead, keys) may play at once above the bass and chords (her trance has one or two), and which roles open a track.
 STYLE_SETTINGS = {
     "lofi": {"edit_bars": 8, "max_lines": 7, "peak_complexity": 14, "openers": [["beat"], ["keys"], ["bass", "beat"]]},
     "deephouse": {"edit_bars": 16, "max_lines": 7, "peak_complexity": 20, "openers": [["beat"], ["beat", "bass"]]},
-    "trance": {"edit_bars": 16, "max_lines": 7, "peak_complexity": 22, "openers": [["acid"], ["beat"], ["acid", "beat"]]},
+    "trance": {"edit_bars": 16, "max_lines": 7, "max_melodic": 2, "peak_complexity": 17, "openers": [["acid"], ["beat"], ["acid", "beat"]]},
     "ambient": {"edit_bars": 8, "max_lines": 6, "peak_complexity": 10, "openers": [["chords"], ["texture"], ["keys"]]},
     "piano": {"edit_bars": 8, "max_lines": 5, "peak_complexity": 8, "openers": [["keys"]]},
     "downtempo": {"edit_bars": 8, "max_lines": 6, "peak_complexity": 14, "openers": [["beat"], ["keys"]]},

@@ -287,6 +287,33 @@ SynthDef(\ys_gabber, { |out, pan, sustain = 0.3|
     };
     Env(levels, times)
 };
+// The trance supersaw done properly (ys_supersaw, kept for old sets, is a
+// raw LFSaw stack: aliasing, unfiltered, evenly detuned, hence "buzzy"):
+// seven band-limited saws spread with the JP-8000's detune curve (Adam
+// Szabo's measurements), the centre voice loudest, the side voices split
+// left and right, a low-pass that opens for a moment at each note, the low
+// end left to the bass, a little saturation, and the kick's duck.
+// `detune` (0..1) is how wide it spreads: 0.3 is the classic sound.
+SynthDef(\ys_hypersaw, { |out, sustain = 0.5, pan, freq = 440, speed = 1, detune = 0.3,
+                          duckdepth = 0, duckattack = 0.16, beattime = 0.44|
+    var f = freq * speed;
+    var duck = EnvGen.ar(Env([1 - duckdepth.clip(0, 1), 1 - duckdepth.clip(0, 1), 1],
+        [0.001, duckattack.max(0.01)], \sin), Impulse.ar(beattime.reciprocal));
+    var len = sustain.max(0.04);
+    var env = EnvGen.ar(Env([0, 1, 0.85, 0], [0.004, len * 0.9, 0.09 + (len * 0.1)], [0, -1, -4]), doneAction: 2);
+    var offsets = [-0.11002313, -0.06288439, -0.01952356, 0, 0.01991221, 0.06216538, 0.10745242];
+    var amount = (detune.clip(0, 1) ** 1.5) * 0.25;
+    var saw = { |fr|
+        if(\SawDPW.asClass.notNil) { \SawDPW.asClass.ar(fr, Rand(-1, 1)) } { Saw.ar(fr) }
+    };
+    var v = offsets.collect { |o| saw.(f * (1 + (o * amount))) };
+    var sig = [v[0] + v[2] + v[5] + (v[3] * 0.8), v[1] + v[4] + v[6] + (v[3] * 0.8)] * 0.16;
+    var bright = EnvGen.ar(Env([1.7, 1, 0.8], [0.03, len], -3));
+    sig = LPF.ar(sig, (6000 * bright).clip(400, 18000));
+    sig = HPF.ar(sig, 160);
+    sig = (sig * 1.4).tanh * 0.7 * duck;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
 SynthDef(\ys_gatesaw, { |out, sustain = 4, pan, freq = 440, speed = 1,
                          gatetime = 1.74, gatepat = 1, gatedepth = 0.9,
                          duckdepth = 0, duckattack = 0.16, beattime = 0.44|

@@ -156,7 +156,7 @@ def test_synthdefs_have_acid_env_and_duck():
     # accent deepens the envelope and shortens its decay, like a 303's.
     assert "100 * (2 ** (acid.clip(0, 1) * (9 + (2 * acc)) * fenv))" in acid
     assert "Env([0, 1, 0.2], [0.001, 0.12 - (0.04 * acc)]" in acid
-    assert text.count("Impulse.ar(beattime.reciprocal)") == 2           # duck on every beat
+    assert text.count("Impulse.ar(beattime.reciprocal)") == 3           # duck on every beat (3 saws)
 
 
 def test_every_trance_piece_is_built_on_the_acid_line():

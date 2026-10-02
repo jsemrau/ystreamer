@@ -31,6 +31,7 @@
 #             YS_STREAM_UI            browser | overlay (default: browser if available)
 #             YS_CHROMIUM             Chromium/Chrome binary for the browser look
 #             YS_UI_PORT              port of the stream page server (default 8765)
+#             YS_UI_PAGE              the page captured: deck.html (default) or index.html
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -181,6 +182,9 @@ if [[ "$UI_MODE" == "browser" ]]; then
         FPS=$f
     fi
     UI_PORT="${YS_UI_PORT:-8765}"
+    # The page captured: deck.html (Switch Angel style, the default) or
+    # index.html (the earlier look with the wave field and the agents' feed).
+    UI_PAGE="${YS_UI_PAGE:-deck.html}"
     DISPLAY_NUM="${YS_XVFB_DISPLAY:-:99}"
     PY="$REPO/venv/bin/python"; [[ -x "$PY" ]] || PY=python3
     # live.sh already serves the page; start it here only when run on its own.
@@ -193,7 +197,7 @@ if [[ "$UI_MODE" == "browser" ]]; then
     DISPLAY="$DISPLAY_NUM" "$CHROMIUM" --kiosk --no-first-run --noerrdialogs --disable-infobars \
         --disable-session-crashed-bubble --disable-features=Translate --password-store=basic \
         --no-sandbox --user-data-dir="$PROFILE" --window-position=0,0 --window-size="${W},${H}" \
-        --force-device-scale-factor=1 --hide-scrollbars "http://127.0.0.1:${UI_PORT}/?capture=1" \
+        --force-device-scale-factor=1 --hide-scrollbars "http://127.0.0.1:${UI_PORT}/${UI_PAGE}?capture=1" \
         >/dev/null 2>&1 & PIDS+=($!)
     sleep 4
     echo "Streaming the browser look ($CHROMIUM on $DISPLAY_NUM, ${W}x${H})" >&2

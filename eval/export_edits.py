@@ -59,8 +59,8 @@ def ratings(directory: str | None = None):
     """The host's 👍 / 👎, each with the code that was playing and the last
     change before it: the taste data to tune and train on."""
     for record in sessionlog.iter_records(directory, {"rating"}):
-        yield {k: record.get(k) for k in ("session", "style", "track", "phase", "rating", "last_edit",
-                                           "last_edit_source", "seconds_since_edit", "code")}
+        yield {k: record.get(k) for k in ("session", "style", "track", "phase", "rating", "role", "line",
+                                           "last_edit", "last_edit_source", "seconds_since_edit", "code")}
 
 
 def summary(directory: str | None = None) -> str:

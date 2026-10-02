@@ -34,6 +34,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
+        if path == "/":
+            # The page the stream shows (stream.sh captures the same one).
+            self.path = "/" + os.getenv("YS_UI_PAGE", "deck.html") + self.path[1:]
+            super().do_GET()
+            return
         if path == "/ui.json":
             self._send_file(os.path.join(config.RUNTIME_DIR, "ui.json"), "application/json",
                             missing=b'{"events": [], "code": [], "thinking": {}}')
@@ -52,8 +57,8 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             length = min(int(self.headers.get("Content-Length") or 0), 4096)
             data = json.loads(self.rfile.read(length) or b"{}")
-            if path == "/rate":     # 👍 / 👎 on what is playing
-                record = host_requests.submit_rating(data.get("rating"))
+            if path == "/rate":     # 👍 / 👎 on what is playing, or on one line of it
+                record = host_requests.submit_rating(data.get("rating"), data.get("role"))
             else:
                 record = host_requests.submit(data.get("text", ""))
         except (ValueError, OSError):

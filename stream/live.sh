@@ -33,7 +33,7 @@ STOPPING=0
 # the stream (it shows the video only; the sound goes into the stream).
 UI_PORT="${YS_UI_PORT:-8765}"
 "$PY" -m stream.ui_server >> "$REPO/logs/ui.log" 2>&1 & PIDS+=($!)
-echo "[live] stream page: http://127.0.0.1:${UI_PORT}  (preview in a browser; log: logs/ui.log)"
+echo "[live] stream page: http://127.0.0.1:${UI_PORT}  (what the stream shows, with your 👍/👎 and requests; log: logs/ui.log)"
 stop() {
     [[ "$STOPPING" == 1 ]] && return        # a second Ctrl-C while stopping
     STOPPING=1

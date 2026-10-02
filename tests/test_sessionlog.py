@@ -38,7 +38,8 @@ def _session(tmp_path, tracks=2):
     log = sessionlog.SessionLog(directory=str(tmp_path), session_id="test")
     log.start(theme="test", style="trance")
     clock = _SimClock()
-    performer = Performer(random.Random(4), style="trance", log=lambda *_: None)
+    # A seed whose plan has a breakdown and a peak, each with its own chords.
+    performer = Performer(random.Random(2), style="trance", log=lambda *_: None)
     engine = LiveEngine(lambda lines: None, performer, log=lambda *_: None, now=clock.now, sleep=clock.sleep,
                         max_tracks=tracks, session_log=log)
     engine._pool = _SyncPool()
@@ -98,7 +99,8 @@ def test_the_first_groove_edit_waits_the_grooves_interval_not_the_builds(tmp_pat
     edits = [json.loads(line) for line in open(log.path, encoding="utf-8") if '"type": "edit"' in line]
     i = next(i for i, e in enumerate(edits) if e["phase"] == "groove")
     gap = edits[i]["cycle"] - edits[i - 1]["cycle"]
-    assert round(gap) == STYLE_SETTINGS["trance"]["edit_bars"]      # the groove's pace, not the build's
+    # The groove's pace (halved while it is still plain), not the build's.
+    assert round(gap) in (STYLE_SETTINGS["trance"]["edit_bars"], STYLE_SETTINGS["trance"]["edit_bars"] // 2)
     assert round(edits[1]["cycle"] - edits[0]["cycle"]) == 4       # the build itself stays quick
 
 

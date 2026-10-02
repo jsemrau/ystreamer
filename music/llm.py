@@ -66,7 +66,17 @@ _claude_client = None
 _FALLBACK_MODELS = ("claude-opus-5", "claude-fable-5", "claude-mythos-5")
 
 
-def _claude(model: str, system: str, user: str, timeout: float, max_tokens: int) -> str:
+# Put in a prompt to mark where its stable part ends: Claude caches everything
+# before it (prompt caching is a prefix match); other providers just get a
+# blank line there (llama-server's cache_prompt reuses matching prefixes anyway).
+CACHE_BREAK = "\n<<cache>>\n"
+
+
+def _strip_cache_break(text: str) -> str:
+    return text.replace(CACHE_BREAK, "\n")
+
+
+def _claude(model: str, system: str, user: str, timeout: float, max_tokens: int, cache_ttl: str = "") -> str:
     import anthropic
 
     global _claude_client
@@ -82,12 +92,19 @@ def _claude(model: str, system: str, user: str, timeout: float, max_tokens: int)
     if effort:
         kwargs["output_config"] = {"effort": effort}
     client = _claude_client.with_options(timeout=timeout)
-    # The system prompt is the fixed part (the Performer's rules): cache it, so
-    # repeated calls pay a fraction for it (no effect below the model's
-    # minimum cacheable length).
+    # Prompt caching (a prefix match): the system prompt is the fixed part
+    # (the Performer's rules, the Director's brief) and is cached; a prompt
+    # with CACHE_BREAK also caches its stable start (the track), so repeated
+    # calls pay a tenth for all of that. A part below the model's minimum
+    # (1,024 tokens on Sonnet 5) just isn't cached. cache_ttl "1h" for calls
+    # minutes apart (the Director, once a track), else the 5-minute default.
+    mark = {"type": "ephemeral", **({"ttl": cache_ttl} if cache_ttl else {})}
+    stable, _, rest = user.partition(CACHE_BREAK)
+    content = ([{"type": "text", "text": stable, "cache_control": mark}, {"type": "text", "text": rest}]
+               if rest else [{"type": "text", "text": stable}])
     request = dict(model=model, max_tokens=max(max_tokens, 16000),
-                   system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                   messages=[{"role": "user", "content": user}], **kwargs)
+                   system=[{"type": "text", "text": system, "cache_control": mark}],
+                   messages=[{"role": "user", "content": content}], **kwargs)
     try:
         if model.startswith(_FALLBACK_MODELS):
             # If a request is declined by a safety classifier, let the API
@@ -107,6 +124,10 @@ def _claude(model: str, system: str, user: str, timeout: float, max_tokens: int)
         raise
     if response.stop_reason == "refusal":
         raise LLMError("Claude declined the request")
+    usage = response.usage
+    _call_stats.last = {"tokens": usage.output_tokens, "input": usage.input_tokens,
+                        "cache_read": getattr(usage, "cache_read_input_tokens", 0) or 0,
+                        "cache_write": getattr(usage, "cache_creation_input_tokens", 0) or 0}
     return "".join(block.text for block in response.content if block.type == "text")
 
 
@@ -209,7 +230,8 @@ _local_schema_ok = True
 
 
 def complete(model_id: str, system: str, user: str, timeout: float | None = None,
-             max_tokens: int = 1200, temperature: float = 0.8, schema: dict | None = None) -> str:
+             max_tokens: int = 1200, temperature: float = 0.8, schema: dict | None = None,
+             cache_ttl: str = "") -> str:
     """Return the model's text reply, or raise LLMError (including on timeout).
 
     schema: a JSON schema the reply must follow. Local servers enforce it
@@ -221,7 +243,8 @@ def complete(model_id: str, system: str, user: str, timeout: float | None = None
     def call() -> str:
         global _local_schema_ok
         if provider == "claude":
-            return _claude(model, system, user, timeout, max_tokens)
+            return _claude(model, system, user, timeout, max_tokens, cache_ttl)
+        user_text = _strip_cache_break(user)
         if provider == "local":
             # Qwen-style chat templates otherwise "think" for thousands of tokens.
             # cache_prompt: reuse the part of the prompt that matches the last
@@ -230,7 +253,7 @@ def complete(model_id: str, system: str, user: str, timeout: float | None = None
             if schema is not None and _local_schema_ok:
                 try:
                     return _openai_compatible(
-                        model, config.LOCAL_LLM_API_BASE, "", system, user, timeout, max_tokens, temperature,
+                        model, config.LOCAL_LLM_API_BASE, "", system, user_text, timeout, max_tokens, temperature,
                         {**extra, "response_format": {"type": "json_schema",
                                                       "json_schema": {"name": "reply", "schema": schema}}})
                 except LLMError as e:
@@ -238,15 +261,15 @@ def complete(model_id: str, system: str, user: str, timeout: float | None = None
                     if "http 400" not in text or "context" in text:
                         raise   # e.g. the prompt doesn't fit: not a schema problem
                     _local_schema_ok = False  # the server can't do schemas; ask without
-            return _openai_compatible(model, config.LOCAL_LLM_API_BASE, "", system, user, timeout, max_tokens,
+            return _openai_compatible(model, config.LOCAL_LLM_API_BASE, "", system, user_text, timeout, max_tokens,
                                       temperature, extra)
         if provider == "jevtypesafe":
-            return _jevtypesafe(model, system, user, timeout, max_tokens, temperature)
+            return _jevtypesafe(model, system, user_text, timeout, max_tokens, temperature)
         import litellm
 
         response = litellm.completion(
             model=model, max_tokens=max_tokens, temperature=temperature, timeout=timeout,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user_text}],
         )
         return response.choices[0].message.content or ""
 
@@ -332,7 +355,7 @@ def _one_line(text: str, limit: int = 400) -> str:
 
 def converse(agent: str, model_id: str, system: str, user: str, *, log=print, asks: str = "",
              show_full: bool = False, max_tokens: int = 1200, temperature: float = 0.8,
-             timeout: float | None = None, schema: dict | None = None) -> str:
+             timeout: float | None = None, schema: dict | None = None, cache_ttl: str = "") -> str:
     """complete() plus a visible record of the exchange: what the agent asked
     which model, what came back and how long it took (terminal), and the full
     prompt and reply (runtime/llm_calls.jsonl). Raises LLMError like complete()."""
@@ -347,10 +370,10 @@ def converse(agent: str, model_id: str, system: str, user: str, *, log=print, as
     if show_full:
         log(f"   ┌─ prompt to {who}\n" + "\n".join(f"   │ {line}" for line in user.splitlines()) + "\n   └─")
     started = time.monotonic()
-    record = {"agent": agent, "model": who, "asks": asks, "system": system, "prompt": user}
+    record = {"agent": agent, "model": who, "asks": asks, "system": system, "prompt": _strip_cache_break(user)}
     try:
         reply = complete(model_id, system, user, timeout=timeout, max_tokens=max_tokens,
-                         temperature=temperature, schema=schema)
+                         temperature=temperature, schema=schema, cache_ttl=cache_ttl)
     except LLMError as e:
         seconds = time.monotonic() - started
         log(f"💬 {agent} ← {who} ({seconds:.1f}s): ✗ {e}")
@@ -363,13 +386,16 @@ def converse(agent: str, model_id: str, system: str, user: str, *, log=print, as
     speed = ""
     if stats.get("tokens"):
         speed = f", {stats['tokens']} tokens" + (f" at {stats['tok_s']:.0f} tok/s" if stats.get("tok_s") else "")
+    if stats.get("cache_read") or stats.get("cache_write"):
+        speed += f", cache {stats['cache_read']:,} read / {stats['cache_write']:,} written / {stats['input']:,} new"
     log(f"💬 {agent} ← {who} ({seconds:.1f}s{speed}): {_one_line(reply)}")
     if stats.get("thinking"):
         log(f"⚠️  {who} is thinking before it answers (slow, and wasted here): turn it off in its chat "
             "template, or run llama-server with --reasoning-budget 0")
     if show_full:
         log("   ┌─ raw reply\n" + "\n".join(f"   │ {line}" for line in reply.strip().splitlines()) + "\n   └─")
-    runtime.append_llm_call({**record, "seconds": round(seconds, 2), "reply": reply})
+    runtime.append_llm_call({**record, "seconds": round(seconds, 2), "reply": reply,
+                             **({"usage": stats} if "cache_read" in stats else {})})
     return reply
 
 

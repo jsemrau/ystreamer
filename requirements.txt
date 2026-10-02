@@ -7,7 +7,7 @@ numpy
 piper-tts     # local text-to-speech for the spoken narration
 
 # Legacy free-form agent loop (orchestrator.py --legacy)
-smolagents[litellm]
+#smolagents[litellm]
 
 # Development
 pytest

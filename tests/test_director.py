@@ -245,7 +245,9 @@ def test_distilled_answers_are_kept_only_when_nothing_needed_fixing():
         req = _situation(random.Random(len(req["prompt"])), 0)
     answer = {"title": "Glass Minaret", "key": "C# phrygian", "bpm": 138, "progression": "i-II-VI-vii",
               "section_progressions": {"breakdown": "VI-vii-i-i", "chorus": "i-III-II-i"},
-              "hook": {"role": "acid", "pattern": "0 7 0 4 9 4 2"}, "idea": "the acid climbs",
+              "hook": {"role": "acid", "pattern": "0 7 0 4 9 4 2"},
+              "cues": {"build": ["Start the bass now"], "groove": ["Change the lead melody"],
+                       "breakdown": ["Drop the kick"], "peak": ["Open the acid filter"]},
               "parts": {"bass": "[~ 0 0 0]*4", "chords": "~ t ~ t ~ t [~ t] ~",
                         "lead": "<[7 ~ 4 ~ 2 ~ 0 ~] [9 ~ 7 ~ 4 ~ 2 ~]>", "arp": "0 4 7 11"},
               "motion": {"acid": {"acid": [0.3, 0.85, 32]}, "chords": {"lpf": [1500, 4000, 16]}},
@@ -289,4 +291,52 @@ def test_the_performer_is_told_how_complex_the_phase_should_be():
     track = performer.new_track(None)
     performer.state.phase = "groove2"
     note = performer.complexity_note(Program(track))
-    assert "about 22" in note and "too plain" in note
+    assert "about 17" in note and "too plain" in note
+
+
+def test_the_directors_cues_are_carried_out_by_the_performer_one_per_move():
+    from music.livecode import Program, apply_edit, line_synth
+    from music.performer import Performer
+    from music.plan import validate_cues
+
+    cues, notes = validate_cues({"intro": ["Start the bass now"], "peak": [
+        {"do": "sound", "part": "lead", "sound": "ys_pulselead", "say": "Lead to the square wave"},
+        {"do": "sound", "part": "lead", "sound": "ys_supersaw"}], "nowhere": ["x"]}, "trance")
+    assert cues == {"build": [{"say": "Start the bass now"}],
+                    "groove2": [{"do": "sound", "part": "lead", "sound": "ys_pulselead",
+                                 "say": "The lead to the square-wave trance lead"}]}       # exact words
+    assert any("supersaw" in n for n in notes) and any("nowhere" in n for n in notes)
+    # A sound the named block can't play moves to a block of that part that can.
+    cues, notes = validate_cues({"build": [{"do": "start", "part": "arp", "block": "high_acid", "sound": "ys_pluck"}]},
+                                "trance")
+    assert cues["build"][0]["block"] == "pluck_16" and "using pluck_16" in notes[0]
+
+    performer = Performer(random.Random(0), style="trance", log=lambda *_: None)
+    program = Program(performer.new_track(None))
+    performer.state.plan, performer.state.target_lines = [["build", 400], ["groove", 64]], 99   # a long build
+    performer.state.cues = {"build": [
+        "Start the bass now",                                              # plain: the Performer interprets
+        {"do": "start", "part": "arp", "block": "pluck_16", "sound": "ys_glass", "pattern": "0 4 7 4 9",
+         "say": "Start the glass arp, 0 4 7 4 9"},                          # precise: played exactly
+        {"do": "knob", "part": "arp", "knob": "lpf", "to": [800, 4000, 16], "say": "Open the arp filter"},
+        {"do": "sound", "part": "arp", "sound": "ys_pulselead", "say": "Arp to the square wave"}]}
+    performer.state.cue_queue = list(performer.state.cues["build"])
+    first = performer.next_edit(program)
+    assert first.request == "Start the bass now" and first.op == "add" and first.role == "bass"
+    program = apply_edit(program, first)
+    second = performer.next_edit(program)
+    assert second.source == "director" and second.line.block == "pluck_16"
+    assert line_synth(second.line) == "ys_glass" and second.line.patterns["arp"] == "0 4 7 4 9"
+    program = apply_edit(program, second)
+    third = performer.next_edit(program)
+    assert (third.op, third.name, third.value) == ("set_fx", "lpf", "(slow 16 $ range 800 4000 sine)")
+    program = apply_edit(program, third)
+    fourth = performer.next_edit(program)
+    program = apply_edit(program, fourth)
+    assert line_synth(program.lines["arp"]) == "ys_pulselead" and not performer.state.cue_queue
+    # A part of the arc brings its own instructions.
+    performer.state.cues["groove"] = [{"do": "stop", "part": "bass", "say": "Drop the bass"}]
+    performer.state.plan, performer.state.step = [["build", 1], ["groove", 64]], 0
+    performer.state.phase, performer.state.phase_start = "build", -100
+    fifth = performer.next_edit(program)
+    assert performer.state.phase == "groove" and (fifth.op, fifth.role) == ("mute", "bass")

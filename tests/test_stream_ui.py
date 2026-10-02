@@ -9,6 +9,8 @@ import urllib.request
 from functools import partial
 from http.server import ThreadingHTTPServer
 
+import pytest
+
 import config
 from music import runtime
 
@@ -75,11 +77,14 @@ def test_ui_server_serves_the_page_and_ui_json(isolated_runtime):
     threading.Thread(target=server.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{server.server_address[1]}"
     try:
-        page = urllib.request.urlopen(f"{base}/").read().decode()
-        assert "live.tidal" in page and "app.js" in page
+        page = urllib.request.urlopen(f"{base}/").read().decode()          # the stream's page: the deck
+        assert 'id="editor"' in page and "deck.js" in page
+        classic = urllib.request.urlopen(f"{base}/index.html").read().decode()
+        assert "live.tidal" in classic and "app.js" in classic
         data = json.loads(urllib.request.urlopen(f"{base}/ui.json?t=1").read())
         assert data["phase"] == "outro"
-        assert urllib.request.urlopen(f"{base}/app.js").status == 200
+        for asset in ("deck.js", "deck.css", "app.js", "dancer/wave.webm", "dancer/dance.webm", "dancer/groove.webm"):
+            assert urllib.request.urlopen(f"{base}/{asset}").status == 200
     finally:
         server.shutdown()
 
@@ -87,3 +92,24 @@ def test_ui_server_serves_the_page_and_ui_json(isolated_runtime):
 def test_stream_script_parses():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     assert subprocess.run(["bash", "-n", os.path.join(root, "stream", "stream.sh")]).returncode == 0
+
+
+def test_tidal_tells_the_piano_rolls_what_each_line_plays():
+    from music.blocks import find_block
+    from music.livecode import Edit, Program, apply_edit
+    from music.performer import Performer
+    from music.validator import TidalTypeChecker
+
+    checker = TidalTypeChecker()
+    if not checker.available:
+        pytest.skip("GHCi with Tidal isn't installed")
+    try:
+        performer = Performer(random.Random(0), style="trance", log=lambda *_: None)
+        program = Program(performer.new_track(None))
+        program = apply_edit(program, Edit("add", role="beat", line=find_block("trance", "trance_beat").make(random.Random(0))))
+        kicks = checker.events(program.expression("beat"), 4.0, 6.0)
+        assert [e[0] for e in kicks] == [4.0, 4.25, 4.5, 4.75, 5.0, 5.25, 5.5, 5.75]
+        assert all(e[2] is None and e[3] == "ys_kick909" for e in kicks)
+        assert checker.events("this isn't tidal", 0.0, 1.0) is None
+    finally:
+        checker.close()
