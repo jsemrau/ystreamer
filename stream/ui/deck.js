@@ -367,22 +367,25 @@ function codeTokens() {
   return tokens.length ? tokens : ["n", "scale", "|+", "<~", "slow", "sine", "#", "$"];
 }
 
-function burst(label) {
+// count: how many glyphs (a surprise throws the most, a drop fewer).
+function burst(label, count = 110) {
   const tokens = codeTokens(), now = performance.now();
-  for (let i = 0; i < 70; i++) {
+  for (let i = 0; i < count; i++) {
     const r = Math.random();
     const text = r < 0.2 ? MATH[Math.floor(Math.random() * MATH.length)]
                : tokens[Math.floor(Math.random() * tokens.length)];
     glyphs.push({
-      text, born: now + Math.random() * 900,               // a stream, not one wall
+      text, born: now + Math.random() * 700,               // a stream, not one wall
       x: (Math.random() * 2 - 1) * 1.6, y: (Math.random() * 2 - 1) * 0.9,
-      z: 7 + Math.random() * 5, speed: 3.2 + Math.random() * 2.6,
-      size: (r < 0.2 ? 120 : 52) + Math.random() * 30, spin: (Math.random() - 0.5) * 0.6,
+      // Close enough to read at once, at the glass in 1-2 s (further off
+      // they were specks that only grew after the moment had gone).
+      z: 3.5 + Math.random() * 3, speed: 2.6 + Math.random() * 2,
+      size: (r < 0.2 ? 130 : 64) + Math.random() * 36, spin: (Math.random() - 0.5) * 0.6,
       tint: Math.random() < 0.7 ? 0 : 1, mono: r >= 0.2,
     });
   }
   if (label) {                                                  // its own name, biggest, straight at you
-    glyphs.push({ text: label, born: now + 150, x: 0, y: -0.05, z: 9, speed: 4.2, size: 150, spin: 0, tint: 0,
+    glyphs.push({ text: label, born: now + 150, x: 0, y: -0.05, z: 5, speed: 2.2, size: 150, spin: 0, tint: 0,
                   mono: false, title: true });
   }
 }
@@ -397,12 +400,13 @@ function drawGlyphs(dt) {
   glyphs = glyphs.filter((p) => p.z > 0.35);
   for (const p of glyphs) {
     if (now < p.born) continue;
+    if (p.z0 === undefined) p.z0 = p.z;
     p.z -= p.speed * dt;
     p.x += p.x * 0.05 * dt; p.y += p.y * 0.05 * dt;         // spread outwards as they come
     const scale = focal / p.z;
     const sx = W / 2 + p.x * W * 0.5 * scale, sy = H / 2 + p.y * H * 0.5 * scale;
     // Fade in from the distance, out before the glass.
-    const alpha = Math.min(1, (12 - p.z) / 2.5) * Math.min(1, (p.z - 0.35) / 1.1) * (p.title ? 1 : 0.9);
+    const alpha = Math.min(1, (p.z0 - p.z) / 0.8) * Math.min(1, (p.z - 0.35) / 1.1) * (p.title ? 1 : 0.9);
     if (alpha <= 0) continue;
     g.save();
     g.translate(sx, sy);
@@ -469,7 +473,10 @@ function checkSurprises() {
 function checkMoments() {
   const title = ui.track && ui.track.title;
   if (lastTitle !== null && title && title !== lastTitle) moment(`NEW TRACK\n${title.toUpperCase()}`, false);
-  else if (lastPhase !== null && ui.phase !== lastPhase && MOMENTS[ui.phase]) moment(MOMENTS[ui.phase], ui.phase === "groove2");
+  else if (lastPhase !== null && ui.phase !== lastPhase && MOMENTS[ui.phase]) {
+    moment(MOMENTS[ui.phase], ui.phase === "groove2");
+    if (ui.phase === "groove2") burst(null, 60);                // every drop throws some code too
+  }
   lastTitle = title || lastTitle; lastPhase = ui.phase;
 }
 
@@ -505,7 +512,10 @@ async function poll() {
       renderAgent();
       checkSurprises();
     }
-  } catch (e) { /* engine not up yet: keep the last frame */ }
+  } catch (e) {
+    // Engine not up yet: keep the last frame. Anything else is a bug: say so.
+    if (!(e instanceof TypeError && /fetch/i.test(e.message))) console.error("poll:", e);
+  }
   setTimeout(poll, POLL_MS);
 }
 

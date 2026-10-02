@@ -10,18 +10,213 @@
 > what it heard and why it made the move. Every move is guaranteed to be
 > legal and musically safe, and every line is mixed in at a measured
 > level, so the only thing left to the model is judgement: what to
-> change, when, and why. Four agents share the work (a Director plans each
-> track, a Performer live-codes it, a Narrator speaks at its turning
-> points, and optionally a Judge chooses blind between the Performer's
-> ideas and random ones), and every exchange between them is visible.
-> That makes each performance a controlled, explainable experiment in
-> machine creativity, scored against a random baseline performer. The reference
-> implementation is [`jsemrau/ystreamer`](https://github.com/jsemrau/ystreamer),
-> which streams 24/7 on YouTube as **@infinitrance**.
+> change, when, and why. Four agents share the work: a Director, acting
+> as art director, sketches each five-minute track (its own chords, a
+> hook, the starting patterns, the knobs that move, a rule-breaking
+> surprise) and writes precise instructions for each part of it; a
+> Performer turns those instructions and its own ideas into code; a
+> Narrator speaks at the turning points; and optionally a Judge chooses
+> blind between the Performer's ideas and random ones. Every exchange
+> between them is visible. The article opens with what creativity means
+> for an AI agent and gives the working formula the system implements:
+> code guarantees that every option is good enough, memory forces the
+> chosen one to be new, chance pushes the model off its most typical
+> answer, and a blind judge measures whether the model chooses better
+> than chance. The reference implementation is
+> [`jsemrau/ystreamer`](https://github.com/jsemrau/ystreamer), which
+> streams 24/7 on YouTube as **@infinitrance**.
 
 ---
 
-## 1. Background: live coding as a stage for machine creativity
+## 1. Creativity in AI agents
+
+### 1.1 What counts as creative
+
+Psychology's working definition, sometimes called the *standard
+definition* (Runco and Jaeger, 2012), needs two things: a creative
+product is **original** and **effective**. Something new that doesn't
+work is noise. Something that works but isn't new is routine. Margaret
+Boden (*The Creative Mind*, 1990) adds a third criterion, **surprise**,
+and draws two distinctions that matter for machines:
+
+- **P-creativity versus H-creativity.** An idea is *P-creative*
+  (psychologically creative) when it is new to the one who has it, and
+  *H-creative* (historically creative) when it is new to everyone. A
+  stream that never ends needs P-creativity first: each track must be new
+  compared with what the stream has already played.
+- **Three kinds of creativity.** *Combinational* creativity joins
+  familiar ideas in unfamiliar ways. *Exploratory* creativity moves
+  through a structured space, a style or genre, and finds what it allows.
+  *Transformational* creativity changes the rules of the space itself.
+  Most of what a live coder does in a set is exploratory. Transformation
+  is rare even among humans.
+
+### 1.2 Why a language model is not creative by default
+
+A language model is trained to predict the likely continuation. Ask it
+for a trance chord progression and it writes the most typical one. Ask
+it twelve times and it writes twelve variations on the typical one.
+Instruction tuning narrows its range further, a narrowing often called
+*mode collapse*. Raising the sampling temperature doesn't solve this. It
+adds randomness, which raises novelty and lowers value at the same time,
+so it trades one criterion for the other instead of meeting both.
+
+The opposite fix fails as well. Given full freedom to write raw Tidal
+code, local models produced mostly invalid or clashing music (section
+5.7). More freedom gave novelty without value, and more randomness did
+the same. Neither alone is creativity.
+
+### 1.3 Creativity as a property of the system
+
+Two classic models of human creativity give a way out. Csikszentmihalyi's
+**systems model** (1988) places creativity not in one mind but in the
+interaction of three parts: an *individual* who produces variations, a
+*domain* of rules and symbols, and a *field* of gatekeepers who decide
+which variations survive. The **Geneplore** model (Finke, Ward and
+Smith, 1992) splits the creative act into *generating* candidate
+structures and *exploring* (evaluating and refining) them. An agent
+system can build each part explicitly, and that is the design stance of
+this project:
+
+| Part | In the theory | In this system |
+|---|---|---|
+| Generation | the individual; *generate* | the Director (a sketch and instructions per track), the Performer (edits, or three proposals per move) |
+| Domain | the rules and symbols | the validator, the harmony rule, the block library, kits, ranges (sections 6 to 8) |
+| Field | the gatekeepers; *explore* | the blind Judge, the host's 👍/👎 per line, listeners |
+| Memory | the domain's history | the last four tracks' keys, progressions, hooks and surprises; the session logs |
+| Chance | incubation, accident | a random *spark*, a random suggested key, a random arc shape |
+| Surprise | a violated expectation | the surprise menu (section 5.3) |
+
+### 1.4 How this system is creative: a working formula
+
+The system doesn't compute a single creativity score while it plays.
+The formula below is a definition that the architecture implements term
+by term; each term points to the code that implements it.
+
+**Per track: value as a gate, novelty against memory.** Let $x$ be the
+Director's plan for a track, $L$ the space of legal plans (in key,
+chord tones on strong steps, sounds from the style's kit, values in
+range) and $H$ the stream's memory of the last four tracks. Then
+
+$$
+C(x \mid H) \;=\; V(x)\cdot N(x \mid H),
+\qquad
+V(x) = \mathbb{1}[x \in L],
+\qquad
+N(x \mid H) = \prod_{f \,\in\, \{\text{key},\ \text{progression},\ \text{surprise}\}} \mathbb{1}\big[f(x) \notin H_f\big].
+$$
+
+Value is a *gate*, not a goal. In code the gate repairs rather than
+rejects: `Director.review_piece` replaces each illegal part of a plan
+with a legal one and logs the correction. $f(x)$ is one feature of the
+plan, its key for example, and $H_f$ the values that feature took in the
+last four tracks. Novelty is enforced for the three features in the
+product: a key from the last four tracks gets a
+new root in the same mode, and a recent progression or surprise is
+replaced. Other features (the hook, the shape of the sections, the
+sounds) are asked to differ in the prompt but not enforced, a
+difference that shows in the evidence below.
+
+**Perturbing the proposal.** The model samples its plan from
+
+$$
+x \sim p_\theta\big(x \mid b,\ H,\ \sigma,\ \hat k\big),
+$$
+
+where $b$ is the fixed brief (the vocabulary and rules, the same for every
+track), $\sigma$ one of twelve *sparks* drawn at random ("a hook with more
+rests than notes", "start the progression away from the tonic"), and
+$\hat k$ a random suggested key that isn't in $H$, half the time a
+neighbour of the previous key. $\sigma$ and $\hat k$ move the model's
+starting point without lowering value, because whatever it writes still
+passes the gate.
+
+**Within a track: complexity as a target.** A track is creative moment
+to moment when it keeps developing. The complexity of a program $P$ is
+
+$$
+K(P) \;=\; \sum_{\ell \,\in\, \text{active}(P)} \Big(1 + \tfrac{1}{2}\,\big(w_\ell + m_\ell + \phi_\ell + s_\ell\big)\Big),
+$$
+
+where, for line $\ell$, $w_\ell$ counts its wrappers, $m_\ell$ its
+controls that move on their own (a slow sine on a filter), $\phi_\ell$ is
+1 for a phrase that changes from bar to bar, and $s_\ell$ is 1 for a
+16th-note stream (`livecode.complexity`). Each phase of the arc has a
+target
+
+$$
+K^*(\text{phase}) \;=\; \kappa_{\text{style}}\cdot \alpha_{\text{phase}},
+\qquad
+\alpha = \{\text{build } 0.5,\ \text{groove } 0.75,\ \text{breakdown } 0.4,\ \text{rebuild } 0.6,\ \text{peak } 1.0,\ \text{outro } 0.3\},
+$$
+
+with $\kappa_{\text{trance}} = 17$. When $|K - K^*| > 2$ the Performer is
+told which way to go. When $K < K^* - 4$ in a groove, it edits twice as
+often. After two moves in a row that only turn a knob, the next move must
+change the music itself (section 9.6).
+
+**Surprise on a budget.** At most one surprise per track, offered every
+$E$ tracks ($E = 2$ by default, `YS_SURPRISE_EVERY`), never one of the
+last four, chosen by the Director from a menu of eight rule-breaks built
+only from safe operations. Surprise in Boden's sense is a violated
+expectation, and here the expectation is the one the music sets up
+itself: the drop that falls back, the kick that stays away.
+
+**Measured contribution.** Whether the *model* contributes anything
+beyond the space the code designed is measured with the blind Judge
+(section 13.4):
+
+$$
+\Delta \;=\; \pi - \rho,
+$$
+
+where $\pi$ is the share of blind comparisons the model's ideas win
+against random-but-legal ideas, and $\rho$ the share they would win by
+chance (their share of the pool, roughly 0.5). $\Delta > 0$ means an
+independent judge prefers the model's choices to chance within the same
+space.
+
+In words: code makes every option good enough, memory makes the chosen
+option new, chance pushes the model off its most typical answer, the
+surprise budget lets it break the arc on purpose, and a blind judge
+checks that it chooses better than chance. In Boden's terms the system
+is P-creative and exploratory, with a small, pre-approved step towards
+transformation in the surprises.
+
+### 1.5 What the evidence shows
+
+One measured session (2 October 2026): Claude Sonnet 5 as Director and
+Performer, jevtypesafe as blind Judge, trance, about 71 minutes and 12
+tracks.
+
+| Measure | Result |
+|---|---|
+| Edits made by the model | 156 of 173 (90%); the rest: the Judge picked a built-in idea, or a reply was late or invalid |
+| Blind preference, $\pi$ | 72 of 80 comparisons (90%); on average 74% of the Judge's probability, so $\Delta \approx +0.4$ |
+| Progressions (enforced) | 12 different in 12 tracks |
+| Keys (enforced) | 10 different in 12 tracks, none repeated within four tracks |
+| Surprises (enforced) | 6 fired, all different |
+| Complexity | 13.5 on average in the grooves, 13 to 18 at the peaks, against $\kappa = 17$ |
+| Value gate | every plan needed at least one correction, mostly sound names that aren't in the kit |
+
+Where novelty was *not* enforced, the model's typical answer came back.
+All 12 progressions start on the tonic chord, even with a spark asking
+for the opposite. Eleven of the twelve hooks start on the root and
+outline the triad. Four titles begin with "Iron" and three with
+"Concrete", "dark, driving" recurs in the moods, and every tempo falls
+between 136 and 144 BPM of the 126 to 146 allowed. Asked to change the
+subgenre from track to track, the model chose psy six times, acid four
+times, uplifting twice and progressive never.
+
+The lesson is the main result of this article's first part: **novelty
+appears where it is enforced or measured, and typicality returns
+everywhere else.** For an agent system, creativity is therefore partly
+an engineering decision: which dimensions to remember, which to perturb,
+and which to leave to the model.
+
+---
+
+## 2. Background: live coding as a stage for machine creativity
 
 **Live coding** is a performance practice in which the musician writes
 and rewrites a program while it plays, with the code projected for the
@@ -67,9 +262,9 @@ The architecture below separates the two questions.
 
 ---
 
-## 2. Design principles
+## 3. Design principles
 
-Six principles shape every component.
+Seven principles shape every component.
 
 **P1. Separate the space of legal moves from the choice among them.**
 The system, not the model, guarantees that a move is syntactically valid,
@@ -102,14 +297,22 @@ tagged with who chose it, the model states what it hears before it
 states its move, and the system's own structural decisions (the track's
 arc) are logged with their reasons.
 
+**P7. Remember, perturb, and break rules on purpose.** Left alone, a
+model returns to its most typical answer. The system remembers what
+the stream played and forbids repeating it, injects chance where the
+model would settle (a spark, a suggested key), and offers a small menu of
+deliberate rule-breaks (section 1.4).
+
 ---
 
-## 3. Architecture overview
+## 4. Architecture overview
 
 ```
-   ┌──────────────┐  plans each track (key, tempo, progression, mood, title, intro line)
-   │   Director   │──────────────────────────────────────────────┐
-   └──────────────┘                                              ▼
+   ┌──────────────┐  sketches each track: key, tempo, subgenre, its own chords, hook,
+   │   Director   │  starting patterns, moving knobs, voicing, surprise, title, intro;
+   │ art director │  and cues: precise instructions for every part of the arc
+   └──────────────┘──────────────────────────────────────────────┐
+                                                                 ▼
                       ┌─────────────────────────────────────────────┐
                       │                 Performer                    │
                       │                                              │
@@ -149,17 +352,18 @@ arc) are logged with their reasons.
                                arc's turning points
 ```
 
-The system has seven layers:
+The system has eight layers:
 
 | Layer | Module(s) | Responsibility |
 |---|---|---|
-| Program model | `music/livecode.py` | The live program as data; rendering to Tidal; the edit language and its validator |
-| Block library | `music/blocks.py`, `tidal/synthdefs.scd` | Curated instruments and starting lines per style (nine styles) |
+| Program model | `music/livecode.py`, `music/theory.py` | The live program as data; rendering to Tidal; the edit language and its validator; keys, modes and the progression library |
+| Track plan | `music/plan.py`, `music/surprises.py` | The Director's plan (sketch, cues, surprise) and its checks; the surprise menu |
+| Block library | `music/blocks.py`, `tidal/synthdefs.scd` | Curated instruments and starting lines per style (nine styles), trance subgenres and their kits |
 | Mixer | `music/mix.py` | Levels calibrated from measured loudness, fades, density ducking, the gain window |
 | Agents | `music/performer.py`, `music/director.py`, `music/live_engine.py`, `prompts/` | Director, Performer (phase machine, prompt, schema, built-in fallback), Judge, Narrator |
 | Live engine | `music/live_engine.py`, `music/engine.py` (`Clock`) | Timing, applying edits on the bar, sending changed lines, publishing state |
 | LLM gateway | `music/llm.py`, `audio_stack.py` | Provider routing (local, Claude, jevtypesafe), schema-constrained decoding, local server lifecycle, timeouts, logging every exchange |
-| Audio and stream | `audio_stack.py`, `tidal/`, `stream/`, `music/narrator.py` | GHCi session, SuperCollider boot, master bus, TTS narration, ffmpeg, watchdog |
+| Audio and stream | `audio_stack.py`, `tidal/`, `stream/`, `music/narrator.py` | GHCi session, SuperCollider boot, master bus, TTS narration, the stream page, ffmpeg, watchdog |
 
 **One edit cycle** looks like this. While the current bars play (8 bars
 in slow styles, 16 in club styles, about 20 to 30 seconds), a worker
@@ -185,7 +389,7 @@ process.
 
 ---
 
-## 4. The roles of the LLM
+## 5. The roles of the LLM
 
 "The LLM makes music" is too vague to design or evaluate, so the
 architecture assigns explicit **roles**. Each role has a defined input,
@@ -197,18 +401,18 @@ described because contrasting them is instructive.
 |---|---|---|---|---|---|---|
 | **Performer** | live | every 8 to 16 bars | program as code, phase, legal moves, its recent edits | one edit (or three proposals) as JSON, under a schema | schema, `apply_edit` (+ GHCi type check) | built-in performer |
 | **Commentator** | live | with every edit | same call | `listening`, `reason` (on screen), `narration` (spoken) | length and "no technical words" filter | template reason |
-| **Director** | live and arranger | per track (arranger: also per section) | theme, style, previous track | title, key, tempo, progression, mood, intro line | schema, style's tempo and key range | built-in planner |
+| **Director** | live and arranger | per track (arranger: also per section) | a fixed brief; the previous track, recent keys, progressions and hooks, a spark, a suggested key, the surprise menu | the track's sketch, cues for each part of the arc, a surprise, title, mood, intro line | `review_piece`: harmony, kit, ranges, style, memory (each part repaired, not rejected) | built-in planner |
 | **Narrator** | live | at each turn of the arc | track, mood, the moment and why, last move | one spoken sentence | "no numbers or jargon" filter, one-minute gap | hand-written line per moment |
 | **Judge** | live, opt-in | every edit | situation, 2-6 shuffled unlabelled options | a choice with probabilities | option id must exist | the Performer's first idea |
 | **Composer** (free layer) | arranger | per section, opt-in | key, progression, mood | counter-melody as pentatonic degrees | token grammar, 8 steps per bar | layer omitted |
 | **Free-form composer** (legacy) | legacy | continuously | natural-language goal | raw Tidal code | GHCi only | none |
 
-### 4.1 Performer
+### 5.1 Performer
 
 The Performer is the central role, and the only one that touches the program. The model sees the program exactly as
 the audience does, plus a machine-readable view of what it may change,
 and returns **exactly one** operation (three alternative proposals in
-judge mode, section 8.5). It never writes a Tidal statement
+judge mode, section 9.5). It never writes a Tidal statement
 itself. It writes *edits*, which the system turns into statements. This
 is what lets a 35B local model play for hours without a single syntax
 error reaching the audio engine.
@@ -226,9 +430,9 @@ What the Performer decides:
 
 What the Performer does *not* decide: pitch spelling (the key is fixed
 per track), sound design, levels, timing and the overall arc of a track
-(the phase machine suggests it; see section 8).
+(the phase machine suggests it; see section 9).
 
-### 4.2 Commentator
+### 5.2 Commentator
 
 Every Performer reply carries, in this order, `listening` (what it hears
 in the program that matters now), `reason` (why this move, and what the
@@ -258,34 +462,106 @@ underscores or engineering words ("layer", "energy", "orbit", "cps") is
 dropped. Listeners should hear "the melody leans down, like it's getting
 sleepy", not "lpf to 1800".
 
-### 4.3 Director
+### 5.3 Director
 
-In the live engine, the Director plans each track before the Performer
-starts: title, key, tempo, chord progression, mood, and a spoken intro,
-with its reasoning shown (`🧠 Next piece: 'Neon Rain', lofi, D minor,
-84 BPM, i-VI-III-VII, late-night`). Its plan is checked against the
-style that will actually play: a tempo or key outside the style's range
-is replaced (a darkwave track once started at 76 BPM because the model
-had planned it as lofi).
+The Director is the stream's **art director**. Before each track, about
+five minutes long, it writes a plan detailed enough to build the track
+from, and instructions for every part of it. One call, one JSON object:
 
-Before the live engine existed, the Director was the main role. Per
-piece it chose a title, key, tempo, chord progression, mood, extra
-progressions for the chorus and breakdown, chord colour (sevenths or
-ninths) and an optional key lift. Per section it chose which preset
-played in each role (pad, keys, bass, melody, arpeggio, drums, texture)
-and how much movement and fill to use. A deterministic harmony engine
-rendered those plans into Tidal code.
+| Field | What the Director writes | Checked against |
+|---|---|---|
+| `key`, `bpm` | a key in a mode the style allows; a tempo | the style's modes and the subgenre's tempo range; the last four keys |
+| `subgenre` | progressive, uplifting, psy or acid (trance) | the style's subgenres, which set the drum kit, bass rhythm, sounds and tempo |
+| `progression`, `section_progressions` | its **own chords** as Roman numerals, for the main part, the breakdown and the peak (`i-VI-III-VII`) | the chords of the key's mode (`theory.parse_progression`); the last four progressions |
+| `hook` | the track's tune, for one part, as scale degrees | the harmony rule (chord tones, strong steps) |
+| `parts` | the starting patterns of 3-5 other parts (bass, chord rhythm, an arp...) | the same rules, part by part |
+| `motion` | 2-4 knobs that move on their own: `{"acid": {"acid": [0.2, 0.8, 32]}}` | the knob's range, 4-64 bars |
+| `voicing` | how every chord is stacked (`open triad`, `epic stack`, `anthem`) | the style's voicings |
+| `cues` | 2-4 precise instructions for each part of the arc | the style's blocks, sounds, knobs and wrappers |
+| `surprise` | one rule-break from the menu, or none | the menu, the track, the stream's recent surprises |
+| `title`, `mood`, `reason`, `narration` | shown and spoken | no numbers or jargon in what is spoken |
 
-The Director role is reliable because it is almost pure selection from
-catalogues. It turned out to be a poor test of creativity. Decisions
-came every one to three minutes and were coarse, and the result was
-correct but static music. The same sustained pad sat under every
-section, and listeners called it boring. That experience motivated
-principle P2: the model's creative surface must be *the code*, and
-changes must be frequent and small. The Director now does what it is good
-at, a coarse plan per track, and the Performer does the rest.
+**Cues.** A cue is an instruction to the Performer, as exact as a
+director's note to a session player, with the names the code uses:
 
-### 4.4 Narrator
+```json
+{"do": "start", "part": "acid", "block": "acid", "sound": "ys_acid",
+ "pattern": "0 4 0 7 0 4 2", "say": "Start the acid: rolling seven-step line"}
+{"do": "knob", "part": "acid", "knob": "acid", "to": [0.3, 0.8, 16],
+ "say": "Open the acid over sixteen bars"}
+{"do": "stop", "part": "kick", "say": "Drop the kick"}
+```
+
+The actions are `start`, `stop`, `bring back`, `pattern`, `knob`,
+`sound`, `wrap` and `tempo`. At the start of each part of the arc the
+Performer carries out that part's cues first, one per move. A cue that
+names everything (part, block, sound, pattern, value) is played exactly
+as given. A cue that leaves something open ("busier, in 16ths,
+climbing") goes to the Performer, which writes the code for it (section
+9.6). The `say` text is what the audience reads on screen:
+
+```
+🎬 Cues: build: Start the kick: trance beat; Start the bass: rolling bass; Start the acid: acid;
+         The acid's resonance from 0.1 to 0.4 over 8 bars | groove: Start the chords: piano stabs ...
+```
+
+**The prompt** (`prompts/director_piece.md`) has two parts. The *brief*
+comes first and is the same for every track: the role, the vocabulary
+(styles, subgenres, chords per mode, blocks, sounds, knobs, voicings,
+hook parts), what to write and the reply format, about 2,900 tokens.
+The *context* follows: the previous track and its shape, the keys, hooks
+and progressions of the last four tracks, the listeners' dislikes, a
+suggested key, a spark and the surprise menu, about 400 tokens. The
+order is deliberate. Claude caches the brief (section 11.4), and the
+variable part that comes last keeps the model's attention on what is new.
+
+**Review.** `review_piece` checks every field and repairs what fails: a
+key from the last four tracks gets another root in the same mode, a
+recent progression is replaced, a cue naming a sound the part can't play
+is fixed or dropped, a tempo outside the style's range is replaced. Every
+correction is logged:
+
+```
+[Director] corrected LLM piece plan: cue build: 'ys_kick909' isn't a beat sound;
+           cue peak: unknown wrapper 'double the hook an octave up for one bar'
+```
+
+**The surprise menu** (`music/surprises.py`) lists eight rule-breaks,
+each built only from moves the system already makes safely (mute, unmute,
+the drop, tempo, key, the arc plan), so none can break the harmony or the
+code:
+
+| Surprise | What happens | When |
+|---|---|---|
+| `fake_drop` | the build-up reaches 8 bars of peak, then falls back into a short breakdown before the real drop | before the peak |
+| `kickless_drop` | the drop lands with everything but the kick; it returns a move later | the drop |
+| `silent_bar` | a whole bar of silence, every line, right before the drop | the drop |
+| `key_lift` | the last peak goes up a whole step, every line with it | the last peak |
+| `solo_breakdown` | the breakdown strips to one line alone | the breakdown |
+| `stripped_peak` | the drop brings only kick, bass, hats and the hook; the rest returns move by move | the drop |
+| `tempo_lift` | +2, then +4 BPM through the build-up | the build-up |
+| `three_note_hook` | the hook uses only three different notes | the whole track |
+
+Code decides *whether* a surprise is allowed (every second track by
+default, not one of the last four, and only if the track has what it
+needs: no `solo_breakdown` without a breakdown). The Director decides
+*which* one suits the track. Code places it at its moment, and the stream
+page announces it when it fires (section 10.4). The menu is the answer to
+a trade-off the host named: a model can't judge how risky an idea is, so
+it shouldn't invent risks, but a stream without surprises gets boring
+over 24 hours. The menu gives it bounded risks to choose from.
+
+**History.** Before the live engine, the Director was the main role and
+chose presets per section from catalogues. That proved reliable but a
+poor test of creativity: decisions were coarse and the music was correct
+but static, and listeners called it boring. The live engine first reduced
+the Director to a key, tempo, progression and mood. It came back as an
+art director when the music turned out samey and its instructions vague
+(sections 14.9 and 14.10). It now writes material (chords, a hook,
+patterns) and precise direction, and the Performer still makes every
+move in between.
+
+### 5.4 Narrator
 
 When the track's arc moves on (the groove settles, the breakdown, the
 rebuild, the second peak, the outro), the Narrator writes one warm
@@ -296,7 +572,7 @@ words are not spoken, lines closer than a minute apart are skipped (the
 track intro always plays), and each skipped line says why in the log.
 Without a text model the Narrator uses a hand-written line per moment.
 
-### 4.5 Judge
+### 5.5 Judge
 
 With `--judge jevtypesafe`, the Performer becomes a **generator**: it
 proposes three different moves in one call, the built-in performer adds
@@ -313,13 +589,13 @@ log shows:
 
 Because the Judge is blind, how often it prefers the model's ideas over
 random ones, and how much probability it gives them, is a direct
-measure of the model's creative contribution (section 12). A decision
+measure of the model's creative contribution (section 13). A decision
 API cannot write text, so it cannot perform alone in any interesting
 way: given only built-in candidates it can only pick the best of random
 ideas. The pairing is the point: a generator for ideas, a judge for
 taste.
 
-### 4.6 Composer (free layer)
+### 5.6 Composer (free layer)
 
 The arranger engine could optionally ask the model for one
 **counter-melody** per section, written as degrees of a pentatonic scale
@@ -327,9 +603,9 @@ The arranger engine could optionally ask the model for one
 was the first use of the technique that the live engine generalises:
 *let the model write material only in a representation where every
 string is in key*. The same idea reappears as scale-degree pattern slots
-(section 5.2).
+(section 6.2).
 
-### 4.7 Free-form composer (legacy)
+### 5.7 Free-form composer (legacy)
 
 The project's original design asked the model to write raw Tidal code
 from a natural-language goal. It is kept (`--legacy`) as a negative
@@ -338,7 +614,7 @@ that did were rarely harmonic. Unconstrained generation mixes three
 separate skills (syntax, music theory, taste) in one sample, so it
 measures none of them cleanly.
 
-### 4.8 Division of labour, summarised
+### 5.8 Division of labour, summarised
 
 | Concern | Owner |
 |---|---|
@@ -347,8 +623,10 @@ measures none of them cleanly.
 | Sound design | human (curated SynthDefs and blocks) |
 | Mix levels, fades | system (measured loudness per synth, `music/mix.py`) |
 | Timing and synchronisation | system (bar-aligned clock) |
-| Track plan (key, tempo, progression, mood) | model (Director), checked against the style |
-| Track arc (phases) | system proposes, model fills in |
+| Track plan (key, tempo, chords, hook, sketch, knobs, voicing) | model (Director), checked against the style and the stream's memory |
+| Novelty across tracks | system (memory of the last four tracks, a spark, a suggested key) |
+| Surprises | system offers and places them, model (Director) chooses |
+| Track arc (phases) | system proposes, Director instructs (cues), Performer fills in |
 | Choosing between ideas | model (Performer) or a separate Judge |
 | **What changes next, and why** | **model** |
 | **Melodic and rhythmic material** | **model** (within the degree representation) |
@@ -356,9 +634,9 @@ measures none of them cleanly.
 
 ---
 
-## 5. The program model
+## 6. The program model
 
-### 5.1 Lines and roles
+### 6.1 Lines and roles
 
 A program is a **track** (key, tempo, progression) plus up to nine
 lines, one per musical role. Roles are pinned to Tidal channels so the
@@ -369,7 +647,7 @@ ROLE_CHANNELS = {"beat": 1, "bass": 2, "chords": 3, "keys": 4,
                  "lead": 5, "acid": 6, "texture": 7, "perc": 8, "arp": 9}
 ```
 
-The `arp` role came last (section 13.1): a second 16th-note layer, such
+The `arp` role came last (section 14.1): a second 16th-note layer, such
 as an acid line an octave up or a pluck sequence, that gives club styles
 the interlocking density of a real set.
 
@@ -407,7 +685,7 @@ muted), plus a tempo statement `setcps (bpm/60/4)` (one Tidal cycle is
 one 4-beat bar). For display, muted lines are shown commented out
 (`-- d1 $ ...`) and the most recently edited line gets a `▶` marker.
 
-### 5.2 Harmony is injected, never generated
+### 6.2 Harmony is injected, never generated
 
 The track supplies harmony as template placeholders:
 
@@ -447,7 +725,21 @@ Chord lines use four-note stacks (`[0,2,4,6]` is a seventh chord in
 scale steps) kept near the tonic so voicings don't drift. Rhythm is
 added with `struct "t ~ ~ t ~ ~ ~ ~"`, which is itself an editable slot.
 
-### 5.3 Immutability and diffs
+**Written progressions and a library mined from real tracks.** The
+Director writes each track's chords itself, as Roman numerals for the
+key's mode (`i-VI-III-VII`, `i-II-iv-VI` in phrygian). Upper or lower
+case must match the mode's own chords, so a progression can't smuggle in
+a chord from outside the key; `theory.parse_progression` rejects it
+otherwise, and a one-chord "progression" too. When the Director's choice
+must be replaced (it repeats a recent one, or listeners disliked it), the
+replacement comes from a library mined from the NRG-CP dataset (WaivOps /
+Patchbanks, CC BY 4.0): every four-chord cycle found in at least eight of
+its 30,943 EDM and trance MIDI files, weighted by how many files use it
+(`eval/mine_nrg.py`, `music/data/nrg_progressions.json`). The dataset
+supplies only progressions. The patterns and sounds follow Switch
+Angel's own scripts (section 7.1).
+
+### 6.3 Immutability and diffs
 
 Edits never mutate the running program. `apply_edit` deep-copies it,
 changes the copy and returns it. `changed_statements(before, after)`
@@ -477,13 +769,13 @@ Ctrl-Enter.
 
 ---
 
-## 6. The block library and the sound palette
+## 7. The block library and the sound palette
 
-### 6.1 Blocks
+### 7.1 Blocks
 
 A **block** is a curated starting line: body, a few variants for each
 slot, default effects and optional starting wrappers. `Block.make(rng)`
-picks slot variants, sets the line's calibrated level (section 6.3) and
+picks slot variants, sets the line's calibrated level (section 7.3) and
 returns a fresh `LineSpec`. Nine styles each have their own library:
 lofi, ambient, downtempo and piano (the chill rotation), deep house,
 trance (after Switch Angel's acid setup), techno (138-150 BPM), hardcore
@@ -528,12 +820,58 @@ lofi palette has no sustained pad at all. Its harmony comes from Rhodes
 and felt-piano comping, because an earlier version with a pad under
 every track was the single most common listener complaint.
 
-### 6.2 SynthDefs
+**Switch Angel's idioms.** The trance library is modelled on the helper
+functions in Switch Angel's published Strudel scripts, rewritten for
+Tidal:
+
+- **Voicings** (her `chordshapes`): six ways to stack a chord, from
+  `triad` and `open triad` to `epic stack` and `anthem`. The Director
+  picks one per track, and every chord line and arp follows it.
+- **Arp sequences** (her `trancearp`): arps walk *through the voicing's
+  notes* by index (`{up}`, `{down}`, `{updown}`, `{pedal}`) rather
+  than through scale degrees, so they stay inside the chord by
+  construction.
+- **Trance gates** (her `trancegate`): six 16-step gate patterns that
+  chop held chords into rhythm, each hit held until the next, generated
+  the way her function does it (seeded random steps, so a gate repeats)
+  and two of them changing bar to bar
+  (`<[~ t t t t _ _ t ...] [t t t _ t _ _ t ...]>`). The gate is a choice
+  slot: the model picks one of a fixed set, it can't write its own.
+- **Low delay feedback** (at most 0.5): echoes thicken the rhythm without
+  washing it out.
+- **Two melodic parts at once** (`max_melodic` = 2, of acid, arp, lead and
+  keys): in her sets the density comes from the gate, the moving knobs
+  and the rhythm, not from more melodies. The Director's prompt says so,
+  and the Performer refuses a move that would break the cap.
+
+**Subgenres.** Trance comes in four kinds, each with its own tempo range,
+drum kit (hat and clap patterns), bass rhythm and sounds:
+
+| Subgenre | BPM | Character |
+|---|---|---|
+| progressive | 126-132 | deep and rolling: offbeat bass, soft hats, e-piano and bells, long filter rides |
+| uplifting | 136-140 | big and euphoric: rolling bass, supersaw chords and lead, epic voicings, a long breakdown |
+| psy | 142-146 | driving and hypnotic: a galloping bass on the three 16ths after every kick, busy hats, phrygian, few chords |
+| acid | 134-140 | the 303 up front, house piano stabs, a plain kick |
+
+The Director chooses the subgenre; the kit then fixes which drum
+patterns a track may use, so a track keeps one coherent groove.
+
+### 7.2 SynthDefs
 
 The sounds are custom SuperCollider SynthDefs (`tidal/synthdefs.scd`):
 an electric piano, a felt piano, a sub bass, a glass bell, a pluck, air
 and vinyl textures, strings, organ, choir, a supersaw with sidechain
 duck, a kick, a rolling bass, a gated saw and a 303-style acid voice.
+A new supersaw, `ys_hypersaw`, is waiting for approval. It has seven
+band-limited saws spread on the Roland JP-8000's detune curve, with the
+centre voice loudest and the side voices split left and right. The old
+supersaw, a raw stack of aliasing saws, sounded buzzy. New sounds don't
+go on air untested: `eval/sound_preview.py` renders short demos offline
+(scsynth in non-realtime mode; kick, rolling bass, gated chords; the new
+sound next to the old ones, normalised to the stream's -14 LUFS), and
+the sound is switched on (`YS_HYPERSAW=1`) only after someone has
+listened.
 The acid voice shows how one model-facing control (`acid`, 0.1 to 0.95)
 can drive a musically rich parameter space:
 
@@ -554,7 +892,7 @@ screams. A single number the model can ride, even as
 `(slow 8 $ range 0.4 0.75 sine)`, carries the whole tension arc of an
 acid track.
 
-### 6.3 Mixing: measured levels, fades and room for the front
+### 7.3 Mixing: measured levels, fades and room for the front
 
 The first live version had no mixer: every line entered at a hand-picked
 gain, instantly, however full the mix already was. When strings came in
@@ -596,9 +934,9 @@ the stream.
 
 ---
 
-## 7. The edit language and its validator
+## 8. The edit language and its validator
 
-### 7.1 Operations
+### 8.1 Operations
 
 Every move is one of eleven operations:
 
@@ -618,7 +956,7 @@ The language is deliberately **small and closed**. A model can learn
 everything it needs from the prompt, and each operation corresponds to
 something a human live coder actually does.
 
-### 7.2 Validation rules
+### 8.2 Validation rules
 
 `apply_edit(program, edit, max_lines)` enforces:
 
@@ -661,7 +999,7 @@ def _check_number(value: str, lo: float, hi: float) -> str:
     raise EditError(f"{value!r} is not a number or (slow N $ range a b sine)")
 ```
 
-### 7.3 Why the whitelists matter beyond music
+### 8.3 Why the whitelists matter beyond music
 
 The Tidal session is a live Haskell interpreter. A free-text value such
 as `1; hush` or a crafted string containing `"` could end a statement
@@ -672,7 +1010,7 @@ ever reaches GHCi as free text**. The validator is a musical safety net
 and a security boundary at the same time. This matters because prompts
 can carry untrusted content (for example a viewer-supplied theme).
 
-### 7.4 Wrappers
+### 8.4 Wrappers
 
 The wrapper whitelists are small vocabularies of idiomatic Tidal
 transformations, all pitch-safe (they shift only by octaves):
@@ -696,9 +1034,9 @@ decisions available to the model.
 
 ---
 
-## 8. The performer
+## 9. The performer
 
-### 8.1 The phase machine
+### 9.1 The phase machine
 
 Unstructured freedom produces aimless music. Every track follows a
 **phase machine** that gives it a dramatic arc and tells the model what
@@ -742,7 +1080,7 @@ are silenced, and the build starts again. With no fixed style, the
 stream rotates between lofi, ambient, downtempo and piano from track to
 track.
 
-### 8.2 The prompt: teaching Tidal while playing
+### 9.2 The prompt: teaching Tidal while playing
 
 The prompt (`prompts/performer.md`) is built fresh for every edit. Early
 versions gave the model names and ranges only: it saw
@@ -774,14 +1112,22 @@ and its edits felt random. The prompt now teaches as it asks:
    always moving), harmony first, and make each edit something a
    listener will notice (new notes, a rhythm, a layer, a sweep) rather
    than a reverb nudge. An earlier version said "prefer revising over
-   adding"; section 13.1 explains why that went.
+   adding"; section 14.1 explains why that went.
 8. **Reply contract**: `listening`, `reason`, the operation, optional
    `narration`; or, in judge mode, three genuinely different proposals.
 
-The system prompt is one sentence: *"You are a live coder performing
-TidalCycles. Reply with JSON only."* For Qwen-family models, the local
-provider turns off "thinking" mode in the chat template; otherwise the
-model can spend thousands of tokens reasoning and miss its bar.
+**Fixed rules first.** Everything that stays the same from call to call
+(the role, how to read the code, the operations, the wrapper and effect
+glossary, the harmony rule, the taste guidance and the reply format)
+goes into the system prompt, `prompts/performer_rules.md`. The user
+prompt, `prompts/performer.md`, starts with the track (the same for a
+whole track) and then gives what changes with every move: the phase, the
+complexity note, the lines, the code and the recent edits. Because the
+two parts come in that order, llama-server reuses the rules from its
+cache instead of reading them again, and Claude caches the rules and the
+track (section 11.4). For Qwen-family models, the local provider turns
+off "thinking" mode in the chat template; otherwise the model can spend
+thousands of tokens reasoning and miss its bar.
 
 **Small context windows.** llama-server shares its context between
 parallel slots, so `--ctx-size 8192` with two slots gives each request
@@ -791,7 +1137,7 @@ prompt for the rest of the run (wrapper names and ranges only, no
 example moves; about 25% smaller) and retries at once. The style's
 character is the last thing to be cut; the glossary is the first.
 
-### 8.3 From reply to edit: keeping a local model on track
+### 9.3 From reply to edit: keeping a local model on track
 
 A 35B local model produced unusable edits often enough that the
 built-in performer played much of the set. Four mechanisms fixed the
@@ -824,7 +1170,7 @@ causes rather than the symptoms:
    window at the current tempo. A local model gets at least 60 seconds
    (`YS_LOCAL_PERFORMER_WAIT`); if it needs longer than the window, the
    music keeps playing and its edit lands on the bar after the reply
-   (section 9.2). A reply past the deadline counts as `late`, not as an
+   (section 10.2). A reply past the deadline counts as `late`, not as an
    error.
 
 After each track the Performer reports how it went:
@@ -842,7 +1188,7 @@ For Claude and other hosted models (no grammar), `extract_json` finds
 the first balanced JSON object in the reply, fenced or not, and the same
 validation, clamping and retry apply.
 
-### 8.4 The built-in performer
+### 9.4 The built-in performer
 
 When the model is unavailable, or deliberately as a **baseline**, the
 built-in performer chooses edits with simple, phase-aware randomness:
@@ -873,7 +1219,7 @@ until one is valid.
 The result sounds acceptable, structured and in key, but it has no
 intention behind it. That is exactly what a null model should be.
 
-### 8.5 Generator and judge
+### 9.5 Generator and judge
 
 In judge mode, one edit takes two calls. The Performer proposes up to
 three different legal edits in one reply (the schema allows an array of
@@ -901,11 +1247,55 @@ marked "not a comparison" and left out of the statistics.
 
 
 
+
+### 9.6 Cues, complexity targets and the knob limit
+
+Three mechanisms connect the Performer's moves to the Director's plan
+and to the density of a Switch Angel set.
+
+**Cues first.** When the arc enters a phase, that phase's cues from the
+Director form a queue. Each move takes the next cue until the queue is
+empty, then the Performer chooses freely. A precise cue becomes an edit
+directly (`start` a part that isn't there becomes `add` with the named
+block and sound, `knob` becomes `set_pf` or `set_fx`). An open one is
+handed to the Performer as an instruction it must carry out in one edit,
+under the same rules as any other move:
+
+```
+## The Director's instruction
+The Director, who plans this track, says: "Thin the acid to a slow pulse (the acid line)"
+Carry it out: make the ONE edit that does what the Director says, in code, ...
+```
+
+The fake drop needs the cue queue too: during the false peak, the real
+peak's cues wait.
+
+**A complexity target per phase.** Every prompt carries one line that
+places the music against its target $K^*$ (section 1.4):
+
+```
+Complexity now 9.5, about 13 suits this phase: too plain for this phase: add variation to
+what plays - a wrapper, a knob that moves on its own ((slow 16 $ range a b sine)), a phrase
+that changes bar to bar (<[...] [...]>), an odd-length 16th cycle against the beat.
+```
+
+When a groove is more than 4 below its target, the Performer edits twice
+as often (never faster than the model can answer), as a live coder does
+while building a section up. The engine reports per track how close it
+got: `complexity in the groove: 13.5 on average, 15.0 at the peak`.
+
+**The knob limit.** A model that is unsure turns knobs: a filter a
+little lower, the reverb a little wider. That is safe, and after a few
+minutes it is boring. After two knob-only moves in a row
+(`MAX_KNOB_STREAK`), the prompt says the next move must change the music
+itself (notes or rhythm, a line in or out, a variation), and a third
+knob-only move is refused.
+
 ---
 
-## 9. The live engine
+## 10. The live engine
 
-### 9.1 The clock
+### 10.1 The clock
 
 Tidal keeps its own time in *cycles*. The engine mirrors it with a
 `Clock` that converts wall-clock time into a cycle position and handles
@@ -930,7 +1320,7 @@ At the start of a set the engine sends `hush`, `setcps` and
 `resetCycles` and resets its clock at the same moment, so both agree on
 where cycle 0 is.
 
-### 9.2 Thinking while the music plays
+### 10.2 Thinking while the music plays
 
 ```python
 while not self.stop_event.is_set():
@@ -963,7 +1353,7 @@ re-evaluates at the next cycle anyway), so even a late edit sounds
 intentional. While waiting, the engine writes a heartbeat file
 every few seconds for the watchdog.
 
-### 9.3 Defence in depth
+### 10.3 Defence in depth
 
 An edit passes up to four gates before it is heard:
 
@@ -982,7 +1372,7 @@ An edit passes up to four gates before it is heard:
 
 At every gate a failure costs one edit slot and nothing else.
 
-### 9.4 Publishing and explaining
+### 10.4 Publishing and explaining
 
 Every decision is visible in the terminal as it happens, and recorded:
 
@@ -1040,11 +1430,41 @@ setcps (84/60/4)
 -- let the melody echo into the space
 ```
 
+**The stream page.** What goes out on the stream is a web page
+(`stream/ui/deck.html`), laid out after Switch Angel's own screen and
+captured by a headless browser (section 12). The engine writes
+`runtime/ui.json` after every change, and the page polls it twice a
+second:
+
+- **The code fills the left side**, as on a live coder's screen. Under
+  each line is a **piano roll** of what that line actually plays. The
+  engine asks Tidal for the line's events over the next eight bars
+  (`TidalTypeChecker.events`) and draws them, notes as long as they
+  sound, drum hits as ticks, with a playhead on the bar. Every knob in
+  the code is drawn as a **slider** that moves when a sine rides it.
+- **On the right**: the channel's name; a particle cloud that pulses with
+  the kick; a dancer (an AI-generated clip,
+  cut out offline by `stream/make_dancer.py`, one clip per part of the
+  arc); the track, key, tempo and phase with the arc as a progress bar;
+  and the agents at work: the Director's current cue, the code it became
+  and the Narrator's line.
+- **Moments**: a new track, the breakdown, the build-up and the drop are
+  announced in large type, the drop with a flash and a shake. A
+  **surprise** gets its name, and the live code bursts out of the screen
+  at the viewer: tokens of the program and a few mathematical signs fly
+  towards the camera in perspective, grow, glow and vanish before the
+  glass. Every drop throws a smaller burst.
+- **Ratings, not on the stream**: in the host's own browser, a 👍/👎
+  for what is playing and for each line, written to
+  `runtime/ratings.jsonl` with the code that was playing.
+  `eval/export_edits.py` turns them into learning examples, with the edit
+  that produced each line.
+
 ---
 
-## 10. The LLM gateway
+## 11. The LLM gateway
 
-### 10.1 Providers
+### 11.1 Providers
 
 All text-model calls go through `llm.converse(agent, model_id, system,
 user, schema=...)`, which logs the exchange and records it, around
@@ -1077,7 +1497,7 @@ Because the interface is the common denominator, any local server works:
 `llama-server`, vLLM, LM Studio, or Ollama's `/v1` endpoint. Swapping
 models for an experiment is a command-line flag.
 
-### 10.2 Failure containment
+### 11.2 Failure containment
 
 `complete` runs every call in a worker thread with a hard timeout (60
 seconds by default, 180 for the local model, which can take minutes on a
@@ -1087,7 +1507,7 @@ inside native extensions) into a single `LLMError`. Callers only need to
 handle one exception type, and nothing an LLM backend does can take
 down the music thread.
 
-### 10.3 Local server lifecycle
+### 11.3 Local server lifecycle
 
 If the configured model is local and nothing answers on the port, the
 orchestrator launches `llama-server` itself: the GGUF file from `.env`,
@@ -1103,9 +1523,72 @@ for the KV cache), the end of its log and a likely fix are printed at
 once. If the model still isn't ready, the built-in performer plays until
 it is. The stream never waits on the model.
 
+A model bigger than the GPUs' memory no longer needs a hand-tuned layer
+count. With `LLAMA_GPU_LAYERS=auto`, llama.cpp places as many layers on
+the GPUs as fit, leaving a margin per GPU (`--fit-target`), and the rest
+in system memory. A server already running on the port is checked
+before it is reused. If it serves a different model than `.env` names
+(left over from an earlier run), it is stopped and the right one
+started, so a model change can't silently fail to take effect.
+
+### 11.4 Prompt caching
+
+The hosted path pays per token, and the prompts are long and mostly
+the same each time: the Performer's rules and track come to about 4,000 tokens and
+the Director's brief to about 2,900. Claude's prompt caching charges a
+tenth of the input price for a prefix it has seen in the last five
+minutes (or the last hour), and a quarter more (twice the price for an
+hour) the first time it stores one. The match is on the exact prefix, so
+the prompts are ordered stable-first (sections 5.3 and 9.2), and a
+marker in the prompt, `CACHE_BREAK`, says where the stable part ends:
+
+```python
+mark = {"type": "ephemeral", **({"ttl": cache_ttl} if cache_ttl else {})}
+stable, _, rest = user.partition(CACHE_BREAK)
+content = ([{"type": "text", "text": stable, "cache_control": mark}, {"type": "text", "text": rest}]
+           if rest else [{"type": "text", "text": stable}])
+request = dict(model=model, system=[{"type": "text", "text": system, "cache_control": mark}],
+               messages=[{"role": "user", "content": content}], ...)
+```
+
+The Director is called once a track, about every five minutes, which
+the five-minute cache would just miss, so its calls ask for the one-hour
+cache. The Performer, called every 15 to 30 seconds, uses the default.
+For the other providers the marker becomes a plain line break, so a
+local model reads the same text. Every reply logs what the cache did:
+
+```
+💬 Director ← claude/claude-sonnet-5 (13.1s, 1542 tokens, cache 5,363 read / 0 written / 802 new)
+💬 Performer ← claude/claude-sonnet-5 (2.8s, 201 tokens, cache 3,994 read / 0 written / 3,328 new)
+```
+
+Over the 71-minute session in section 1.5, the Director read 59,000
+tokens from the cache and stored 5,363 once, so its input cost 34% of
+what it would have without caching. The Performer, whose program and
+recent edits change with every move, came to 54%.
+
+### 11.5 Distilling the Director for a local model
+
+Claude is too expensive to run 24/7, and the local model's plans are
+weaker. The plan is to teach the local model with Claude's answers:
+`eval/distill_director.py` fills the stream's own Director prompt with
+hundreds of varied situations (every style, many themes, first tracks
+and follow-ups, recent keys, hooks and progressions to avoid, a random
+suggested key and spark), sends them to Claude Opus as one batch (half
+price, the brief cached across requests), and keeps only the answers
+that pass every check *unchanged*: their own chords for all three parts,
+a hook, cues for at least four parts of the arc, and a sketch dense
+enough for a Switch Angel build (three to five more parts, two or more
+moving knobs, an odd-length cycle, a lead phrase that changes from bar
+to bar). Near-duplicates (same key, chords and hook) are dropped. The
+result is a chat-format fine-tuning set for the local Qwen model, with
+every rejection kept with its reason. The pipeline is built. The dataset
+and a fine-tuned model are still to come, so whether distillation
+carries Claude's variety over to a 27B model is an open question.
+
 ---
 
-## 11. The audio and streaming stack
+## 12. The audio and streaming stack
 
 - **Tidal session.** A persistent GHCi process loads `BootTidal.hs`,
   which connects to SuperDirt on port 57120 and defines the usual
@@ -1131,11 +1614,14 @@ it is. The stream never waits on the model.
   small lift. At most one line is queued, lines are at least a minute
   apart, and while the voice speaks the whole Tidal mix is ducked with
   `all (|* gain 0.85)` and restored with `all id`.
-- **Streaming.** `stream/stream.sh` runs ffmpeg with a background image
-  or video, an audio waveform and three `drawtext` layers (now playing,
-  code, narration) that reload their text files every frame. The
-  captured audio is encoded and pushed over RTMP to YouTube. ffmpeg is
-  restarted with backoff if it exits.
+- **Streaming.** `stream/stream.sh` starts a virtual display (Xvfb),
+  opens the stream page in Chromium in kiosk mode on it, and has ffmpeg
+  capture the display (`x11grab`, 1280x720 at 30 fps) together with the
+  stream's audio sink, encode both and push them over RTMP to YouTube.
+  Without Xvfb and Chromium it falls back to the older look: a background
+  image or video, an audio waveform and three `drawtext` layers (now
+  playing, code, narration) that reload their text files every frame.
+  ffmpeg is restarted with backoff if it exits.
 - **Watchdog.** A separate process watches for sustained silence on the
   stream sink and for a stale engine heartbeat. When either happens, it
   stops the engine, and `stream/live.sh` starts it again, resuming from
@@ -1144,13 +1630,13 @@ it is. The stream never waits on the model.
 
 ---
 
-## 12. Testing creativity: the protocol
+## 13. Testing creativity: the protocol
 
 Because every move is legal and the built-in performer draws from the
 same move space, performers can be compared on equal terms. We propose
 four groups of measures, all computable from the engine's logs.
 
-### 12.1 Competence: can it play at all?
+### 13.1 Competence: can it play at all?
 
 - **Validity rate**: the share of edits the model actually played. The
   per-track report gives it directly (`27/31 edits by the LLM (built-in:
@@ -1161,7 +1647,7 @@ four groups of measures, all computable from the engine's logs.
   the `late` count in the same report; every `←` line shows the reply
   time.
 
-### 12.2 Divergence: does it produce ideas?
+### 13.2 Divergence: does it produce ideas?
 
 - **Operation entropy**: Shannon entropy over `op`. A performer that
   only rides `lpf` scores near 0; one that uses all eleven operations
@@ -1172,7 +1658,7 @@ four groups of measures, all computable from the engine's logs.
   `(op, role, name, value)` from the previous *k* edits, or undo one
   (A→B→A).
 
-### 12.3 Coherence: do the ideas fit together?
+### 13.3 Coherence: do the ideas fit together?
 
 - **Phase fit**: does it strip back in the breakdown and add during the
   build? Score each edit against its phase brief with a simple rule
@@ -1186,7 +1672,7 @@ four groups of measures, all computable from the engine's logs.
 - **Breadth of attention**: the distribution of edits over roles. A
   performer that edits only the lead is ignoring the ensemble.
 
-### 12.4 Preference: does a blind judge prefer its ideas?
+### 13.4 Preference: does a blind judge prefer its ideas?
 
 Judge mode gives a measure that needs no listening panel. For every
 edit, the model's ideas and random-but-legal ideas compete in front of a
@@ -1206,7 +1692,7 @@ The judge has its own taste and biases, so this measures agreement with
 one judge, not absolute quality; comparing several models under the same
 judge, and the same model under several judges, separates the two.
 
-### 12.5 Taste: is it any good?
+### 13.5 Taste: is it any good?
 
 Taste needs ears. Run **blind A/B listening sessions**: the same style,
 seed and duration, one set played by the built-in performer and one by
@@ -1215,7 +1701,7 @@ the one they would keep listening to. A 24/7 stream adds a naturally
 occurring signal on top: how long viewers stay, broken down by which
 performer was live.
 
-### 12.6 A minimal scorer
+### 13.6 A minimal scorer
 
 ```python
 import json, math
@@ -1238,7 +1724,7 @@ def score(history_path="runtime/history.jsonl", k=6):
             "by_llm": round(by_llm / total, 2)}
 ```
 
-### 12.7 Running an experiment
+### 13.7 Running an experiment
 
 `--dry-run` replaces the audio stack with a printer and the clock with a
 simulated one. With the built-in performer, an hour-long set runs in
@@ -1262,9 +1748,20 @@ built-in baseline on coherence and taste without falling behind on
 divergence. Beating the baseline on divergence alone is easy (random
 choices are diverse) and proves nothing.
 
+### 13.8 Novelty across tracks
+
+Section 13.2 measures divergence within a track. Across tracks, the
+question is whether the stream repeats itself, and the Director's memory
+makes it easy to measure: count the distinct keys, progressions, hooks,
+subgenres and surprises over a window of tracks, separately for the
+features the code enforces and those it only asks for. Section 1.5 gives
+one session's numbers. The comparison between the two groups is the
+useful part: it shows where the model's own variety ends and the code's
+begins.
+
 ---
 
-## 13. What went wrong, and how it was fixed
+## 14. What went wrong, and how it was fixed
 
 The architecture above was not designed in one go. Most of it is the
 residue of problems that surfaced while the system was playing, usually
@@ -1279,9 +1776,9 @@ That is a tension with both goals of the project: music that is not "all
 precoded", and decisions whose reasons can be seen. The fixes below keep
 the model in charge of *judgement* (what to change, when, and why) while
 code keeps the *vocabulary* musical. Whether that is the right split is
-exactly what the protocol in section 12 measures.
+exactly what the protocol in section 13 measures.
 
-### 13.1 The artefact made the music simpler
+### 14.1 The artefact made the music simpler
 
 **Symptom.** Before the live engine, a Director planned whole
 arrangements and the engine rendered them at once. When the program
@@ -1331,7 +1828,7 @@ at least one sweep. A test pins this down. The stream page had to follow:
 seven long lines no longer fit the code panel, so the code now shrinks
 until every line shows.
 
-### 13.2 Harmony
+### 14.2 Harmony
 
 **Symptom.** "The agents introduced a completely unmatched clap sound.
 It's extremely annoying." The first diagnosis blamed the sample and
@@ -1357,17 +1854,17 @@ explained in the prompt:
 Each block's degree pool follows the same rule, so the built-in
 performer cannot break it either. The clap came back.
 
-### 13.3 The mix
+### 14.3 The mix
 
 **Symptom.** "Strings were added but the volume was too loud."
 
-**Fix.** Levels are measured, not guessed (section 6.3): every synth's
+**Fix.** Levels are measured, not guessed (section 7.3): every synth's
 loudness was measured offline, each role has a target level, a line
 enters at the gain that meets its target, edits may only move gain by
 ±3 dB, lines fade in over four bars, and beds step back when the front is
 busy.
 
-### 13.4 Local models on one GPU
+### 14.4 Local models on one GPU
 
 Most operational trouble came from running a 27–35B model on a single
 consumer GPU next to SuperCollider.
@@ -1378,7 +1875,7 @@ consumer GPU next to SuperCollider.
 | Context overflow | `4105 tokens > 4096` | The prompt explains only the wrappers and effects that apply now; if it still doesn't fit, the performer switches to a compact prompt for the rest of the run |
 | Hidden "thinking" | Replies that took ages and began with `<think>` | Thinking is turned off in the chat template; if a model thinks anyway, the reply is cleaned and the log warns, with the fix (`--reasoning-budget 0`) |
 | Slow replies | `Director ← local (60.1s): ✗ Read timed out`; the Performer gave up after 11 s | Every reply logs its speed (`210 tokens at 22 tok/s`); a timeout says the model was too slow and what to check; the local model alone gets longer (180 s per call, 60 s per edit), and a late edit lands on the next bar instead of being dropped |
-| Unusable edits | Wrong names, numbers slightly out of range | Output forced into a JSON schema of the legal moves, numbers clamped into range, one corrected retry (section 8.3) |
+| Unusable edits | Wrong names, numbers slightly out of range | Output forced into a JSON schema of the legal moves, numbers clamped into range, one corrected retry (section 9.3) |
 
 The slow-reply fix has a cost the logs make visible: a slow model still
 plays, but makes fewer edits. The faster fix was a model choice: a
@@ -1386,7 +1883,7 @@ mixture-of-experts model runs only part of its weights per token and
 answered comfortably inside the edit window where a dense 27B model did
 not.
 
-### 13.5 Style
+### 14.5 Style
 
 **Symptoms.** "I asked for hardcore techno but it started slow." A
 darkwave track was planned at 76 BPM. A model opened a darkwave track
@@ -1397,9 +1894,9 @@ drum machine.
 blocks and tempo ranges. The theme's keywords choose the style, and the
 Director's tempo and key are checked again after the style is fixed. The
 deeper problem, that the models have little feel for what makes a style
-itself, is still open (section 15).
+itself, is still open (section 16).
 
-### 13.6 Keeping the agents in the room
+### 14.6 Keeping the agents in the room
 
 **Symptoms.** Moving to the live engine silently dropped the Director
 and the Narrator. With a judge, the performer was consulted so often
@@ -1413,7 +1910,7 @@ voice is normalised to the stream's loudness (-14 LUFS) with an
 adjustable offset (`YS_NARRATION_VOLUME_DB`), the music ducks while it
 speaks, and a skipped line is logged with its reason.
 
-### 13.7 Trust: "so I know this is not all precoded"
+### 14.7 Trust: "so I know this is not all precoded"
 
 **Symptom.** The first runs printed only the result of each decision.
 The listener could not tell the model's choices from the code's.
@@ -1426,7 +1923,7 @@ stream page shows what each agent heard, did and why. That turned an
 objection into the project's second goal: understanding *why* each agent
 decided matters as much as pleasant music.
 
-### 13.8 Running it 24/7
+### 14.8 Running it 24/7
 
 Smaller problems, each of which stopped a stream:
 
@@ -1440,7 +1937,130 @@ Smaller problems, each of which stopped a stream:
   now starts the audio sink, engine, stream and watchdog with one
   command, and restarts the engine, which resumes the saved track.
 
-### 13.9 What the problems add up to
+### 14.9 "All of the music sounds the same"
+
+**Symptom.** After the harmony and mix fixes, the music was clean, and
+the host's verdict was that it all sounded the same. The request that
+followed set the direction for everything since: *"I want the director
+to make a better plan for the song, more creative while never ignoring
+harmony and song structure,"* in the vibe of Switch Angel, without too
+much designed in advance.
+
+**Diagnosis.** The Director picked a key, a tempo and a progression
+from a catalogue; everything a listener remembers (the hook, the bass
+figure, the chord rhythm) came from the same block variants every time.
+Tracks differed in title and mood more than in sound.
+
+**Fix.** The Director became an art director (section 5.3). It writes
+its own chords, a hook and the starting patterns, so the material
+differs from track to track, while the harmony rule and the validator
+keep it in harmony. The stream remembers the last four keys,
+progressions, hooks and surprises and forbids or discourages repeats; a
+random suggested key and a spark push each plan away from the model's
+default; tracks run about five minutes, so the stream moves on before a
+track wears out.
+
+### 14.10 "The instructions are just bla bla"
+
+**Symptom.** The Director's instructions read like liner notes: "let
+the energy breathe as the night deepens." The host wanted them as clear
+as a bandleader's: *now start the bass; we need to change the melody;
+strings here*, and *as precise as possible, to ensure that the performer
+makes the right sound choice.*
+
+**Fix.** Cues (section 5.3): structured instructions per part of the
+arc with the exact names of parts, blocks, sounds, knobs and values, plus
+a few plain words for the audience. The Performer carries them out first
+and plays precise ones exactly (section 9.6). The models still invent
+names: every one of the twelve plans in section 1.5 had at least one cue
+naming a sound the part can't play or a wrapper that doesn't exist. So
+each cue is checked like any other move, and the log says what was
+fixed.
+
+### 14.11 Harmony, second round
+
+**Symptom.** "The harmonics in the recent version were not good." The
+host asked whether a standard library of trance patterns exists, then
+decided: *use Switch Angel's scripts as the basis, and the NRG dataset
+only for progression patterns.*
+
+**Fix.** Voicings, arps that walk through the voicing and trance gates
+after her helper functions (section 7.1); a progression library mined
+from 30,943 MIDI files, weighted by use (section 6.2); the phrygian mode
+for psy trance. Chord tones on strong steps, the rule from section
+14.2, still applies to everything the Director writes.
+
+### 14.12 The groove: "the claps and hats are too noisy and not in sync"
+
+**Symptom.** "The clap rhythm was not good," then: *"the claps and
+hihats are way too noisy and not in sync with the rest. Otherwise it's
+nice."*
+
+**Diagnosis.** The clap was a free pattern, and a model that writes
+`~ cp ~ cp ~ ~ cp ~` has written eight steps, which puts the claps after
+beats 1 and 2 instead of on 2 and 4. In key and legal, it was still off
+the beat. The hats shared one loud line with the kick.
+
+**Fix.** The trance beat line became the kick alone, and hats and clap
+moved to a line of their own, quieter (gain 0.8) and high-passed at
+500 Hz so they sit above the bass. Their patterns come from the
+subgenre's kit (`[~ 808oh]*4, hh*16`), and the clap is a choice slot: a
+backbeat on 2 and 4, as in Switch Angel's sets, which may drop out, go
+half-time or fill the end of a phrase, but can't wander onto the
+offbeats.
+
+### 14.13 Boring within a track
+
+**Symptom.** "That was quite good. I got the feeling that it was quite
+boring and repetitive. Can you see this in the data?"
+
+**Diagnosis.** The session logs showed it: runs of moves that only
+turned a knob, and grooves that stayed well below the density of a
+Switch Angel peak, because nothing told the Performer how dense the
+music should be at each point of the arc.
+
+**Fix.** A measure of complexity, a target per phase scaled for each
+style (from 8 for solo piano to 20 for techno and deep house), more
+frequent edits while a groove is far below its target, and the knob
+limit (sections 1.4 and 9.6). The engine reports the complexity reached
+in each track, so the next complaint can be checked against a number.
+
+### 14.14 Cost
+
+**Symptom.** Claude Sonnet as the Performer played clearly better than
+the local model, but *"Claude is too expensive"* for a stream that never
+stops.
+
+**Fix.** Three steps, cheapest first. Prompt caching cut the input cost
+by about half for the Performer and two thirds for the Director (section
+11.4). The local model got all the GPU memory it can use, and the rest
+of a bigger model in system memory (section 11.3). And the Director's
+skill is being distilled from Claude Opus into a training set for the
+local model (section 11.5), so that hosted calls can become the
+exception.
+
+### 14.15 The surprise nobody saw
+
+**Symptom.** "That was nice. But I didn't see the visualizations." The
+3D glyph burst had been built for exactly the surprises that the
+session had just played.
+
+**Diagnosis.** The log showed six surprises fired, and the page had
+received every one. Reproducing the stream's own capture (Xvfb, the same
+Chromium, ffmpeg's `x11grab`, a surprise injected into `ui.json`) showed
+the effect working but barely visible, for two reasons. The burst's
+canvas was layered *beneath* the dark band behind the surprise's title,
+85% opaque, exactly where the glyphs fly. And the glyphs started so far
+away (about 9 pixels tall) that they only grew large after two seconds,
+when the title was already fading.
+
+**Fix.** The burst is drawn on top, starts closer with more and larger
+glyphs, reaches the glass in one to two seconds, and also fires, smaller,
+at every drop. The general lesson is the one from the mix (section
+14.3), applied to pixels: check the output in the pipeline that
+actually ships, not in a preview.
+
+### 14.16 What the problems add up to
 
 Read together, the fixes draw the boundary of the model's creativity in
 this system. Code decides what is *possible*: the blocks, the harmony
@@ -1448,12 +2068,21 @@ rule, the kit, the level window, the fallbacks. The model decides what
 *happens*: which line, which notes, when, and why. Each problem above
 moved that boundary, almost always toward code. The honest measure of
 the result is the share of edits the model actually makes and the share
-of blind comparisons it wins against random ideas (section 12.4), which
+of blind comparisons it wins against random ideas (section 13.4), which
 the Performer prints after every track. If that share holds up as the
 vocabulary grows richer, the model is doing more of the music; if it
 falls, the richness is coming from the code.
 
-## 14. Design lessons
+The later problems (sections 14.9 to 14.13) moved the boundary the other
+way for the first time. The Director now writes material the code used
+to supply: chords, hooks, patterns, the shape of the arc, which surprise
+to play. That improved the music, because each new freedom came with
+its check (the harmony rule for chords and hooks, the kit for rhythms,
+memory for repetition, a menu for risk). The refined pattern is
+therefore not "less model, better music" but **give the model a freedom
+only together with the check that keeps it musical.**
+
+## 15. Design lessons
 
 - **Constrain the vocabulary, not the imagination.** Scale-degree slots,
   curated blocks and ranged effects remove whole classes of errors while
@@ -1505,27 +2134,65 @@ falls, the richness is coming from the code.
   eventually overflows a small local context window; describing only what
   applies now, and degrading gracefully to a compact prompt, keeps the
   performer playing.
+- **Enforce novelty where it matters.** A model asked to vary something
+  returns to its typical answer unless the variation is checked. Decide
+  which features must never repeat, remember them, and check; leave the
+  rest to the prompt and measure how far it drifts (section 1.5).
+- **Give a freedom only with its check.** Letting the Director write its
+  own chords and hooks made the music better where earlier freedoms had
+  made it worse, because each came with the rule that keeps it musical.
+- **Make instructions between agents precise.** A director's note that
+  reads well ("let it breathe") gives the next agent nothing to do. A
+  structured cue with exact names can be played, checked and shown.
+- **Budget risk with a menu.** A model can't judge how risky an idea is.
+  A short list of rule-breaks, each built from safe moves, lets it take
+  risks without inventing them.
+- **Stable first, variable last.** Ordering every prompt from what never
+  changes to what changes each call lets a local server reuse its cache
+  and cuts a hosted model's input cost by a half to two thirds, at no
+  cost in quality.
+- **Test what ships.** The surprise effect worked in every preview and
+  was nearly invisible on the stream. Checking the output in the real
+  capture pipeline found in minutes what reading the code had not.
 
-## 15. Limitations and extensions
+## 16. Limitations and extensions
 
 - **Curated palette.** The test measures compositional and performative
   creativity within a given sound world, not sound design. An extension
   could expose a few SynthDef parameters as additional controls.
-- **Imposed arc.** The phase machine proposes each track's shape. Letting
-  the model decide phase transitions ("I think it's time for a
-  breakdown") would test structural creativity too.
+- **Imposed arc.** The phase machine still moves the track from phase to
+  phase. The Director now shapes each phase with its cues, may plan the
+  sections' lengths, and can bend the arc with a surprise, but it doesn't
+  decide *when* the breakdown comes. Letting the model call phase
+  transitions would test structural creativity too.
 - **Single-move replies.** One edit per call keeps things attributable
   but prevents coordinated moves (mute the beat *and* open the filter).
   A small "combo" operation is a natural next step.
-- **Style knowledge.** The model has little feel for what makes darkwave
+- **Style knowledge.** Trance now has subgenres with their own kits,
+  tempos and sounds, and patterns after Switch Angel's scripts; the
+  other styles don't yet. The model has little feel for what makes darkwave
   darkwave or techno techno: in one run it opened a darkwave track with
   "cold sustained pads" when the genre is carried by the sequencer bass
   and drum machine. The planned fix (`docs/STYLE_KNOWLEDGE_PLAN.md`) is a
   short style guide per style in the prompt, a role description per
   block, style-specific example moves, and a judge that scores style fit.
-- **Memory.** The model sees its last six edits, not the whole set.
-  Longer-range development (a motif introduced early and recalled at
-  the end) would need a summary of the track so far.
+- **Memory.** The Director remembers four tracks; the Performer sees its
+  last six edits, not the whole set. Longer-range development (a motif
+  introduced early and recalled at the end, a signature that returns
+  across hours) would need a summary of the track and of the stream so
+  far.
+- **Typicality where nothing checks.** Titles, moods, subgenres, the
+  first chord of a progression and the shape of a hook drift back to the
+  model's favourites (section 1.5). Each could be remembered and checked
+  like keys are, at the cost of more rules; which ones are worth it is a
+  question for listeners.
+- **Thin evidence.** The numbers in section 1.5 come from one 71-minute
+  session with one model in one style, and the blind judge is a model
+  with its own taste. Blind listening tests (section 13.5) are still to
+  be run.
+- **Distillation is untested.** The pipeline that turns Claude Opus's
+  plans into a training set for the local model exists (section 11.5);
+  whether a 27B model trained on it plans as variedly is not yet known.
 - **Short-sound calibration.** The mixer calibrates sustained sounds from
   measurements; drums, short chord hits and fast 16th-note streams still
   use tuned gains, because a single test note does not measure them well.
@@ -1552,13 +2219,47 @@ falls, the richness is coming from the code.
   valid under a grammar, here compiled by llama.cpp from a JSON schema.
 - **Blind judge**: a model that chooses among options without knowing
   which agent proposed which.
+- **P-creativity / H-creativity**: Boden's terms for ideas new to the one
+  who has them, and new to everyone.
+- **Hook**: the tune that makes a track recognisable, written by the
+  Director for one part.
+- **Sketch**: the Director's starting patterns for the other parts, and
+  the knobs that move on their own.
+- **Cue**: one structured instruction from the Director to the Performer
+  for a part of the arc, with exact names and a plain-words `say`.
+- **Surprise**: one rule-break per track from a fixed menu, chosen by the
+  Director and placed by code.
+- **Subgenre**: a kind of a style (progressive, uplifting, psy, acid
+  trance) with its own tempo range, kit and sounds.
+- **Trance gate**: a 16-step on/off pattern that chops a held chord into
+  rhythm.
+- **Voicing**: how a chord's notes are stacked (close triad, open, an
+  "epic" spread over octaves).
+- **Prompt caching**: a provider storing the processed start of a prompt
+  so that later calls beginning the same way are cheaper and faster.
+- **Distillation**: training a smaller model on a larger model's answers.
 
 ## See also
 
 - TidalCycles documentation: <https://tidalcycles.org/docs/>
 - Reference implementation, [`jsemrau/ystreamer`](https://github.com/jsemrau/ystreamer):
   `music/livecode.py`, `music/blocks.py`, `music/mix.py`,
-  `music/performer.py`, `music/director.py`, `music/live_engine.py`,
-  `music/llm.py`, `prompts/performer.md`, `tidal/synthdefs.scd`,
-  `eval/synth_levels.sh`, `docs/STYLE_KNOWLEDGE_PLAN.md`
+  `music/performer.py`, `music/director.py`, `music/plan.py`,
+  `music/theory.py`, `music/surprises.py`, `music/live_engine.py`,
+  `music/llm.py`, `prompts/director_piece.md`, `prompts/performer_rules.md`,
+  `prompts/performer.md`, `tidal/synthdefs.scd`, `stream/ui/deck.html`,
+  `eval/synth_levels.sh`, `eval/sound_preview.py`, `eval/mine_nrg.py`,
+  `eval/distill_director.py`, `eval/export_edits.py`,
+  `docs/STYLE_KNOWLEDGE_PLAN.md`
+- Switch Angel's live-coded trance sets and scripts, the musical
+  reference for the trance style
+- NRG-CP chord progression dataset (WaivOps / Patchbanks), CC BY 4.0
+- M. A. Boden, *The Creative Mind: Myths and Mechanisms* (1990; 2nd ed.
+  2004)
+- M. Csikszentmihalyi, "Society, culture, and person: a systems view of
+  creativity", in R. J. Sternberg (ed.), *The Nature of Creativity* (1988)
+- R. A. Finke, T. B. Ward and S. M. Smith, *Creative Cognition: Theory,
+  Research, and Applications* (1992)
+- M. A. Runco and G. J. Jaeger, "The standard definition of creativity",
+  *Creativity Research Journal* 24(1), 2012
 - The 24/7 stream: YouTube **@infinitrance**
