@@ -184,7 +184,7 @@ class LiveEngine:
         for role in missing:
             if len(new.active_roles()) >= limit or held:
                 break
-            new.lines[role] = new.track.make(self.performer._block_for(role), self.performer.rng)
+            new.lines[role] = new.track.make(self.performer._block_for(role, new.track), self.performer.rng)
             landing.append(role)
         if not landing or not self._type_ok([new.statement(r) for r in landing]):
             return program, []

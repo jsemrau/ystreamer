@@ -77,8 +77,9 @@ LLAMA_SERVER_LOG = _env("LLAMA_SERVER_LOG", os.path.join(REPO_DIR, "logs", "llam
 # experts, in RAM), and any extra flags (e.g. "-fa on --cache-type-k q8_0").
 # The channel's name, shown on the stream page, the poster and the channel art.
 CHANNEL_NAME = _env("YS_CHANNEL_NAME", "InfiniTrance")
-# The new trance supersaw (tidal/synthdefs.scd ys_hypersaw): off until you've
-# listened to it (python -m eval.sound_preview), then YS_HYPERSAW=1.
+# The saws done properly (tidal/synthdefs.scd: ys_hypersaw, the supersaw;
+# ys_sawlead; ys_sawpad): off until you've listened to them
+# (python -m eval.sound_preview, and --saws), then YS_HYPERSAW=1.
 HYPERSAW = _env("YS_HYPERSAW", "0") == "1"
 # The art director's surprises (music/surprises.py): at most one every N tracks.
 SURPRISE_EVERY = max(1, int(_env("YS_SURPRISE_EVERY", "2") or 2))

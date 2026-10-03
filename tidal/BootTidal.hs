@@ -6,7 +6,11 @@ import Sound.Tidal.Context
 import System.IO (hSetEncoding, stdout, utf8)
 hSetEncoding stdout utf8
 
-tidal <- startTidal (superdirtTarget {oLatency = 0.1, oAddress = "127.0.0.1", oPort = 57120}) (defaultConfig {cVerbose = True, cFrameTimespan = 1/20})
+-- oLatency: how far ahead of time each note is sent. 0.25 s rides out a
+-- stall of the machine (a big render next to the stream, swapping) that made
+-- notes arrive late at 0.1 ("late 0.06..0.1" in the log, heard as crackles);
+-- an edit is heard 0.15 s later, which nobody notices.
+tidal <- startTidal (superdirtTarget {oLatency = 0.25, oAddress = "127.0.0.1", oPort = 57120}) (defaultConfig {cVerbose = True, cFrameTimespan = 1/20})
 
 :{
 let only = (hush >>)

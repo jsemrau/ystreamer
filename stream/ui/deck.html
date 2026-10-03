@@ -22,11 +22,20 @@
     <div id="logo" class="channel-name" data-text="InfiniTrance">InfiniTrance</div>
     <div id="visbox" class="frame">
       <canvas id="vis" width="560" height="410"></canvas>
-      <!-- The dancer (stream/make_dancer.py): one clip per part of the arc. -->
+      <!-- The dancer (stream/make_dancer.py): one clip per part of the arc, some per style. -->
       <div id="dancer">
         <video data-clip="wave" src="dancer/wave.webm" muted loop playsinline preload="auto"></video>
         <video data-clip="dance" src="dancer/dance.webm" muted loop playsinline preload="auto"></video>
         <video data-clip="groove" src="dancer/groove.webm" muted loop playsinline preload="auto"></video>
+        <video data-clip="hakken" src="dancer/hakken.webm" muted loop playsinline preload="auto"></video>
+        <video data-clip="darkwave" src="dancer/darkwave.webm" muted loop playsinline preload="auto"></video>
+        <!-- No loop: she bows once at the start of the outro, then waves goodbye. -->
+        <video data-clip="wave2" src="dancer/wave2.webm" muted loop playsinline preload="auto"></video>
+        <video data-clip="breakdown" src="dancer/breakdown.webm" muted loop playsinline preload="auto"></video>
+        <video data-clip="breakdown2" src="dancer/breakdown2.webm" muted loop playsinline preload="auto"></video>
+        <video data-clip="rebuild" src="dancer/rebuild.webm" muted loop playsinline preload="auto"></video>
+        <video data-clip="trance" src="dancer/trance.webm" muted loop playsinline preload="auto"></video>
+        <video data-clip="bow" src="dancer/bow.webm" muted playsinline preload="auto"></video>
       </div>
       <div id="now"></div>
       <div id="arc"></div>

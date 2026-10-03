@@ -124,9 +124,10 @@ There are two options, and you can combine them:
 The choices are `lofi`, `ambient`, `downtempo`, `piano`, `deephouse`, `trance`,
 `techno` (138-150 BPM: pounding kick, offbeat rumble bass, 16th hats, acid,
 short electric-piano stabs), `hardcore` (160-185 BPM: the same kit with a
-distorted gabber kick) and `darkwave` (110-128 BPM cold electro / coldwave:
-a stiff 808 drum machine, a 16th-note sequencer bass, cold electric-piano
-or bell chords, pluck arpeggios lost in delay and a sparse glass line).
+distorted gabber kick) and `darkwave` (100-140 BPM coldwave / post-punk /
+minimal synth: a drum machine with a gated snare, a chorused bass or a
+16th-note sequencer bass, a chorused clean guitar arpeggio, string-machine
+chords, a cold square lead lost in delay).
 Each sets a tempo range, the modes it uses (e.g. minor or dorian for lofi),
 the default instruments and which layers come in first. `deephouse` is
 118-124 BPM with a four-on-the-floor kick, off-beat hats, short chord stabs
@@ -199,6 +200,18 @@ used for the whole run, even with the built-in planner:
 
 So `--theme "frankfurt deep house"` plays deep house, and the LLM uses the
 rest ("frankfurt") for mood and titles. `--style` always wins over the theme.
+
+**The style is the frame, the theme the details.** The style and its
+subgenre set the tempo, the drum kit, the bass, which parts play and how a
+track is built; the theme picks the sounds, the key, the titles and the mood
+inside that. Every sound has a character (`blocks.SOUND_CHARACTER`: the wave
+lead is dark, dreamy, melancholic, cinematic; the pluck bright, warm,
+dreamy), which the Director reads, and the built-in planner matches the
+theme's words against (`plan.THEME_MOODS`: "Vampyre Nights in London" asks
+for dark, "Summer sunrise in Ibiza" for bright and warm). The subgenre's own
+sounds come first; only when none of them fits the theme does a lead or arp
+reach for another style's voice (chords never do). No track repeats one of
+the last three tracks' sets of sounds.
 
 Combined, for example a fixed style with a mood brief:
 
@@ -296,6 +309,15 @@ live trance demo, translated to Tidal:
   delayed copies (they drag a chord's notes over the next chord); a lead
   doesn't play backwards (its passing notes would land on the beat); every
   part stays in its register.
+- **Melodies, not arpeggios:** bass, acid and arps play chord tones only.
+  A lead or keys line puts chord tones on the beats (steps 1/3/5/7 of 8,
+  1/5/9/13 of 16, read through `<[bar] [bar]>` phrases too) and may use the
+  scale's other notes between them as passing or neighbour notes: a step to
+  or from the note beside it, never held into the beat
+  (`livecode.harmony_problem`). `_` holds a note, so phrases can end on a
+  long one. The Director writes 2-4 bar calls and answers, develops the hook
+  at the peak instead of stripping it, and sees the last lead melodies so it
+  doesn't repeat them.
 
 Trance comes in **subgenres** (`blocks.SUBGENRES`), each with its own tempo,
 drum kit (hat and clap patterns), bass rhythm, sounds and voicings:
@@ -305,12 +327,74 @@ psy (142-146, galloping bass, busy hats, square-wave leads) and acid
 (134-140, the 303 up front, house piano). The Director picks one per track,
 a different one from the last.
 
+Darkwave has three, after She Past Away, Twin Tribes, Linea Aspera, Kalte
+Nacht, Rue Oberkampf, Kirlian Camera and Deus Ex Lumina. A subgenre also
+picks its bass and arp blocks (`"blocks"`):
+**post-punk** (128-140: the chorused bass carries the tune in 8ths, a
+jangly chorused guitar, a big gated snare), **minimal synth** (112-124: a
+16th-note analog sequencer bass, a dry drum machine with claps, a square
+lead) and **ethereal** (100-116: wide string machine and bells, a
+half-time gated snare, long reverb). Its voices are new SynthDefs:
+`ys_chorusbass` (picked bass through a chorus pedal), `ys_coldguitar`
+(clean single-coil guitar, chorused), `ys_coldstrings` (a Solina-style
+string ensemble built from triangles, not saws), `ys_gatesnare`, and two
+lingering wave synths: `ys_wavelead` (swells in, scoops up into the note, a
+vibrato that fades in, a long release) for the `wave_lead` line of long held
+notes, and `ys_wavesynth` (each note rings for seconds) for the `wave_arp`
+whose notes overlap into a wash. Those two blocks keep their own voice, and a
+track whose sound for the part is one of them brings in the line written for
+it. Hear them with `python -m eval.sound_preview --darkwave` (demos 5-10 in
+`recordings/preview/`).
+
+**Sample banks.** Besides Dirt-Samples, SuperDirt loads the project's own
+licensed banks from `samples/` (`tidal/superdirt_boot.scd`). Blocks that use
+them: `break_loop` (lofi, downtempo: a two-bar funk break stretched to two
+cycles with `loopAt`, so it slows and drops in pitch; the loop is locked once
+it plays), `foley_bed` (lofi, ambient: steady foley far behind), `electro_kit`
+(minimal-synth darkwave: the CPU electro 808, each part at the 808 kit's
+level via `amp`) and `guitar_shards` (darkwave: a Blood Sport guitar or noise
+hit every few bars). A sample's number is its place among the bank's audio
+files in SuperCollider's sort order; `tests/test_samples.py` checks every
+numbered sample exists.
+
 The **supersaw** (`ys_hypersaw`): seven band-limited saws with the JP-8000's
 detune curve, filtered, stereo, ducked under the kick (a `detune` knob from
 0.1 to 0.8). Listen before it goes on air: `python -m eval.sound_preview`
 renders four 8-bar demos to `recordings/preview/` (the supersaw on chords,
-as a lead, the old buzzy saw and today's house piano for comparison); then
-`YS_HYPERSAW=1` in `.env` lets uplifting trance use it.
+as a lead, the old buzzy saw and today's house piano for comparison). Two more
+saws done the same way: `ys_sawlead` (two band-limited saws 8 cents apart and
+one an octave down, a filter that opens on each note and settles, a scoop and
+a vibrato that fades in) and `ys_sawpad` (seven band-limited saws, a slowly
+breathing low-pass under 2.5 kHz, a slow swell); `--saws` renders them against
+today's square lead and soft pad and the old saw pad (demos 11-15). Then
+`YS_HYPERSAW=1` in `.env` puts them on air: the supersaw in uplifting trance,
+the saw lead in uplifting and psy trance and hardcore, the saw pad as a bed
+behind uplifting and progressive trance.
+
+**Lead voices.** Besides the bell, square, pluck and the darkwave voices,
+the melody can be sung by a breathy flute (`ys_flute`), a marimba, a sitar
+with a buzzing bridge, a vocal "aah" (`ys_vox`), a DX7-style FM lead, and the
+1990s signatures: the hoover (The Prodigy; with `YS_HYPERSAW=1`), M1 organ
+stabs on the chords, a nylon-string Balearic guitar (Chicane), a dub melodica
+(Thievery Corporation), a vibraphone (Nightmares on Wax, Yonderboi), a muted
+trumpet and a harpsichord (Massive Attack), and Rhodes or felt piano. Lofi,
+downtempo and ambient now have sound choices too, so the theme picks among
+these (a dub lounge gets melodica and vibes, a noir night harpsichord and
+trumpet). `python -m eval.sound_preview --leads` plays one melody on every
+voice (demos 18-34) and the M1 organ stabs (35).
+
+**Classic tracks as subgenres.** Trance's `balearic` (Chicane's
+"Saltwater": nylon guitar, supersaw stabs, and `ys_angelchoir`, an ethereal
+layered female choir singing long Celtic lines on its own `choir_lead`) and
+`lush` (C.J. Bolland's "Lush 3-5": a hypnotic 16th sequence under lush
+detuned pads, acid underneath); hardcore's `gabber` and `happy` (Charly
+Lownoise & Mental Theo's "Wonderful Days": piano, `ys_chipvox`, the sped-up
+chipmunk vocal, in a major key); deep house's `deep` and `piano house`
+(Guru Josh's "Infinity": M1 piano and organ, `ys_sax`). A subgenre may
+name its own modes (happy hardcore: major/mixolydian); the key moves to the
+nearest one (`plan.fit_mode`). The choir is a voice in the style of that
+music, not a copy of any singer; for a real voice with words, put licensed
+vocal samples in `samples/` or record a singer.
 
 The **progressions** come from [NRG-CP](https://doi.org/10.5281/zenodo.15304989)
 (WaivOps / Patchbanks, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)):
@@ -590,11 +674,17 @@ knob as a slider (moving ones move). On the right: the channel's name
 agent at work where her camera is. The arc's turning points get their moment:
 DROP (with a flash and a shake), BREAKDOWN, a new track. The logo glitches on
 every bar. In the visual dances a dancer (her clip follows the arc: she
-waves hello as a track builds, dances through the groove, gives it all at
-the peak, waves goodbye in the outro; each loop lasts a whole number of bars,
-and she jumps at the drop). The clips in `stream/ui/dancer/` are cut out of
-studio footage by `python -m stream.make_dancer <clip> <out.webm>` (the light
-backdrop made transparent, a rim of light added). `?moment=DROP` previews one. `YS_UI_PAGE=index.html` streams the
+waves hello as a track builds, dances through the groove, sways with her
+eyes closed in the breakdown, claps and crouches as it rebuilds, gives it all
+at the peak, and in the outro turns on one heel, bows once like a geisha and
+then waves goodbye; trance gets its hands-up peak, hardcore hakken, darkwave
+a slow gothic sway, and the chill styles no rave jumping or crouching; where
+a part has two takes (the hello, the breakdown), each track gets one of them;
+each loop lasts a whole number of bars, and she jumps at the drop). The clips in `stream/ui/dancer/`
+are cut out of studio footage (Wan 2.2 loops that start and end on one pose,
+`dance/`) by `python -m stream.make_dancer <clip> <out.webm> --box 0,0,480,832`
+(the light backdrop made transparent, a rim of light added; one `--box` for
+clips of one camera keeps her the same size in all of them). `?moment=DROP` previews one. `YS_UI_PAGE=index.html` streams the
 earlier look (wave field and the agents' feed), which also renders the
 thumbnail, banner and logo (`stream/thumbnail.py`).
 

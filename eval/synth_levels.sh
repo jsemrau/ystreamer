@@ -29,7 +29,15 @@ cat > "$OUT/render.scd" <<SC
   [\ys_supersaw, [69], 0.15], [\ys_supersaw, [57, 60, 64], 2], [\ys_kick, [36], 0.3], [\ys_gabber, [36], 0.3], [\ys_tbass, [33], 0.1],
   [\ys_gatesaw, [57, 60, 64], 3.4], [\ys_acid, [43], 0.08],
   [\ys_kick909, [36], 0.4], [\ys_riser, [60], 8], [\ys_impact, [36], 2],
-  [\ys_hypersaw, [69], 1], [\ys_hypersaw, [57, 60, 64], 2]
+  [\ys_hypersaw, [69], 1], [\ys_hypersaw, [57, 60, 64], 2],
+  [\ys_chorusbass, [45], 0.25], [\ys_coldguitar, [69], 0.5], [\ys_coldstrings, [62], 4],
+  [\ys_coldstrings, [50, 57, 62, 65], 4], [\ys_gatesnare, [60], 0.3],
+  [\ys_wavelead, [69], 1], [\ys_wavesynth, [69], 0.5], [\ys_pulselead, [69], 1],
+  [\ys_sawlead, [69], 1], [\ys_sawpad, [62], 4], [\ys_sawpad, [50, 57, 62, 65], 4], [\ys_softpad, [50, 57, 62, 65], 4],
+  [\ys_flute, [74], 1], [\ys_marimba, [74], 1], [\ys_sitar, [69], 1], [\ys_vox, [69], 1], [\ys_fmlead, [69], 1],
+  [\ys_hoover, [57], 0.5], [\ys_m1organ, [57, 60, 64, 67], 0.3], [\ys_nylon, [64], 1], [\ys_melodica, [69], 1],
+  [\ys_vibes, [72], 1], [\ys_trumpet, [67], 1], [\ys_harpsichord, [69], 1],
+  [\ys_sax, [67], 1], [\ys_angelchoir, [69], 2], [\ys_angelchoir, [57, 64, 69], 3], [\ys_chipvox, [76], 0.3]
 ];
 Routine {
   ~jobs.do { |job|

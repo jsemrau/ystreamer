@@ -18,6 +18,8 @@ import random
 import re
 from dataclasses import asdict, dataclass, field
 
+import config
+
 from . import presets as P
 from .blocks import LIVE_SOUNDS
 from .theory import (CHORD_COLORS, MODES, PROGRESSIONS_BY_NAME, Key, mode_chords, parse_progression,
@@ -98,9 +100,11 @@ STYLES = {
 # Techno and hardcore: a pounding four-on-the-floor kick, offbeat rumble,
 # 16th hats, acid and short stabs. They share trance's arranger presets; the
 # live engine has its own blocks for them (music/blocks.py).
-# Darkwave (cold electro / coldwave): minor keys, slow harmony, the sequencer
-# bass and drum machine carry it. Shares trance's arranger presets too.
-STYLES["darkwave"] = {**STYLES["trance"], "bpm": (110, 128), "cycles_per_chord": 2,
+# Darkwave (coldwave / post-punk / minimal synth): minor keys, slow harmony,
+# the bass and drum machine carry it (100-140 BPM over its subgenres:
+# ethereal 100-116 ... post-punk 128-140, blocks.SUBGENRES). Shares trance's
+# arranger presets too.
+STYLES["darkwave"] = {**STYLES["trance"], "bpm": (100, 140), "cycles_per_chord": 2,
                       "openers": [["bass"], ["drums", "bass"]],
                       "energy_order": ["bass", "drums", "pad", "arp", "melody", "texture", "keys"]}
 
@@ -108,6 +112,8 @@ for _name, _bpm in (("techno", (138, 150)), ("hardcore", (160, 185))):
     STYLES[_name] = {**STYLES["trance"], "bpm": _bpm, "cycles_per_chord": 2,
                      "openers": [["drums"], ["drums", "bass"]],
                      "energy_order": ["drums", "bass", "arp", "pad", "texture", "melody", "keys"]}
+# Happy hardcore is in major keys (its subgenre's modes keep gabber dark).
+STYLES["hardcore"]["modes"] = ["minor", "phrygian", "dorian", "major", "mixolydian"]
 
 # Sounds that aren't wanted: presets built on detuned saws (supersaw, gated
 # saw, the saw pad, saw strings, the saw-fed choir), the organ and the
@@ -290,15 +296,43 @@ class Arrangement:
 # Deterministic planners (always available; used when the LLM is off/failing)
 # ---------------------------------------------------------------------------
 
+def fit_mode(key: Key, modes: list[str] | None) -> Key:
+    """The key itself if its mode is allowed, else the allowed key sharing the
+    most notes with it (the same root first): A minor -> C major."""
+    if not modes or key.mode in modes:
+        return key
+    options = [Key(r, m) for m in modes for r in range(12)]
+    return max(options, key=lambda k: (len(k.pitch_classes & key.pitch_classes), k.root == key.root))
+
+
+def _mood_keys(options: list, moods: set[str], rng: random.Random) -> list:
+    """The keys among `options` in the modes the theme's moods lean to (most of
+    the time; now and then any, so a dark stream still breathes)."""
+    wanted = {m for mood in moods for m in MOOD_MODES.get(mood, ())}
+    themed = [k for k in options if k.mode in wanted]
+    return themed if themed and rng.random() < 0.8 else options
+
+
+def _title(rng: random.Random, moods: set[str]) -> str:
+    """Two words: from the theme's moods' title words where there are some."""
+    themed = [MOOD_TITLES[m] for m in sorted(moods) if m in MOOD_TITLES]
+    if themed and rng.random() < 0.85:
+        first, second = rng.choice(themed)
+        return f"{rng.choice(first)} {rng.choice(second)}"
+    return f"{rng.choice(TITLE_WORDS_A)} {rng.choice(TITLE_WORDS_B)}"
+
+
 def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | None = None,
                avoid_progressions: set[str] | None = None, target_minutes: float = 12.0,
-               disliked: set[str] | None = None) -> Piece:
+               disliked: set[str] | None = None, theme: str | None = None,
+               recent_sounds: list[dict] | None = None) -> Piece:
     """avoid_progressions: soft preference (e.g. recently used);
     disliked: excluded whenever any alternative exists."""
     disliked = set(disliked or ())
     rotation = [name for name, cfg in STYLES.items() if cfg.get("rotate", True)]
     style = style if style in STYLES else (previous.style if previous and rng.random() < 0.6 else rng.choice(rotation))
     cfg = STYLES[style]
+    moods = theme_moods(theme)
 
     if previous is not None:
         prev_key = Key.parse(previous.key)
@@ -309,9 +343,10 @@ def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | N
             candidates = [Key(r, m) for r in range(12) for m in cfg["modes"] if Key(r, m) != prev_key]
             best = max(len(prev_key.pitch_classes & k.pitch_classes) for k in candidates)
             options = [k for k in candidates if len(prev_key.pitch_classes & k.pitch_classes) == best]
-        key = rng.choice(options)
+        key = rng.choice(_mood_keys(options, moods, rng))
     else:
-        key = Key(rng.randrange(12), rng.choice(cfg["modes"]))
+        key = (rng.choice(_mood_keys([Key(r, m) for r in range(12) for m in cfg["modes"]], moods, rng)) if moods
+               else Key(rng.randrange(12), rng.choice(cfg["modes"])))
 
     from .blocks import SUBGENRES
 
@@ -319,6 +354,9 @@ def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | N
     variants = [v for v in SUBGENRES.get(style, {}) if not previous or v != previous.subgenre] or list(
         SUBGENRES.get(style, {}))
     variant = rng.choice(variants) if variants else ""
+    # A subgenre with its own modes (happy hardcore: major) moves the key to
+    # the nearest one of them.
+    key = fit_mode(key, SUBGENRES[style][variant].get("modes") if variant else None)
     lo, hi = SUBGENRES[style][variant]["bpm"] if variant else cfg["bpm"]
     bpm = float(rng.randint(lo, hi))
     if previous is not None and not variant:
@@ -335,20 +373,20 @@ def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | N
     progression = rng.choices(candidates, weights=[p.weight for p in candidates])[0]
 
     piece = Piece(
-        title=f"{rng.choice(TITLE_WORDS_A)} {rng.choice(TITLE_WORDS_B)}",
+        title=_title(rng, moods),
         style=style,
         key=key.name,
         bpm=bpm,
         progression=progression.name,
         cycles_per_chord=cfg["cycles_per_chord"],
-        mood=rng.choice(MOODS),
+        mood=rng.choice(sorted(moods)) if moods else rng.choice(MOODS),
         sections=[],
         seed=rng.randrange(1_000_000),
         subgenre=variant,
     )
     piece.sections = _default_sections(piece, target_minutes,
                                        avoid=[s.name for s in previous.sections] if previous else None)
-    _add_variety(piece, rng, avoid | disliked, previous)
+    _add_variety(piece, rng, avoid | disliked, previous, theme=theme, recent_sounds=recent_sounds)
     return piece
 
 
@@ -359,7 +397,8 @@ _NINTH_CHANCE = {"lofi": 0.6, "deephouse": 0.7, "downtempo": 0.5, "ambient": 0.5
 
 
 def _add_variety(piece: Piece, rng: random.Random, avoid: set[str] | None = None,
-                 previous: Piece | None = None) -> None:
+                 previous: Piece | None = None, theme: str | None = None,
+                 recent_sounds: list[dict] | None = None) -> None:
     """Give choruses and breakdowns their own progressions, pick a chord
     colour, and sometimes lift the final chorus a whole step."""
     mode = Key.parse(piece.key).mode
@@ -373,7 +412,7 @@ def _add_variety(piece: Piece, rng: random.Random, avoid: set[str] | None = None
         piece.section_progressions["bridge"] = piece.section_progressions["breakdown"]
     piece.color = "ninths" if rng.random() < _NINTH_CHANCE.get(piece.style, 0.5) else "sevenths"
     choose_instruments(piece, rng, previous)
-    choose_sounds(piece, rng, previous)
+    choose_sounds(piece, rng, previous, theme=theme, recent=recent_sounds)
     if piece.style in _LIFT_STYLES and rng.random() < 0.5:
         apply_key_lift(piece)
 
@@ -382,12 +421,36 @@ def _add_variety(piece: Piece, rng: random.Random, avoid: set[str] | None = None
 # Director picks from all of blocks.LIVE_SOUNDS). The chill styles keep their
 # blocks' own sounds unless the Director chooses.
 _CLUB_SOUNDS = {"chords": ["ys_housepiano", "ys_epiano"], "keys": ["ys_housepiano", "ys_epiano"],
-                "lead": ["ys_pulselead", "ys_glass"], "arp": ["ys_pluck", "ys_glass"]}
+                "lead": ["ys_pulselead", "ys_glass", "ys_fmlead"], "arp": ["ys_pluck", "ys_glass", "ys_fmlead"]}
 STYLE_SOUNDS = {
-    "trance": _CLUB_SOUNDS, "darkwave": _CLUB_SOUNDS, "techno": _CLUB_SOUNDS, "hardcore": _CLUB_SOUNDS,
-    "deephouse": {"chords": ["ys_epiano", "ys_housepiano"], "keys": ["ys_housepiano", "ys_epiano"],
-                  "lead": ["ys_glass", "ys_pulselead"], "arp": ["ys_pluck", "ys_glass"]},
+    "trance": _CLUB_SOUNDS, "techno": _CLUB_SOUNDS, "hardcore": _CLUB_SOUNDS,
+    "darkwave": {"chords": ["ys_coldstrings", "ys_glass"], "keys": ["ys_glass", "ys_epiano"],
+                 "lead": ["ys_wavelead", "ys_pulselead", "ys_coldguitar"],
+                 "arp": ["ys_wavesynth", "ys_coldguitar", "ys_pluck"]},
+    "deephouse": {"chords": ["ys_epiano", "ys_housepiano", "ys_m1organ"],
+                  "keys": ["ys_housepiano", "ys_epiano", "ys_marimba", "ys_vibes", "ys_m1organ"],
+                  "lead": ["ys_glass", "ys_pulselead", "ys_marimba", "ys_vox", "ys_trumpet", "ys_melodica"],
+                  "arp": ["ys_pluck", "ys_glass", "ys_marimba", "ys_vibes"]},
+    # The chill styles (Thievery Corporation, Nightmares on Wax, Yonderboi,
+    # Massive Attack): their blocks' own sound first, the 90s lounge, dub and
+    # trip-hop voices for the theme to choose from.
+    "lofi": {"lead": ["ys_keys", "ys_glass", "ys_vibes", "ys_melodica", "ys_trumpet", "ys_flute", "ys_nylon"],
+             "keys": ["ys_epiano", "ys_keys", "ys_vibes"],
+             "arp": ["ys_glass", "ys_vibes", "ys_nylon", "ys_harpsichord"]},
+    "downtempo": {"lead": ["ys_epiano", "ys_melodica", "ys_trumpet", "ys_vibes", "ys_flute", "ys_harpsichord",
+                           "ys_sitar"],
+                  "keys": ["ys_keys", "ys_vibes", "ys_epiano"],
+                  "arp": ["ys_pluck", "ys_nylon", "ys_vibes", "ys_harpsichord"]},
+    "ambient": {"lead": ["ys_glass", "ys_flute", "ys_vibes", "ys_vox"], "keys": ["ys_keys", "ys_vibes"],
+                "arp": ["ys_glass", "ys_vibes", "ys_nylon"]},
 }
+
+
+if config.HYPERSAW:
+    # Hardcore's lead: the saw lead (done properly) and the hoover as often as the square.
+    STYLE_SOUNDS["hardcore"] = {**_CLUB_SOUNDS, "lead": ["ys_sawlead", "ys_hoover", "ys_pulselead", "ys_glass"]}
+    STYLE_SOUNDS["techno"] = {**_CLUB_SOUNDS, "lead": [*_CLUB_SOUNDS["lead"], "ys_hoover"],
+                              "chords": [*_CLUB_SOUNDS["chords"], "ys_m1organ"]}
 
 
 def sounds_summary(sounds: dict[str, str]) -> str:
@@ -396,19 +459,123 @@ def sounds_summary(sounds: dict[str, str]) -> str:
                       for role, synth in sounds.items() if synth in LIVE_SOUNDS.get(role, {}))
 
 
-def choose_sounds(piece: Piece, rng: random.Random, previous: Piece | None = None) -> None:
-    """Pick the live engine's sound per part for this piece (the subgenre's
-    sounds first), not repeating the previous piece's where there's a choice."""
-    from .blocks import subgenre, subgenre_sounds
+# Theme words and the moods they ask for (blocks.SOUND_CHARACTER): the style
+# and subgenre set the frame, the theme picks the sounds inside it.
+THEME_MOODS = {
+    "dark": ("night", "midnight", "dark", "darkness", "vampire", "vampyre", "gothic", "goth", "blood", "shadow",
+             "shadows", "fog", "grave", "ghost", "haunted", "noir", "black", "crypt", "cathedral", "moon", "raven",
+             "abyss", "underground", "bunker"),
+    "cold": ("cold", "winter", "ice", "snow", "frost", "steel", "concrete", "berlin", "machine", "chrome", "glass"),
+    "melancholic": ("rain", "lonely", "sad", "tears", "lost", "longing", "memory", "memories", "farewell",
+                    "heartbreak", "autumn", "grey", "gray"),
+    "dreamy": ("dream", "dreams", "dreaming", "sleep", "space", "stars", "cosmic", "ocean", "cloud", "clouds",
+               "float", "floating", "study", "relax", "calm", "mist", "aurora", "nebula", "chill", "chillout"),
+    "warm": ("coffee", "cozy", "cosy", "home", "sunset", "soul", "jazz", "vinyl", "candle", "fireplace",
+             "summer", "evening", "love", "lounge", "bossa", "dub", "balearic", "cafe", "bar"),
+    "bright": ("sun", "sunny", "sunrise", "morning", "beach", "ibiza", "island", "gold", "golden", "happy",
+               "light", "spring", "sky"),
+    "euphoric": ("euphoric", "euphoria", "festival", "anthem", "hands", "rave", "uplifting", "heaven", "peak",
+                 "celebration", "party"),
+    "hard": ("hard", "warehouse", "industrial", "rage", "storm", "fire", "war", "riot", "gabber", "hardcore",
+             "speed", "rotterdam", "thunder"),
+    "retro": ("80s", "90s", "retro", "arcade", "neon", "vhs", "synthwave", "cassette", "8bit", "chiptune"),
+    "cinematic": ("film", "movie", "epic", "cinema", "saga", "legend", "cathedral", "odyssey", "journey"),
+    "mystic": ("goa", "india", "indian", "temple", "mystic", "mystical", "desert", "spiritual", "shaman", "monk",
+               "mantra", "bazaar", "kyoto", "zen", "sufi", "oracle", "incense", "lotus", "himalaya", "ancient",
+               "celtic", "irish", "gaelic", "ireland", "clannad", "enya", "highlands", "druid"),
+    "eerie": ("halloween", "spooky", "witch", "witches", "witching", "pumpkin", "zombie", "skeleton", "skull",
+              "horror", "haunted", "ghost", "creepy", "monster", "coffin", "seance", "cemetery", "graveyard",
+              "phantom", "specter", "spectre", "banshee", "werewolf", "samhain", "hex", "curse", "cursed",
+              "wicked", "occult", "ritual", "trick", "treat"),
+}
+
+# The modes each mood leans to (when the style allows them), brightest first
+# among them; the built-in planner prefers them for the key.
+MOOD_MODES = {
+    "dark": ("phrygian", "minor"), "eerie": ("phrygian", "minor"), "cold": ("minor", "phrygian"),
+    "hard": ("phrygian", "minor"), "melancholic": ("minor", "dorian"), "dreamy": ("lydian", "major", "dorian"),
+    "warm": ("major", "mixolydian", "dorian"), "bright": ("major", "lydian", "mixolydian"),
+    "euphoric": ("minor", "major", "dorian"), "retro": ("minor", "dorian"), "cinematic": ("minor", "phrygian"),
+    "mystic": ("phrygian", "dorian"),
+}
+# Title words per mood (first word, second word), for the built-in planner's titles.
+MOOD_TITLES = {
+    "eerie": (["Witching", "Phantom", "Hollow", "Haunted", "Crimson", "Spectral", "Cursed", "Moonlit", "Wicked",
+               "Lantern"],
+              ["Hour", "Pumpkins", "Graves", "Masks", "Crypts", "Spirits", "Bones", "Moon", "Ritual", "Carnival"]),
+    "dark": (["Midnight", "Obsidian", "Shadow", "Black", "Crimson", "Nocturnal", "Velvet", "Ashen"],
+             ["Cathedral", "Veil", "Fog", "Thorns", "Ravens", "Streets", "Rites", "Eclipse"]),
+    "bright": (["Golden", "Sunlit", "Morning", "Bright", "Amber", "Coral"],
+               ["Horizon", "Shores", "Skies", "Islands", "Days", "Waves"]),
+    "euphoric": (["Endless", "Rising", "Infinite", "Electric", "Burning", "Higher"],
+                 ["Hearts", "Lights", "Hands", "Skies", "Anthem", "Signal"]),
+    "dreamy": (["Drifting", "Distant", "Silver", "Slow", "Floating", "Quiet"],
+               ["Stars", "Clouds", "Dreams", "Tides", "Echoes", "Nebula"]),
+    "cold": (["Frozen", "Steel", "Glass", "Chrome", "Winter", "Pale"],
+             ["Machines", "Rooms", "Signals", "Grids", "Static", "Lines"]),
+}
+
+
+def theme_moods(theme: str | None) -> set[str]:
+    """The moods a free-text theme asks for, e.g. "Vampyre Nights in London" -> {"dark"}."""
+    words = set(re.findall(r"[a-z0-9]+", (theme or "").lower()))
+    words |= {w[:-1] for w in words if w.endswith("s")}          # nights -> night
+    return {mood for mood, cues in THEME_MOODS.items() if words & set(cues)}
+
+
+def choose_sounds(piece: Piece, rng: random.Random, previous: Piece | None = None, theme: str | None = None,
+                  recent: list[dict] | None = None) -> None:
+    """Pick the live engine's sound per part for this piece. The style and
+    subgenre give the frame (the sounds on offer, the subgenre's first); the
+    theme picks among them by the sounds' character, and reaches for another
+    of the part's sounds only when the frame has none in its mood. No part
+    repeats the previous track's sound, and the whole set is never one of
+    the last tracks' sets, where there's a choice."""
+    from .blocks import SOUND_CHARACTER, subgenre, subgenre_sounds
 
     piece.sounds = {}
     preferred = subgenre_sounds(piece.style, piece.subgenre)
     voicings = subgenre(piece.style, piece.subgenre).get("voicings")
     if voicings:
         piece.voicing = rng.choice(voicings)
-    for role, options in {**STYLE_SOUNDS.get(piece.style, {}), **preferred}.items():
-        fresh = [o for o in options if previous is None or o != previous.sounds.get(role)] or options
-        piece.sounds[role] = rng.choice(fresh)
+    moods = theme_moods(theme)
+    style_sounds = STYLE_SOUNDS.get(piece.style, {})
+
+    def fits(synth: str) -> bool:
+        return bool(moods & set(SOUND_CHARACTER.get(synth, ())))
+
+    choices: dict[str, list[str]] = {}
+    for role in dict.fromkeys([*style_sounds, *preferred]):
+        frame = [o for o in dict.fromkeys([*(preferred.get(role) or []), *style_sounds.get(role, [])])
+                 if o in LIVE_SOUNDS.get(role, {})] or preferred.get(role) or style_sounds.get(role, [])
+        if previous is not None and previous.sounds.get(role) and len(frame) > 1:
+            frame = [o for o in frame if o != previous.sounds[role]] or frame
+        themed = [o for o in frame if fits(o)]
+        if moods and not themed and role in ("lead", "arp"):
+            # Nothing in the theme's mood here: any lead or arp sound that is
+            # (a melodic line works with any voice; chord stabs don't).
+            themed = [o for o in LIVE_SOUNDS.get(role, {}) if fits(o)
+                      and (previous is None or o != previous.sounds.get(role))]
+        if themed and rng.random() < 0.85:
+            choices[role] = themed
+        else:
+            choices[role] = [o for o in frame if o in (preferred.get(role) or frame)] or frame
+        piece.sounds[role] = rng.choice(choices[role])
+    # Not a set a recent track played: change one part, the theme's choices
+    # first, then any of the part's sounds in the frame.
+    recent_sets = [r for r in (recent or []) if r]
+    if any(piece.sounds == r for r in recent_sets):
+        roles = list(choices)
+        rng.shuffle(roles)
+        options = [(role, alt) for pool in ("theme", "frame") for role in roles
+                   for alt in (choices[role] if pool == "theme" else
+                               [o for o in LIVE_SOUNDS.get(role, {}) if o in style_sounds.get(role, [])
+                                or o in (preferred.get(role) or [])])
+                   if alt != piece.sounds[role]]
+        for role, alt in options:
+            if not any({**piece.sounds, role: alt} == r for r in recent_sets):
+                piece.sounds[role] = alt
+                break
 
 
 def choose_instruments(piece: Piece, rng: random.Random, previous: Piece | None = None) -> None:
@@ -671,6 +838,15 @@ def validate_cue(raw, style: str) -> tuple[dict | None, str]:
         return None, "a cue is a sentence or {do, part, ...}"
     say = " ".join(str(raw.get("say") or "").split())[:90]
     do = str(raw.get("do", "")).strip().lower()
+    # A cue that names a surprise ({"do": "wrap", "wrap": "key_lift"}): the
+    # surprise plays itself at its moment, so it's marked here and resolved
+    # once the track's surprise is chosen (resolve_surprise_cues).
+    from .surprises import SURPRISES
+
+    named = next((str(v).strip().lower() for v in (raw.get("surprise"), raw.get("wrap"), raw.get("name"), do)
+                  if str(v or "").strip().lower() in SURPRISES), None)
+    if named or do == "surprise":
+        return {"surprise": named or "", "say": say}, ""
     part = CUE_PARTS.get(str(raw.get("part", "")).strip().lower(), str(raw.get("part", "")).strip().lower())
     blocks = [b for b in BLOCKS.get(style, []) if b.role == part]
     if do not in CUE_ACTIONS:
@@ -750,6 +926,27 @@ def validate_cue(raw, style: str) -> tuple[dict | None, str]:
     elif cue is not None:
         cue["say"] = say
     return cue, "; ".join(problems)
+
+
+def resolve_surprise_cues(piece: "Piece") -> list[str]:
+    """Take out the cues that name a surprise (validate_cue marks them): the
+    track's own surprise plays by itself at its moment, so its cue goes
+    quietly; one for another surprise can't happen (a track has one), so it
+    goes with a note. Returns the notes."""
+    notes = []
+    for phase, cues in list((piece.cues or {}).items()):
+        kept = []
+        for cue in cues:
+            if "surprise" not in cue:
+                kept.append(cue)
+            elif cue["surprise"] and cue["surprise"] != piece.surprise:
+                notes.append(f"cue {phase}: {cue['surprise']} isn't this track's surprise "
+                             f"({piece.surprise or 'none'}); dropped")
+        if kept:
+            piece.cues[phase] = kept
+        else:
+            piece.cues.pop(phase, None)
+    return notes
 
 
 def validate_cues(raw, style: str = "trance") -> tuple[dict[str, list[dict]], list[str]]:
@@ -1132,7 +1329,7 @@ def director_vocabulary(style: str | None) -> dict:
     """What the Director may choose from for a piece: the style's tempo and
     modes, the chords each mode allows for written progressions (with a few
     examples), the live sounds, and which parts can carry a hook."""
-    from .blocks import BLOCKS, STYLE_SETTINGS, SUBGENRES, hook_kinds, sketch_kinds, subgenre_sounds
+    from .blocks import BLOCKS, SOUND_CHARACTER, STYLE_SETTINGS, SUBGENRES, hook_kinds, sketch_kinds, subgenre_sounds
     from .livecode import FX_RANGES, PF_RANGES, ROLE_FX, TRANCE_VOICINGS, line_controls
 
     styles = [style] if style in STYLES else list(STYLES)
@@ -1152,9 +1349,14 @@ def director_vocabulary(style: str | None) -> dict:
         "example_progressions": {m: [p.name for p in progressions_for(m)][:6] for m in modes},
         "section_types": SECTION_TYPES,
         "sounds": LIVE_SOUNDS,
+        # What each sound feels like, so the theme can choose among them.
+        "sound_character": {synth: ", ".join(SOUND_CHARACTER[synth]) for role in LIVE_SOUNDS.values()
+                            for synth in role if synth in SOUND_CHARACTER},
         "hook_parts": {s: hook_kinds(s) for s in styles},
         "sketch_parts": {s: sketch_kinds(s) for s in styles},
-        "subgenres": {s: {n: f"{v['bpm'][0]}-{v['bpm'][1]} BPM; {v['about']}; sounds: "
+        "subgenres": {s: {n: f"{v['bpm'][0]}-{v['bpm'][1]} BPM"
+                             + (f", modes {'/'.join(v['modes'])}" if v.get("modes") else "")
+                             + f"; {v['about']}; sounds: "
                              + ", ".join(f"{r} {'/'.join(o)}" for r, o in subgenre_sounds(s, n).items())
                           for n, v in SUBGENRES.get(s, {}).items()} for s in styles if SUBGENRES.get(s)},
         "blocks": {s: block_catalogue(s) for s in styles},

@@ -47,31 +47,108 @@ TRANCE_GATES = [trance_gate(45, 1.0), trance_gate(116, 1.0), trance_gate(99, 1.5
                 trance_gate(107, 1.0, cycles=2), trance_gate(8, 1.5, cycles=2)]
 
 # The sounds the Director picks from, per part, for each track: the toolkit of
-# 1990s trance and house, without saws or organ. The chosen sound replaces the
+# 1990s trance and house, without saws or organ, and darkwave's string
+# machine and chorused guitar. The chosen sound replaces the
 # synth of whichever block plays that part.
 LIVE_SOUNDS = {
     "chords": {"ys_housepiano": "M1-style house piano chords",
                "ys_epiano": "DX7 / Rhodes electric piano chords",
-               "ys_glass": "DX7-style bell chords"},
-    "keys": {"ys_housepiano": "M1-style house piano stabs",
+               "ys_glass": "DX7-style bell chords",
+               "ys_coldstrings": "string machine (Solina) chords, darkwave",
+               "ys_m1organ": "M1 organ stabs (Robin S, 90s house and rave)"},
+    "keys": {"ys_marimba": "marimba: woody mallet, short and bright (Balearic)",
+             "ys_vibes": "vibraphone: metal bars, long ring, motor tremolo (Thievery Corporation, Nightmares on Wax)",
+             "ys_harpsichord": "harpsichord: bright quill pluck (Massive Attack's Teardrop)",
+             "ys_m1organ": "M1 organ stabs (90s house and rave)",
+             "ys_housepiano": "M1-style house piano stabs",
              "ys_epiano": "DX7 / Rhodes electric piano",
              "ys_keys": "felt piano"},
     "lead": {"ys_pulselead": "square-wave trance lead",
              "ys_glass": "DX7-style bell lead",
-             "ys_pluck": "plucked lead"},
+             "ys_pluck": "plucked lead",
+             "ys_coldguitar": "chorused clean guitar melody, post-punk",
+             "ys_wavelead": "lingering wave lead: swells in, glides, slow vibrato, rings out long (darkwave)",
+             "ys_flute": "breathy flute: pan flute with a soft chiff and a late vibrato (90s Ibiza, Enigma)",
+             "ys_marimba": "marimba: woody mallet, short and bright (Balearic, progressive)",
+             "ys_sitar": "sitar: twangy string with a buzzing bridge, slides into each note (Goa, psy)",
+             "ys_vox": "vocal lead: a voice singing aah into ooh (Delerium, 90s trance)",
+             "ys_fmlead": "FM lead: DX7, bright on the attack then hollow, like a digital clarinet",
+             "ys_epiano": "Rhodes melody: warm, soulful (Nightmares on Wax, Axelle Red)",
+             "ys_keys": "felt piano melody: soft, intimate",
+             "ys_nylon": "nylon-string guitar: warm Balearic pluck (Chicane)",
+             "ys_melodica": "melodica: nasal dub reed (Thievery Corporation, Augustus Pablo)",
+             "ys_vibes": "vibraphone: metal bars, long ring, motor tremolo (lounge, Yonderboi)",
+             "ys_trumpet": "muted trumpet: jazz, a harmon mute's bite (Yonderboi, lounge)",
+             "ys_harpsichord": "harpsichord: bright quill pluck (Massive Attack's Teardrop)",
+             "ys_sax": "saxophone: a soaring, bending sax (Guru Josh's Infinity)",
+             "ys_angelchoir": "angel choir: ethereal layered female voices on long notes (Chicane's Saltwater, Celtic)",
+             "ys_chipvox": "sped-up chipmunk vocal: a bright sung ya (happy hardcore, Wonderful Days)",
+             "ys_housepiano": "house piano melody (happy hardcore, piano house)"},
     "arp": {"ys_pluck": "plucked arp (Balearic / Cafe del Mar)",
             "ys_glass": "bell arp",
-            "ys_pulselead": "square-wave arp"},
+            "ys_pulselead": "square-wave arp",
+            "ys_coldguitar": "chorused clean guitar arpeggio, post-punk",
+            "ys_wavesynth": "wave synth arpeggio: each note rings for seconds into a shifting wash (darkwave)",
+            "ys_marimba": "marimba arpeggio: woody, bouncing (Balearic)",
+            "ys_sitar": "sitar arpeggio: twangy, buzzing (Goa, psy)",
+            "ys_fmlead": "FM arpeggio: bright digital plucks (DX7)",
+            "ys_nylon": "nylon guitar arpeggio: Balearic (Chicane)",
+            "ys_vibes": "vibraphone arpeggio: lounge, ringing",
+            "ys_harpsichord": "harpsichord arpeggio: baroque, dark (Massive Attack)"},
     # (ys_hypersaw, the trance supersaw, joins chords, lead and arp below
     # when config.HYPERSAW is on.)
     # Atmosphere only: quiet, far behind the chords and the lead.
     "texture": {"ys_air": "airy breath, far in the background",
-                "ys_softpad": "soft pad bed, far in the background"},
+                "ys_softpad": "soft pad bed, far in the background",
+                "ys_angelchoir": "angel choir bed: ethereal female voices, far behind"},
 }
+# The saws done properly (band-limited, filtered: ys_hypersaw, ys_sawlead,
+# ys_sawpad) go on air once they've been heard (eval.sound_preview --saws).
 if config.HYPERSAW:
     LIVE_SOUNDS["chords"]["ys_hypersaw"] = "trance supersaw chords (seven detuned saws)"
     LIVE_SOUNDS["lead"]["ys_hypersaw"] = "trance supersaw lead"
     LIVE_SOUNDS["arp"]["ys_hypersaw"] = "supersaw arp"
+    LIVE_SOUNDS["lead"]["ys_sawlead"] = "saw lead: two band-limited saws, the filter opening on each note (90s trance, hardcore)"
+    LIVE_SOUNDS["texture"]["ys_sawpad"] = "lush saw pad bed (seven band-limited saws, dark), behind everything"
+    LIVE_SOUNDS["lead"]["ys_hoover"] = "the hoover: swooping detuned saws (The Prodigy, 90s rave and hardcore)"
+
+
+# Each sound's character, so the theme can choose among the sounds the style
+# allows (the style sets the frame, the theme the details): the Director reads
+# the words, the built-in planner matches the moods against the theme's words
+# (plan.THEME_MOODS).
+SOUND_CHARACTER = {
+    "ys_housepiano": ("bright", "warm", "euphoric", "retro"),
+    "ys_epiano": ("warm", "dreamy", "retro"),
+    "ys_glass": ("dreamy", "cold", "bright", "eerie"),             # a music box, in the dark
+    "ys_keys": ("warm", "melancholic", "dreamy"),
+    "ys_coldstrings": ("dark", "cold", "melancholic", "cinematic", "eerie"),
+    "ys_pulselead": ("bright", "retro", "hard"),
+    "ys_pluck": ("bright", "warm", "dreamy"),
+    "ys_coldguitar": ("dark", "melancholic", "cold"),
+    "ys_wavelead": ("dark", "dreamy", "melancholic", "cinematic", "eerie"),   # scoop and vibrato: a theremin
+    "ys_wavesynth": ("dreamy", "dark", "cold", "eerie"),
+    "ys_air": ("dreamy", "cold", "eerie"),
+    "ys_softpad": ("warm", "dreamy"),
+    "ys_hypersaw": ("euphoric", "bright", "hard"),
+    "ys_sawlead": ("hard", "euphoric", "retro"),
+    "ys_sawpad": ("euphoric", "cinematic", "warm"),
+    "ys_flute": ("dreamy", "warm", "mystic", "melancholic"),
+    "ys_marimba": ("bright", "warm", "dreamy"),
+    "ys_sitar": ("mystic", "hard", "bright"),
+    "ys_vox": ("euphoric", "dreamy", "cinematic", "mystic", "eerie"),
+    "ys_fmlead": ("bright", "retro", "cold"),
+    "ys_hoover": ("hard", "retro", "euphoric"),
+    "ys_m1organ": ("euphoric", "retro", "warm"),
+    "ys_nylon": ("warm", "bright", "dreamy", "melancholic"),
+    "ys_melodica": ("warm", "melancholic", "mystic"),
+    "ys_vibes": ("dreamy", "warm", "retro"),
+    "ys_trumpet": ("melancholic", "warm", "cinematic", "dark"),
+    "ys_harpsichord": ("dark", "melancholic", "cinematic", "eerie"),
+    "ys_sax": ("warm", "euphoric", "retro", "melancholic"),
+    "ys_angelchoir": ("dreamy", "mystic", "cinematic", "euphoric", "eerie"),
+    "ys_chipvox": ("euphoric", "bright", "retro"),
+}
 
 
 # Parts that can carry the Director's hook, and how their tune slot looks in
@@ -117,6 +194,9 @@ class Block:
     drums: bool = False
     # Degree pool for mutating melodic patterns (numbers the performer may use).
     pool: list[int] = field(default_factory=list)
+    # A block built around its voice (its patterns are written for it) keeps
+    # that voice whatever sound the track picked for the part.
+    keep_sound: bool = False
 
     def hook_slot(self) -> tuple[str, str] | None:
         """(slot, kind) of the pattern that carries this block's tune, or None:
@@ -174,7 +254,7 @@ class Block:
         own = {mix.synth_of(body), *(self.patterns.get("synth") or [])}
         # Only a block that already plays one of the part's sounds changes: the
         # vinyl crackle stays vinyl, the high acid line stays acid.
-        if sound in palette and own & set(palette) and not self.drums:
+        if sound in palette and own & set(palette) and not self.drums and not self.keep_sound:
             if "synth" in patterns:
                 patterns["synth"] = sound
             else:
@@ -215,6 +295,26 @@ def _melodic(name, role, synth, pattern_slot, variants, fx, octave="", pool=None
     # melodies may pass through other scale notes between the strong steps.
     default_pool = [0, 2, 4, 6, 7] if role in ("bass", "acid") else [0, 1, 2, 3, 4, 5, 7]
     return Block(name, role, body, {pattern_slot: variants}, fx=fx, pool=pool or default_pool, **kw)
+
+
+# Samples from the project's own banks (samples/, loaded by superdirt_boot.scd;
+# SuperDirt numbers a bank's audio files in SuperCollider's sort order).
+# Funk breaks, two bars at 93-108 BPM each, stretched to two cycles (loopAt), so
+# they slow down and drop in pitch at lofi tempos. They measure -12 to -17 LUFS;
+# amp 0.29 puts them at the dusty kit's -17 LUFS (Funky Drummer 2 dB above).
+BREAK_LOOPS = ["break:3", "break:9", "break:18", "break:22"]   # Funky Drummer, King Of The Beats, A Funky Song, It's A New Day
+
+
+def _break_loop() -> Block:
+    return Block("break_loop", "beat", 'loopAt 2 $ chop 16 $ s "{loop}" # amp 0.29', {"loop": BREAK_LOOPS},
+                 fx=[["gain", "0.92"], ["lpf", "5000"]], drums=True)
+
+
+def _foley_bed() -> Block:
+    """Steady foley (air, hiss, rain-like: loudness range under 3.5 LU), far behind."""
+    return Block("foley_bed", "texture", 'slow 2 $ s "{foley}" # amp 0.07',
+                 {"foley": ["foley:157", "foley:172", "foley:227"]},
+                 fx=[["gain", "0.9"], ["room", "0.5"], ["lpf", "6000"]], drums=True)
 
 
 BLOCKS: dict[str, list[Block]] = {
@@ -326,10 +426,13 @@ BLOCKS: dict[str, list[Block]] = {
               {"stab": TRANCE_GATES + ["~ t ~ t ~ t ~ t"]},
               fx=[["gain", "0.8"], ["legato", "0.7"], ["room", "0.3"], ["lpf", "(slow 16 $ range 2500 4500 sine)"]],
               wrappers=['(|* gain "[0.67 0.91 1 1]*4")']),
+        # Melodies, not arpeggios: steps with passing notes between the beats,
+        # a call and its answer, long held notes (_) to close a phrase.
         _melodic("glass_lead", "lead", "ys_glass", "melody",
-                 ["0 ~ ~ 2 ~ ~ 4 ~", "4 ~ 2 ~ 0 ~ ~ ~", "7 ~ ~ 4 ~ 2 ~ 0",
-                  "<[0 ~ ~ 2 ~ ~ 4 ~] [4 ~ ~ 2 ~ ~ 7 ~]>", "<[7 ~ 4 ~ 2 ~ 0 ~] [4 ~ 2 ~ 0 ~ -1 ~]>",
-                  "<[0 ~ 4 ~ 7 ~ 4 ~] [9 ~ 7 ~ 4 ~ 2 ~] [7 ~ 4 ~ 2 ~ 0 ~] [2 ~ 4 ~ -1 ~ ~ ~]>"],
+                 ["0 ~ ~ 2 ~ ~ 4 ~", "4 3 2 ~ 0 _ _ ~", "7 ~ ~ 4 ~ 2 ~ 0",
+                  "<[4 3 2 ~ 0 _ _ ~] [2 ~ 4 5 4 _ 2 ~]>", "<[7 _ 6 ~ 4 ~ 2 3] [4 _ _ ~ 2 ~ 0 ~]>",
+                  "<[0 ~ 2 3 4 _ _ ~] [7 ~ 6 ~ 4 3 2 ~] [4 ~ 2 ~ 0 _ 2 ~] [-1 _ 0 _ _ ~ ~ ~]>",
+                  "[4 _ _ 3 2 _ 0 _ 2 _ _ 3 4 _ _ _]"],
                  [["gain", "1.05"], ["lpf", "4500"], ["room", "0.4"], ["delay", "0.3"], ["delaytime", "0.33"],
                   ["delayfeedback", "0.35"]], octave=" + 12",
                  wrappers=['(|* gain "[0.67 0.91 1 1]*4")']),
@@ -340,6 +443,16 @@ BLOCKS: dict[str, list[Block]] = {
                   ["delayfeedback", "0.3"], ["pan", "(slow 4 $ range 0.3 0.7 sine)"]],
               pfs=[["acid", "(slow 12 $ range 0.3 0.65 cosine)"]],
               wrappers=['(|* gain "[0.67 0.91 1 1]*4")'], pool=[0, 2, 4, 6, 7, 9, 11]),
+        # The angel choir's line: long Celtic notes (pentatonic steps, a grace
+        # note into a held one), the way Moya Brennan's voice floats over
+        # "Saltwater"; written for the choir, so it keeps its voice.
+        _melodic("choir_lead", "lead", "ys_angelchoir", "melody",
+                 ["<[4 _ _ _ 2 _ 0 _] [2 _ _ _ ~ ~ ~ ~] [4 _ _ 5 4 _ 2 _] [0 _ _ _ _ _ ~ ~]>",
+                  "<[0 _ _ _ 2 _ 4 _] [7 _ _ _ _ _ ~ ~] [4 _ _ _ 2 _ _ 1] [0 _ _ _ _ _ ~ ~]>",
+                  "<[7 _ _ _ 4 _ _ _] [2 _ 4 _ 2 _ 0 _] [-1 _ _ _ 0 _ _ _] [0 _ _ _ _ _ ~ ~]>"],
+                 [["gain", "0.9"], ["legato", "1.2"], ["lpf", "6000"], ["room", "0.7"], ["size", "0.95"],
+                  ["delay", "0.35"], ["delaytime", "0.5"], ["delayfeedback", "0.4"]],
+                 pool=[0, 2, 4, 7, -1], keep_sound=True),
         # Switch Angel's trancearp: 16ths running through the voicing's notes.
         Block("pluck_16", "arp",
               'n (scale "{mode}" ("<{arp}>*16" |+ "<{roots}>") {root} + 12) # s "ys_pluck"',
@@ -350,7 +463,7 @@ BLOCKS: dict[str, list[Block]] = {
         Block("soft_bed", "texture", 'n (scale "{mode}" "<{chords}>" {root}) # s "ys_softpad"', {},
               fx=[["gain", "0.6"], ["legato", "1.1"], ["lpf", "1800"], ["room", "0.6"], ["size", "0.9"]]),
         Block("air", "texture", 'n (scale "{mode}" "<{roots}>" {root} - 12) # s "ys_air"', {},
-              fx=[["gain", "0.92"], ["hpf", "200"], ["legato", "1.3"], ["room", "0.7"]]),
+              fx=[["gain", "0.92"], ["hpf", "200"], ["legato", "1.3"], ["room", "0.7"]], keep_sound=True),
     ],
     # --------------------------------------------------------------- ambient
     "ambient": [
@@ -376,7 +489,7 @@ BLOCKS: dict[str, list[Block]] = {
         Block("pulse", "beat", 's "{kick}"', {"kick": ["bd ~ ~ ~", "bd ~ ~ ~ ~ ~ ~ ~"]},
               fx=[["gain", "0.85"], ["lpf", "2500"], ["room", "0.3"]], drums=True),
         Block("air", "texture", 'n (scale "{mode}" "<{roots}>" {root} - 12) # s "ys_air"', {},
-              fx=[["gain", "0.92"], ["hpf", "200"], ["legato", "1.3"], ["room", "0.7"]]),
+              fx=[["gain", "0.92"], ["hpf", "200"], ["legato", "1.3"], ["room", "0.7"]], keep_sound=True),
     ],
     # ----------------------------------------------------------------- piano
     "piano": [
@@ -424,6 +537,11 @@ BLOCKS: dict[str, list[Block]] = {
     ],
 }
 
+
+
+BLOCKS["lofi"] += [_break_loop(), _foley_bed()]
+BLOCKS["downtempo"].append(_break_loop())
+BLOCKS["ambient"].append(_foley_bed())
 
 
 def _techno_blocks(hard: bool) -> list[Block]:
@@ -479,27 +597,54 @@ def _techno_blocks(hard: bool) -> list[Block]:
 
 
 # ------------------------------------------------------------- darkwave
-# Cold electro / coldwave / minimal synth: a stiff drum machine, a 16th-note
-# sequencer bass, a cold string-machine bed, arpeggios lost in delay.
+# Darkwave / coldwave / post-punk / minimal synth (She Past Away, Twin Tribes,
+# Linea Aspera, Kalte Nacht, Rue Oberkampf, Kirlian Camera): a stiff drum
+# machine with a gated snare, a picked bass through a chorus pedal playing
+# the tune in 8ths (or a 16th-note sequencer bass), a chorused clean guitar
+# arpeggio, a string machine bed, a cold square lead lost in delay. The
+# subgenre picks the bass and the arp (SUBGENRES "blocks").
 BLOCKS["darkwave"] = [
     Block("drum_machine", "beat", 's "[{kick}, {snare}, {hats}]"',
           {"kick": ["808bd ~ 808bd ~", "808bd*4", "808bd ~ ~ 808bd ~ ~ 808bd ~"],
-           "snare": ["~ 808sd ~ 808sd", "~ cp ~ cp", "~ 808sd ~ [808sd cp]"],
+           "snare": ["~ ys_gatesnare ~ ys_gatesnare", "~ 808sd ~ 808sd", "~ cp ~ cp", "~ 808sd ~ [808sd cp]"],
            "hats": ["808hc*16", "808hc*8", "[~ 808hc]*8", "[808hc 808hc 808oh 808hc]*4"]},
           fx=[["gain", "0.95"], ["room", "0.2"], ["lpf", "7000"]], drums=True),
+    # Central Processing Unit's electro 808 (samples/cpu): each part at the level
+    # of the 808 kit above (amp; the kick is 10 dB hotter, the hat 10 dB quieter).
+    Block("electro_kit", "beat",
+          'stack [s "{kick}" # amp 0.13, s "{snare}" # amp 0.16, s "{handclap}" # amp 0.4, s "{hats}" # amp 1.26]',
+          {"kick": ["cpu:0 ~ cpu:0 ~", "cpu:0 ~ ~ cpu:0 ~ ~ cpu:0 ~", "cpu:0*4"],
+           "snare": ["~ cpu:2 ~ cpu:2", "~", "~ ~ ~ cpu:2"],
+           "handclap": ["~ cpu:3 ~ cpu:3", "~", "~ cpu:3 ~ [cpu:3 ~ ~ cpu:3]"],
+           "hats": ["cpu:4*16", "[~ cpu:4]*8", "cpu:4*8"]},
+          fx=[["gain", "0.95"], ["room", "0.15"], ["lpf", "8000"]], drums=True),
     _melodic("sequencer_bass", "bass", "ys_tbass", "rhythm",
              ["0*16", "[0 0 7 0]*4", "[0 ~ 0 7]*4", "[0 0 0 4]*4"],
              [["gain", "1.0"], ["lpf", "(slow 8 $ range 600 1400 sine)"], ["legato", "0.5"]], octave=" - 24",
              pool=[0, 7, 4, -3]),
+    # The post-punk bass: 8ths that carry the tune, octave and fifth jumps.
+    _melodic("chorus_bass", "bass", "ys_chorusbass", "rhythm",
+             ["0*8", "0 0 7 0 4 0 2 0", "0 0 0 0 4 4 2 2", "<[0 0 7 0 0 0 4 0] [0 0 7 0 4 2 0 -3]>"],
+             [["gain", "0.95"], ["lpf", "(slow 16 $ range 1400 3200 sine)"], ["legato", "0.8"]], octave=" - 24",
+             pool=[0, 2, 4, 7, -3]),
     Block("cold_chords", "chords", 'n (scale "{mode}" "<{chords}>" {root}) # s "{synth}"',
-          {"synth": ["ys_epiano", "ys_glass"]},
+          {"synth": ["ys_coldstrings", "ys_epiano", "ys_glass"]},
           fx=[["gain", "0.68"], ["legato", "1.05"], ["lpf", "(slow 16 $ range 1100 2400 sine)"], ["room", "0.5"],
               ["size", "0.8"]]),
-    _melodic("cold_arp", "lead", "ys_pluck", "melody",
+    _melodic("cold_arp", "lead", "ys_pulselead", "melody",
              ["0 2 4 7 4 2 0 2", "[0 4 7 4]*2", "7 4 2 0 ~ 0 2 4", "0 ~ 7 ~ 4 ~ 7 ~",
-              "<[0 ~ 7 ~ 4 ~ 7 ~] [2 ~ 9 ~ 7 ~ 4 ~]>"],
+              "<[0 ~ 7 ~ 4 ~ 7 ~] [2 ~ 9 ~ 7 ~ 4 ~]>", "<[4 ~ ~ 2 ~ ~ 0 ~] [-1 ~ ~ ~ 0 ~ ~ ~]>"],
              [["gain", "0.9"], ["lpf", "3500"], ["room", "0.4"], ["delay", "0.35"], ["delaytime", "0.375"],
               ["delayfeedback", "0.45"]], octave=" + 12", pool=[0, 2, 3, 4, 5, 7, 12]),
+    # The lingering wave lead: long held notes that swell, glide and ring on
+    # into the delay, a filter breathing slowly under them.
+    _melodic("wave_lead", "lead", "ys_wavelead", "melody",
+             ["4 ~ ~ ~ ~ ~ 2 ~", "0 ~ ~ ~ 4 ~ ~ ~", "<[7 ~ ~ ~ ~ ~ ~ ~] [4 ~ ~ ~ 2 ~ ~ ~]>",
+              "<[9 ~ ~ ~ 7 ~ ~ ~] [4 ~ ~ ~ ~ ~ ~ ~]>",
+              "<[4 ~ ~ ~ ~ ~ ~ ~] [2 ~ ~ ~ ~ ~ 0 ~] [-1 ~ ~ ~ ~ ~ ~ ~] [0 ~ ~ ~ ~ ~ ~ ~]>"],
+             [["gain", "0.9"], ["legato", "1.9"], ["lpf", "(slow 16 $ range 1200 3200 sine)"], ["room", "0.6"],
+              ["size", "0.9"], ["delay", "0.45"], ["delaytime", "0.375"], ["delayfeedback", "0.5"],
+              ["pan", "(slow 8 $ range 0.35 0.65 sine)"]], octave=" + 12", pool=[0, 2, 4, 7, 9, -1], keep_sound=True),
     _melodic("glass_line", "keys", "ys_glass", "melody",
              ["4 ~ ~ ~ 2 ~ ~ ~", "7 ~ ~ 4 ~ ~ 2 ~", "~ ~ 0 ~ ~ ~ 2 ~"],
              [["gain", "0.9"], ["room", "0.6"], ["delay", "0.4"], ["delaytime", "0.5"],
@@ -510,17 +655,38 @@ BLOCKS["darkwave"] = [
           fx=[["gain", "0.78"], ["lpf", "(slow 16 $ range 1200 4000 sine)"], ["delay", "0.4"],
               ["delaytime", "0.375"], ["delayfeedback", "0.5"], ["room", "0.4"], ["pan", "0.6"]],
           pool=[0, 2, 4, 7, 9]),
+    # The wave synth: 8ths through the chord whose notes ring for seconds, so
+    # they overlap into a slowly shifting wash, lost in a long delay.
+    Block("wave_arp", "arp",
+          'n (scale "{mode}" ("<{arp}>*8" |+ "<{roots}>") {root} + 12) # s "ys_wavesynth"',
+          {"arp": ["{up}", "{updown}", "0 ~ 4 ~ 7 ~ 4 ~", "0 4 7 9 7 4", "{pedal}"]},
+          fx=[["gain", "0.8"], ["lpf", "(slow 16 $ range 1500 4500 sine)"], ["delay", "0.4"], ["delaytime", "0.5"],
+              ["delayfeedback", "0.45"], ["room", "0.6"], ["size", "0.9"], ["pan", "(slow 12 $ range 0.3 0.7 sine)"]],
+          pool=[0, 2, 4, 7, 9], keep_sound=True),
+    # The chorused clean guitar: 8ths through the chord's notes, ringing on.
+    Block("guitar_arp", "arp",
+          'n (scale "{mode}" ("<{arp}>*8" |+ "<{roots}>") {root}) # s "ys_coldguitar"',
+          {"arp": ["{up}", "{updown}", "{pedal}", "0 4 7 4", "0 7 4 2"]},
+          fx=[["gain", "0.85"], ["legato", "1.5"], ["lpf", "(slow 16 $ range 2500 6000 sine)"], ["delay", "0.3"],
+              ["delaytime", "0.375"], ["delayfeedback", "0.35"], ["room", "0.45"], ["pan", "0.4"]],
+          pool=[0, 2, 4, 7, 9]),
     Block("soft_bed", "texture", 'n (scale "{mode}" "<{chords}>" {root}) # s "ys_softpad"', {},
           fx=[["gain", "0.6"], ["legato", "1.1"], ["lpf", "1800"], ["room", "0.6"], ["size", "0.9"]]),
     Block("static", "texture", 'n (scale "{mode}" "<{roots}>" {root} - 12) # s "ys_air"', {},
           fx=[["gain", "0.85"], ["hpf", "400"], ["legato", "1.3"], ["room", "0.8"]]),
+    # Blood Sport's guitar noise (samples/bsguitar, bsnoise): a shard every few
+    # bars, atonal (amp slaps, distortion, noisy guitar), -10 to -13 LUFS raw.
+    Block("guitar_shards", "perc", 's "{shard}" # amp 0.1',
+          {"shard": ["<~ ~ ~ bsguitar:5>", "<~ ~ bsnoise:2 ~>", "<~ ~ ~ [~ ~ ~ bsnoise:19]>",
+                     "<~ bsnoise:20 ~ ~ ~ ~ ~ bsguitar:5>"]},
+          fx=[["gain", "0.9"], ["room", "0.5"], ["hpf", "200"], ["pan", "0.35"]], drums=True),
 ]
 
 BLOCKS["techno"] = _techno_blocks(hard=False)
 BLOCKS["hardcore"] = _techno_blocks(hard=True)
 
 # Subgenres: a style's variants, each with its own tempo, drum kit (hat and
-# clap patterns), bass rhythms, preferred sounds and chord voicings, so
+# clap patterns), bass rhythms, preferred sounds and blocks, and chord voicings, so
 # tracks of one style don't all sound alike. The kit's patterns replace the
 # block's own variants for those slots (Block.make), and the Performer's drum
 # edits may use the kit's sounds. Hypersaw sounds only count when
@@ -533,8 +699,9 @@ SUBGENRES = {
             "kit": {"hats": ["[~ hh27]*4", "[~ hh27]*4, [~ ~ hh27 ~]*4", "[~ 808oh]*2 [~ hh27]*2"],
                     "clap": ["~ ~ ~ cp", "~ cp ~ cp"],
                     "rhythm": ["[~ 0]*4", "[~ 0 ~ 0]*4", "[~ 0 0 ~]*4"]},
-            "sounds": {"chords": ["ys_epiano", "ys_glass"], "lead": ["ys_glass", "ys_pluck"],
-                       "arp": ["ys_pluck", "ys_glass"]},
+            "sounds": {"chords": ["ys_epiano", "ys_glass"],
+                       "lead": ["ys_glass", "ys_pluck", "ys_flute", "ys_marimba", "ys_vox", "ys_nylon"],
+                       "arp": ["ys_pluck", "ys_glass", "ys_marimba", "ys_nylon"], "texture": ["ys_sawpad", "ys_softpad"]},
             "voicings": ["open triad", "spread triad", "triad"],
         },
         "uplifting": {
@@ -543,8 +710,9 @@ SUBGENRES = {
             "kit": {"hats": ["[~ 808oh]*4, hh*16", "[~ 808oh]*4"],
                     "clap": ["~ cp ~ cp", "~ cp ~ <cp cp cp [cp cp]>"],
                     "rhythm": ["[~ 0 0 0]*4", "[~ 0 0 0]*3 [~ 0 0 7]"]},
-            "sounds": {"chords": ["ys_hypersaw", "ys_housepiano"], "lead": ["ys_hypersaw", "ys_pulselead"],
-                       "arp": ["ys_pluck", "ys_glass"]},
+            "sounds": {"chords": ["ys_hypersaw", "ys_housepiano"],
+                       "lead": ["ys_hypersaw", "ys_sawlead", "ys_pulselead", "ys_vox", "ys_fmlead"],
+                       "arp": ["ys_pluck", "ys_glass"], "texture": ["ys_sawpad", "ys_softpad"]},
             "voicings": ["epic stack", "anthem", "add octave"],
         },
         "psy": {
@@ -554,7 +722,8 @@ SUBGENRES = {
             "kit": {"hats": ["hh*16", "[~ hh]*4, hh*16", "[hh hh 808oh hh]*4"],
                     "clap": ["~ cp ~ cp", "~"],
                     "rhythm": ["[~ 0 0 0]*4", "[~ 0 0 0]*3 [~ 0 7 0]"]},
-            "sounds": {"lead": ["ys_pulselead", "ys_glass"], "arp": ["ys_pulselead", "ys_pluck"],
+            "sounds": {"lead": ["ys_pulselead", "ys_sawlead", "ys_glass", "ys_sitar", "ys_fmlead"],
+                       "arp": ["ys_pulselead", "ys_pluck", "ys_sitar"],
                        "chords": ["ys_glass", "ys_epiano"]},
             "voicings": ["triad", "open triad"],
         },
@@ -564,9 +733,111 @@ SUBGENRES = {
             "kit": {"hats": ["[~ 808oh]*4", "[~ hh]*4, hh*8"],
                     "clap": ["~ cp ~ cp", "~ ~ ~ cp"],
                     "rhythm": ["[~ 0 0 0]*4", "[~ 0 ~ 0]*4"]},
-            "sounds": {"chords": ["ys_housepiano", "ys_epiano"], "lead": ["ys_glass", "ys_pulselead"],
+            "sounds": {"chords": ["ys_housepiano", "ys_epiano", "ys_m1organ"],
+                       "lead": ["ys_glass", "ys_pulselead", "ys_fmlead", "ys_hoover"],
                        "arp": ["ys_pluck"]},
             "voicings": ["triad", "add octave"],
+        },
+        "balearic": {
+            "about": "Chicane's Saltwater: Balearic trance at sunset, a nylon guitar, an ethereal choir of female "
+                     "voices singing long Celtic lines (pentatonic steps, held notes, a grace note into them), "
+                     "supersaw stabs, a long breakdown",
+            "bpm": (130, 136),
+            "modes": ["dorian", "minor"],
+            "kit": {"hats": ["[~ hh27]*4", "[~ 808oh]*4"], "clap": ["~ cp ~ cp", "~ ~ ~ cp"],
+                    "rhythm": ["[~ 0 0 0]*4", "[~ 0]*4"]},
+            "blocks": {"lead": ["choir_lead", "glass_lead"]},
+            "sounds": {"lead": ["ys_angelchoir", "ys_vox", "ys_nylon", "ys_flute"], "arp": ["ys_nylon", "ys_pluck"],
+                       "chords": ["ys_hypersaw", "ys_housepiano", "ys_glass"],
+                       "texture": ["ys_angelchoir", "ys_sawpad", "ys_softpad"]},
+            "voicings": ["open triad", "spread triad", "add octave"],
+        },
+        "lush": {
+            "about": "C.J. Bolland's Lush 3-5 (R&S, 1993): Belgian techno-trance, a hypnotic 16th sequence that "
+                     "never stops, lush detuned pads swelling over it, acid underneath, a rolling bass, few chords",
+            "bpm": (128, 134),
+            "modes": ["minor", "phrygian"],
+            "kit": {"hats": ["hh*16", "[~ hh]*8"], "clap": ["~ cp ~ cp"],
+                    "rhythm": ["[~ 0 0 0]*4", "[~ 0 ~ 0]*4"]},
+            "sounds": {"arp": ["ys_pulselead", "ys_pluck", "ys_fmlead"], "lead": ["ys_pulselead", "ys_fmlead", "ys_glass"],
+                       "chords": ["ys_hypersaw", "ys_glass", "ys_epiano"], "texture": ["ys_sawpad", "ys_softpad"]},
+            "voicings": ["spread triad", "open triad"],
+        },
+    },
+    "hardcore": {
+        "gabber": {
+            "about": "Rotterdam gabber: the distorted kick is the lead, acid and hoovers, dark minor keys",
+            "bpm": (165, 185),
+            "modes": ["minor", "phrygian"],
+            "sounds": {"lead": ["ys_pulselead", "ys_hoover", "ys_sawlead", "ys_glass"]},
+        },
+        "happy": {
+            "about": "happy hardcore (Charly Lownoise & Mental Theo's Wonderful Days, 1995): a bouncing kick, piano "
+                     "chords, a sped-up chipmunk vocal singing the hook, a sing-along melody in a major key, hoovers",
+            "bpm": (168, 180),
+            "modes": ["major", "mixolydian"],
+            "sounds": {"chords": ["ys_housepiano"], "keys": ["ys_housepiano"],
+                       "lead": ["ys_chipvox", "ys_housepiano", "ys_hoover"], "arp": ["ys_pluck", "ys_glass"]},
+            "voicings": ["triad", "add octave"],
+        },
+    },
+    "deephouse": {
+        "deep": {
+            "about": "deep house: warm Rhodes and soft stabs, off-beat hats, a round bass",
+            "bpm": (118, 124),
+        },
+        "piano house": {
+            "about": "piano house (Guru Josh's Infinity, 1990): M1 piano chords and organ stabs, a soaring "
+                     "saxophone lead, euphoric",
+            "bpm": (120, 124),
+            "sounds": {"chords": ["ys_housepiano", "ys_m1organ"], "keys": ["ys_housepiano", "ys_m1organ"],
+                       "lead": ["ys_sax", "ys_housepiano"]},
+        },
+    },
+    "darkwave": {
+        "post-punk": {
+            "about": "She Past Away, Twin Tribes: the chorused bass carries the tune in driving 8ths, a jangly "
+                     "chorused guitar arpeggio, a big gated snare on 2 and 4, a string machine far behind, few chords; "
+                     "the lead a guitar line or a lingering wave synth over it",
+            "bpm": (128, 140),
+            "kit": {"kick": ["808bd ~ 808bd ~", "808bd*4", "808bd ~ [~ 808bd] ~"],
+                    "snare": ["~ ys_gatesnare ~ ys_gatesnare", "~ ys_gatesnare ~ [ys_gatesnare ~ ~ ys_gatesnare]"],
+                    "hats": ["808hc*8", "[808hc 808hc 808oh 808hc]*2", "808hc*16"],
+                    "rhythm": ["0*8", "0 0 7 0 4 0 2 0", "0 0 0 0 4 4 2 2", "<[0 0 7 0 0 0 4 0] [0 0 7 0 4 2 0 -3]>"]},
+            "blocks": {"beat": ["drum_machine"], "bass": ["chorus_bass"], "arp": ["guitar_arp"],
+                       "lead": ["cold_arp", "wave_lead"]},
+            "sounds": {"chords": ["ys_coldstrings"], "arp": ["ys_coldguitar"],
+                       "lead": ["ys_coldguitar", "ys_wavelead", "ys_pulselead"]},
+            "voicings": ["triad", "open triad"],
+        },
+        "minimal synth": {
+            "about": "Linea Aspera, Kalte Nacht, Rue Oberkampf: a 16th-note analog sequencer bass, a dry electro "
+                     "808 kit with claps, lingering wave-synth leads (long held notes that swell and glide) or a cold "
+                     "square lead, arps lost in delay, little else",
+            "bpm": (112, 124),
+            # The drums are the electro kit's own patterns (its parts have their own levels).
+            "kit": {"rhythm": ["0*16", "[0 0 7 0]*4", "[0 ~ 0 7]*4", "[0 0 0 4]*4"]},
+            "blocks": {"beat": ["electro_kit"], "bass": ["sequencer_bass"], "arp": ["cold_seq", "wave_arp"],
+                       "lead": ["wave_lead", "cold_arp"]},
+            "sounds": {"lead": ["ys_wavelead", "ys_pulselead"], "arp": ["ys_wavesynth", "ys_pluck", "ys_pulselead"],
+                       "chords": ["ys_coldstrings", "ys_glass"]},
+            "voicings": ["triad"],
+        },
+        "ethereal": {
+            "about": "Kirlian Camera, Deus Ex Lumina: slower and cinematic, a wide string machine and bells, a "
+                     "rubbery chorused bass, a melancholy lingering wave lead (long held notes), wave-synth arps "
+                     "ringing into each other, half-time gated snare, long reverb",
+            "bpm": (100, 116),
+            "kit": {"kick": ["808bd ~ ~ ~ 808bd ~ ~ ~", "808bd ~ 808bd ~"],
+                    "snare": ["~ ys_gatesnare ~ ys_gatesnare", "~ ~ ys_gatesnare ~"],
+                    "hats": ["808hc*8", "[~ 808hc]*4", "808hc*8, [~ 808oh]*2"],
+                    "rhythm": ["0*8", "0 ~ 0 0 0 ~ 0 0", "0 0 0 0 7 7 4 4"]},
+            "blocks": {"beat": ["drum_machine"], "bass": ["chorus_bass"], "arp": ["wave_arp", "guitar_arp"],
+                       "lead": ["wave_lead"]},
+            "sounds": {"chords": ["ys_coldstrings"],
+                       "lead": ["ys_wavelead", "ys_glass", "ys_vox", "ys_flute", "ys_harpsichord"],
+                       "arp": ["ys_wavesynth", "ys_glass", "ys_coldguitar"]},
+            "voicings": ["spread triad", "open triad", "add octave"],
         },
     },
 }
@@ -574,6 +845,23 @@ SUBGENRES = {
 
 def subgenre(style: str, name: str | None) -> dict:
     return SUBGENRES.get(style, {}).get(name or "", {})
+
+
+def subgenre_blocks(style: str, name: str | None, role: str) -> list[Block]:
+    """The style's blocks for `role`, the subgenre's own first choice if it has one."""
+    options = blocks_for(style, role)
+    preferred = subgenre(style, name).get("blocks", {}).get(role, [])
+    return [b for b in options if b.name in preferred] or options
+
+
+def track_blocks(style: str, subgenre_name: str | None, sounds: dict | None, role: str) -> list[Block]:
+    """The blocks a track can bring in for `role`: the subgenre's, and of those
+    the ones written for the sound the track picked for the part, if any (a
+    wave lead plays the long held notes written for it, not a choppy phrase)."""
+    options = subgenre_blocks(style, subgenre_name, role)
+    sound = (sounds or {}).get(role)
+    own = [b for b in options if b.keep_sound and mix.synth_of(b.body) == sound]
+    return own or [b for b in options if not b.keep_sound or mix.synth_of(b.body) == sound] or options
 
 
 def subgenre_sounds(style: str, name: str | None) -> dict[str, list[str]]:

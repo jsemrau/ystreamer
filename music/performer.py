@@ -24,7 +24,7 @@ import config
 
 from . import llm, runtime
 from .llm import CACHE_BREAK
-from .blocks import STYLE_SETTINGS, Block, blocks_for, find_block, subgenre
+from .blocks import STYLE_SETTINGS, Block, blocks_for, find_block, subgenre, subgenre_blocks, track_blocks
 from .livecode import (ALL_WRAPPERS, BASS_WRAPPERS, CHOICE_SLOTS, CLUB_DRUM_WRAPPERS, CLUB_STYLES, DRUM_WRAPPERS,
                        EDIT_OPS, FX_RANGES,
                        FX_NOTES, LEAD_WRAPPERS, LOCKED_SLOTS, MELODIC_WRAPPERS, PF_RANGES, ROLE_CHANNELS, ROLE_FX,
@@ -42,7 +42,7 @@ ROLE_ORDER = {
     "ambient": ["chords", "texture", "keys", "lead", "arp", "bass", "beat"],
     "piano": ["keys", "lead", "bass", "chords", "arp", "texture"],
     "downtempo": ["beat", "keys", "bass", "lead", "arp", "texture"],
-    "darkwave": ["bass", "beat", "chords", "lead", "arp", "keys", "texture"],
+    "darkwave": ["bass", "beat", "chords", "lead", "arp", "keys", "texture", "perc"],
     "techno": ["beat", "perc", "bass", "acid", "chords", "arp", "texture", "lead"],
     "hardcore": ["beat", "perc", "bass", "acid", "lead", "arp", "chords", "texture"],
 }
@@ -234,7 +234,8 @@ class Performer:
             self.director.style = self.style
             piece = self.director.next_piece(prev_piece)
         else:
-            piece = plan_piece(self.rng, prev_piece, style=self.style, target_minutes=LIVE_PIECE_MINUTES)
+            piece = plan_piece(self.rng, prev_piece, style=self.style, target_minutes=LIVE_PIECE_MINUTES,
+                               theme=self.theme)
         self._last_piece = piece
         self.track_narration = getattr(piece, "narration", "") or ""
         self.track_mood = piece.mood
@@ -251,7 +252,10 @@ class Performer:
             other = progression_named(name, mode) if name and name != main.name else None
             if other is not None:
                 progressions[part] = {"name": other.name, "degrees": list(other.degrees)}
-        cues = {p: list(c) for p, c in (piece.cues or {}).items()} or builtin_cues(piece)
+        # (A cue naming a surprise isn't a move: the surprise plays itself.)
+        cues = {p: [c for c in cs if not (isinstance(c, dict) and "surprise" in c)]
+                for p, cs in (piece.cues or {}).items()}
+        cues = {p: cs for p, cs in cues.items() if cs} or builtin_cues(piece)
         plan = fit_live_plan(live_plan(piece), piece.cps, getattr(self.director, "target_minutes", LIVE_PIECE_MINUTES))
         fake_step = -1
         if piece.surprise == "fake_drop":
@@ -538,7 +542,7 @@ class Performer:
             edit = Edit("unmute", role=role)
         elif do == "start" and line is None:
             block = find_block(self.style, cue.get("block", "")) or next(
-                (b for b in blocks_for(self.style) if b.role == role), None)
+                iter(track_blocks(self.style, program.track.subgenre, program.track.sounds, role)), None)
             if block is None or self.melodic_problem(program, role) \
                     or len(program.active_roles()) >= self.settings["max_lines"]:
                 return None
@@ -661,12 +665,17 @@ class Performer:
         fallback.review = f"couldn't do that as asked ({why}); making a regular move instead"
         return fallback
 
-    def _block_for(self, role: str) -> Block:
-        options = blocks_for(self.style, role)
-        return self.rng.choice(options)
+    def _addable(self, program: Program) -> list[Block]:
+        """Blocks for the parts not in the program yet (the subgenre's own, where it has them)."""
+        roles = dict.fromkeys(b.role for b in blocks_for(self.style) if b.role not in program.lines)
+        return [b for r in roles for b in subgenre_blocks(self.style, program.track.subgenre, r)]
+
+    def _block_for(self, role: str, track=None) -> Block:
+        return self.rng.choice(track_blocks(self.style, track.subgenre if track else "",
+                                            track.sounds if track else None, role))
 
     def _add(self, program: Program, role: str) -> Edit:
-        block = self._block_for(role)
+        block = self._block_for(role, program.track)
         return Edit("add", role=role, line=program.track.make(block, self.rng),
                     reason=f"bring in the {block.name.replace('_', ' ')}")
 
@@ -1391,7 +1400,7 @@ class Performer:
                     "required": [*head, "listening", "reason", "op", *props], "additionalProperties": False}
 
         options = []
-        addable = [b.name for b in blocks_for(self.style) if b.role not in program.lines]
+        addable = [b.name for b in self._addable(program)]
         if addable and len(program.active_roles()) < self.settings["max_lines"]:
             options.append(variant("add", block={"enum": addable}))
         active = program.active_roles()
@@ -1494,7 +1503,7 @@ class Performer:
             editable[role] = entry
             used_wrappers.update(line.wrappers)
             used_fx.update(fx_ok + line_controls(line))
-        addable = {b.name: b.role for b in blocks_for(self.style) if b.role not in program.lines}
+        addable = {b.name: b.role for b in self._addable(program)}
         full = len(program.active_roles()) >= self.settings["max_lines"]
         # A full track can't take another line: say so, rather than offer blocks
         # a model (one that doesn't decode under the schema) will try to add.

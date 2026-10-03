@@ -17,6 +17,8 @@ s.waitForBoot {
 
     ~dirt = SuperDirt(2, s);
     ~dirt.loadSoundFiles;
+    // The project's own banks (licensed): break, bs*, cpu, foley, ...
+    ~dirt.loadSoundFiles("/home/moebius/Projects/youtube-stream-music-generation/samples/*");
     s.sync;
     ~dirt.start(57120, 0 ! 12);
 

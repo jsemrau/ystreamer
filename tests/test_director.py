@@ -163,7 +163,11 @@ def test_hooks_stay_on_chord_tones():
     from music.plan import validate_hook
 
     assert validate_hook({"role": "acid", "pattern": "0 7 0 4 9"}, "trance")[0]["kind"] == "cycle"
-    assert validate_hook({"role": "lead", "pattern": "7 ~ 4 ~ 9 ~ 7 5"}, "trance")[0]["kind"] == "phrase"
+    assert validate_hook({"role": "lead", "pattern": "7 ~ 4 ~ 9 ~ 7 6"}, "trance")[0]["kind"] == "phrase"
+    # Passing notes between the beats, in a two-bar phrase too...
+    assert validate_hook({"role": "lead", "pattern": "<[4 3 2 ~ 0 ~ ~ ~] [2 ~ 4 5 4 ~ 2 ~]>"}, "trance")[0]
+    # ...but not a leap to a note outside the chord and away again.
+    assert not validate_hook({"role": "lead", "pattern": "7 ~ 4 ~ 9 ~ 7 5"}, "trance")[0]
     assert not validate_hook({"role": "acid", "pattern": "0 3 0 4"}, "trance")[0]       # 3 clashes
     assert not validate_hook({"role": "lead", "pattern": "1 ~ 4 ~ 9 ~ 7 ~"}, "trance")[0]  # strong step off
     assert not validate_hook({"role": "bass", "pattern": "0 7"}, "trance")[0]            # no hook part
@@ -243,7 +247,8 @@ def test_distilled_answers_are_kept_only_when_nothing_needed_fixing():
     req = _situation(random.Random(5), 0)
     while req["style"] != "trance":
         req = _situation(random.Random(len(req["prompt"])), 0)
-    answer = {"title": "Glass Minaret", "key": "C# phrygian", "bpm": 138, "progression": "i-II-VI-vii",
+    # (A subgenre without modes of its own: the fallback's may be balearic, dorian/minor only.)
+    answer = {"title": "Glass Minaret", "subgenre": "acid", "key": "C# phrygian", "bpm": 138, "progression": "i-II-VI-vii",
               "section_progressions": {"breakdown": "VI-vii-i-i", "chorus": "i-III-II-i"},
               "hook": {"role": "acid", "pattern": "0 7 0 4 9 4 2"},
               "cues": {"build": ["Start the bass now"], "groove": ["Change the lead melody"],
@@ -252,8 +257,10 @@ def test_distilled_answers_are_kept_only_when_nothing_needed_fixing():
                         "lead": "<[7 ~ 4 ~ 2 ~ 0 ~] [9 ~ 7 ~ 4 ~ 2 ~]>", "arp": "0 4 7 11"},
               "motion": {"acid": {"acid": [0.3, 0.85, 32]}, "chords": {"lpf": [1500, 4000, 16]}},
               "narration": "Hold on.", "mood": "tense"}
-    if "C# phrygian" in req["recent_keys"]:
-        answer["key"] = "D# phrygian"
+    # A phrygian key the scenario didn't play recently (its history is random).
+    from music.theory import Key
+    answer["key"] = next(Key(r, "phrygian").name for r in range(12)
+                         if Key(r, "phrygian").name not in {Key.parse(k).name for k in req["recent_keys"]})
     assert check(req, json.dumps(answer))[0] is not None
     # Playable after a correction (V -> v) isn't good enough to learn from.
     fixed = dict(answer, key="C# minor", progression="i-V-VI-VII",
@@ -340,3 +347,22 @@ def test_the_directors_cues_are_carried_out_by_the_performer_one_per_move():
     performer.state.phase, performer.state.phase_start = "build", -100
     fifth = performer.next_edit(program)
     assert performer.state.phase == "groove" and (fifth.op, fifth.role) == ("mute", "bass")
+
+
+def test_cues_that_name_a_surprise_are_not_moves():
+    import json as _json
+    from music.plan import plan_piece as _plan_piece, resolve_surprise_cues, validate_cues
+
+    raw = {"peak": [{"do": "wrap", "wrap": "stripped_peak", "say": "drop with only kick, bass, hats and the arp"},
+                    {"do": "bring back", "part": "chords", "say": "chords return"},
+                    {"do": "wrap", "wrap": "key_lift", "say": "everything lifts a whole step"}],
+           "outro": [{"do": "surprise", "say": "a surprise"}]}
+    cues, notes = validate_cues(raw, "trance")
+    assert not notes                                           # recognised, not "trance has no ''"
+    piece = _plan_piece(random.Random(0), style="trance")
+    piece.cues, piece.surprise = cues, "key_lift"
+    notes = resolve_surprise_cues(piece)
+    assert [c.get("do") for c in piece.cues["groove2"]] == ["bring back"]   # the real move stays
+    assert "outro" not in piece.cues                           # nothing left there
+    assert len(notes) == 1 and "stripped_peak" in notes[0]     # the surprise that won't happen is noted
+    assert "surprise" not in _json.dumps(piece.cues)

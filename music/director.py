@@ -24,7 +24,7 @@ from . import presets as P
 from .melody import STEPS_PER_CYCLE
 from .blocks import hook_kinds
 from .plan import (STYLES, Arrangement, Piece, Section, arrange, director_vocabulary, plan_piece,
-                   validate_arrangement, validate_piece)
+                   resolve_surprise_cues, validate_arrangement, validate_piece)
 from .theory import Key, progressions_for
 
 PROMPTS_DIR = os.path.join(config.REPO_DIR, "prompts")
@@ -77,8 +77,11 @@ class Director:
         self.style = style
         self.recent_progressions: deque[str] = deque(maxlen=4)
         self.recent_keys: deque[str] = deque(maxlen=4)
-        self.recent_hooks: deque[str] = deque(maxlen=4)
+        self.recent_hooks: deque[str] = deque(maxlen=8)   # the hook and the lead/keys melodies
         self.recent_surprises: deque[str] = deque(maxlen=4)
+        # The last tracks' sounds (part -> synth): no track repeats one of these sets.
+        self.recent_sounds: deque[dict] = deque(maxlen=3)
+        self.recent_titles: deque[str] = deque(maxlen=12)
         self._since_surprise = config.SURPRISE_EVERY      # the first track may have one
         self.consecutive_failures = 0
         # After this many failures in a row, stop asking the LLM for a while.
@@ -163,7 +166,8 @@ class Director:
         recent = ", ".join(self.recent_surprises) or "none"
         menu = "\n".join(f"  - `{n}`: {about} ({when})" for n, (_, about, when) in SURPRISES.items())
         return ("This track may have ONE surprise, a rule-break the listener notices, chosen from the menu "
-                f"below to suit the track (or \"none\" if none fits). Played recently, don't repeat: {recent}.\n"
+                f"below to suit the track (or \"none\" if none fits). Played recently, don't repeat: {recent}. "
+                "Name it in `surprise` only: it plays itself at its moment, so no cue for it, and only one.\n"
                 + menu)
 
     def choose_surprise(self, piece: Piece, data: dict | None, notes: list[str]) -> None:
@@ -211,6 +215,8 @@ class Director:
             recent_keys=", ".join(self.recent_keys) or "none",
             recent_hooks=", ".join(self.recent_hooks) or "none",
             recent_progressions=", ".join(self.recent_progressions) or "none",
+            recent_sounds="; ".join(", ".join(f"{r} {s}" for r, s in sorted(snd.items())) for snd in self.recent_sounds)
+            or "none",
             avoid=", ".join(sorted(avoid["progressions"] | avoid["presets"])) or "nothing",
             suggested_key=self._suggest_key(style or fallback.style, previous).name,
             surprise_line=self._surprise_line(),
@@ -237,6 +243,26 @@ class Director:
             notes.append(f"{piece.key} doesn't suit {piece.style}; using {fallback.key}")
             piece.key, piece.progression = fallback.key, fallback.progression
             piece.section_progressions = dict(fallback.section_progressions)
+        # A subgenre with its own modes (happy hardcore: major).
+        from .blocks import subgenre as _subgenre
+        from .plan import fit_mode
+
+        modes = _subgenre(piece.style, piece.subgenre).get("modes")
+        if modes and Key.parse(piece.key).mode not in modes:
+            new = fit_mode(Key.parse(piece.key), modes).name
+            notes.append(f"{piece.key} isn't in {piece.subgenre}'s modes ({'/'.join(modes)}); using {new}")
+            piece.key = new
+            # Its chords as written may not exist in the new mode: the fallback's
+            # (planned in the subgenre's modes) or the mode's most common ones.
+            mode = Key.parse(new).mode
+            if Key.parse(fallback.key).mode == mode:
+                piece.progression = fallback.progression
+                piece.section_progressions = dict(fallback.section_progressions)
+            else:
+                common = [p.name for p in progressions_for(mode)]
+                piece.progression = common[0]
+                piece.section_progressions = {"chorus": common[1 % len(common)], "breakdown": common[2 % len(common)],
+                                              "bridge": common[2 % len(common)]}
         if piece.key in self.recent_keys:
             # Same mode, another root: the Roman numerals still fit.
             key = Key.parse(piece.key)
@@ -262,6 +288,26 @@ class Director:
                 notes.append(f"progression {piece.progression} was used in the last "
                              f"{len(self.recent_progressions)} tracks; using {choice}")
                 piece.progression = choice
+        # The theme may give a lead or arp another style's voice, never the chords:
+        # they play this style's chord rhythm (a slow string swell smears trance stabs).
+        from .blocks import subgenre_sounds
+        from .plan import STYLE_SOUNDS
+
+        from .blocks import SUBGENRES
+
+        frame = set(STYLE_SOUNDS.get(piece.style, {}).get("chords", [])).union(
+            *(subgenre_sounds(piece.style, n).get("chords", []) for n in SUBGENRES.get(piece.style, {})))
+        if frame and piece.sounds.get("chords") and piece.sounds["chords"] not in frame:
+            new = fallback.sounds.get("chords") if fallback.sounds.get("chords") in frame else sorted(frame)[0]
+            notes.append(f"chords {piece.sounds['chords']} isn't one of {piece.style}'s chord sounds; using {new}")
+            piece.sounds["chords"] = new
+        if piece.sounds and any(piece.sounds == recent for recent in self.recent_sounds):
+            # The same set as a recent track: the fallback's (themed, fresh) sound for one part.
+            for role in ("lead", "arp", "keys", "chords"):
+                if fallback.sounds.get(role) and fallback.sounds[role] != piece.sounds.get(role):
+                    notes.append(f"sounds repeat a recent track's; {role} -> {fallback.sounds[role]}")
+                    piece.sounds[role] = fallback.sounds[role]
+                    break
         _distinct_sections(piece, self.rng)
         piece.narration = clean_narration(data.get("narration"))
         return piece, notes
@@ -271,7 +317,8 @@ class Director:
         fallback = plan_piece(self.rng, previous, style=self.style,
                               avoid_progressions=set(self.recent_progressions),
                               disliked=avoid["progressions"],
-                              target_minutes=self.target_minutes)
+                              target_minutes=self.target_minutes,
+                              theme=self.theme, recent_sounds=list(self.recent_sounds))
         piece = fallback
         data = None
         if self._llm_available():
@@ -281,16 +328,36 @@ class Director:
             if data:
                 piece, notes = self.review_piece(data, fallback, avoid)
                 self.choose_surprise(piece, data, notes)
+                notes.extend(resolve_surprise_cues(piece))
                 if notes:
                     self.log(f"[Director] corrected LLM piece plan: {'; '.join(notes)}")
                 self._think("Next piece", f"'{piece.title}', {piece.style}, {piece.key}, {piece.bpm:.0f} BPM, "
                                           f"{piece.progression}, {piece.mood}", data)
         if not data:
             self.choose_surprise(piece, None, [])
+            # The built-in titles come from a few words: not one of the last few.
+            from .plan import _title, theme_moods
+            for _ in range(8):
+                if piece.title not in self.recent_titles:
+                    break
+                piece.title = _title(self.rng, theme_moods(self.theme))
         self.recent_progressions.append(piece.progression)
         self.recent_keys.append(piece.key)
+        self.recent_titles.append(piece.title)
+        if piece.sounds:
+            self.recent_sounds.append(dict(piece.sounds))
         if piece.hook:
             self.recent_hooks.append(f"{piece.hook['role']}: {piece.hook['pattern']}")
+        # The melodies the lead and keys were given (sketch and cues), so the
+        # next tracks write new ones rather than reuse a good one forever.
+        for role in ("lead", "keys"):
+            tunes = [(piece.parts or {}).get(role, {}).get("pattern")]
+            tunes += [c.get("pattern") for cues in (piece.cues or {}).values() for c in cues
+                      if c.get("part") == role and c.get("pattern")]
+            for tune in dict.fromkeys(t for t in tunes if t):
+                entry = f"{role}: {tune}"
+                if entry not in self.recent_hooks and not (piece.hook and piece.hook.get("pattern") == tune):
+                    self.recent_hooks.append(entry)
         if piece is fallback:
             runtime.ui_event("director", what="Next piece", model="built-in",
                              decision=f"'{piece.title}', {piece.style}, {piece.key}, {piece.bpm:.0f} BPM, "

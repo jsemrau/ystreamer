@@ -14,6 +14,12 @@ each one into code.
 
 Stream theme: {theme}. {style_line}
 
+The style is the frame, the theme the details. The style and its subgenre
+set the tempo range, the drum kit, the bass, which parts play and how the
+track is built. Inside that frame, take everything else from the theme: the
+sounds, the key and mode, the title, the mood, the hook's shape and the
+story your cues tell.
+
 ## What you can use
 
 ```json
@@ -29,7 +35,7 @@ Stream theme: {theme}. {style_line}
 - `subgenre` (styles that have `subgenres`): which kind of this style the
   track is. It sets the tempo range, the drum kit, the bass rhythm and the
   sounds that suit it; pick a different one from the previous track's unless
-  the theme asks for one. Choose `sounds` and `voicing` to fit it.
+  the theme asks for one. Choose `voicing` to fit it.
 - `bpm`: within the subgenre's range (or the style's).
 - `progression`: YOUR OWN four chords as Roman numerals joined by "-", using
   only the chords listed for the key's mode in `chords_per_mode` (upper case
@@ -43,9 +49,21 @@ Stream theme: {theme}. {style_line}
   - a `cycle` part (acid, arp) plays 3-16 numbers in a loop as 16ths, so an
     odd count (5, 7) rolls against the beat. Chord tones only: 0 2 4 6 7 9
     11 -1 -3 -5, and `~` for a rest. E.g. "0 7 0 4 9 4 2".
-  - a `phrase` part (lead) is a melody over the bar, 8 steps with `~` rests,
-    chord tones on the 1st, 3rd, 5th and 7th step; `<[...] [...]>` for a
-    two-bar phrase (then chord tones only). E.g. "7 ~ 4 ~ 9 ~ 7 4".
+  - a `phrase` part (lead) is a melody, the line a singer would remember,
+    not an arpeggio (running up and down the chord is the arp's job):
+    - 8 steps a bar (8ths) or 16 (16ths); `~` a rest, `_` holds the note
+      before it. One bar, or better 2-4 bars as `<[bar 1] [bar 2] ...>`: a
+      call and its answer, the answer ending somewhere else than the call.
+    - Chord tones (0 2 4 6 7 9 ...) on the beats (steps 1, 3, 5, 7 of 8;
+      1, 5, 9, 13 of 16). Between the beats, any note of the scale that
+      steps from or to the note beside it: passing and neighbour notes
+      (1 3 5 8 10, e.g. "4 3 2", "0 1 0"), never held into the beat.
+    - Give it a shape: mostly steps, one leap to the high point, a long
+      held note to close the phrase, rests to breathe, a note or two off
+      the beat. The notation only (these are fragments, not tunes): "4 3 2"
+      steps down through a passing note, "0 _ _ ~" holds a note three steps
+      and rests. Write your own tune for this track, never one from these
+      instructions or from the melodies played recently (below).
   The hook follows the chords, so it stays in harmony by itself.
 - `parts`: the starting pattern of 3-5 OTHER parts from the style's
   `sketch_parts` (not the hook's part), written so they interlock with the
@@ -91,6 +109,9 @@ Stream theme: {theme}. {style_line}
     or [low, high, bars] for a slow sweep.
   - "sound": switch a playing part to another of its `sounds`.
   - "wrap": a variation from the style's wrappers, `wrap` its exact text.
+  The surprise is not a cue: it plays itself at its moment. Don't write a
+  cue for it, and don't plan cues around a surprise this track doesn't have
+  (no "bring back" after a stripped peak the track won't play).
   - "tempo": `to` a BPM within the style's range.
   Shape: {{"do": "start", "part": "<part>", "block": "<block>", "sound":
   "<sound>", "pattern": "<pattern>", "say": "<plain words>"}}, {{"do": "knob",
@@ -98,8 +119,15 @@ Stream theme: {theme}. {style_line}
   "..."}}, {{"do": "stop", "part": "<part>", "say": "..."}}.
   No poetry, no reasons: what to do, to which part, with what. Together they
   tell the track's story: what comes in when, what changes at the peak,
-  what drops out.
-- `sounds`: a sound per part from `sounds`, not all the same as last time.
+  what drops out. Develop the hook, never wear it down: an answer bar, the
+  phrase an octave up or with a new ending at the peak, a held note added;
+  don't cut it to one bar or lock it to one of its bars.
+- `sounds`: a sound per part from `sounds`, chosen for the theme: read
+  `sound_character` and pick the sounds whose character matches the theme's
+  imagery and mood (a vampire night in London: dark, cold, haunting voices; a
+  summer sunrise: bright, warm ones), the subgenre's sounds first, any other
+  of `sounds` where the theme calls for it. Not a set a recent track used
+  (below): change at least the lead or the arp.
 - `surprise`: see "This track's surprise" below.
 - `sections` (optional): the track's rough shape, 4-9 sections from
   `section_types`, each {{"name", "bars" (a multiple of 8), "energy" 0.05-1}},
@@ -133,8 +161,9 @@ Reply with ONE JSON object and nothing else:
 - Previous track: {previous}
 - Previous track's shape (if you write `sections`, make it different): {previous_shape}
 - Keys played recently (don't reuse them): {recent_keys}
-- Hooks played recently (write something different): {recent_hooks}
+- Hooks and lead melodies played recently (write something different): {recent_hooks}
 - Progressions played recently (don't reuse them): {recent_progressions}
+- Sounds played recently (choose a different set): {recent_sounds}
 - Listeners disliked: {avoid}
 
 ## A spark for this one

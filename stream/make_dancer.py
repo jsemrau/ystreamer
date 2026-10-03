@@ -3,6 +3,7 @@
 Cut a dancer out of a studio clip for the stream page.
 
     python -m stream.make_dancer dance/ComfyUI_00011_.webp stream/ui/dancer/groove.webm
+    python -m stream.make_dancer clip.webm out.webm --box 20,8,460,830   # one crop for a set of clips
 
 Reads an animated WebP (or any video ffmpeg can read), makes the light,
 grey, unsaturated backdrop transparent (soft edges, so hair stays hair),
@@ -62,6 +63,8 @@ def main() -> None:
     ap.add_argument("--height", type=int, default=640, help="output height in pixels")
     ap.add_argument("--bright", type=float, default=138, help="backdrop is lighter than this")
     ap.add_argument("--sat", type=float, default=0.11, help="and less saturated than this")
+    ap.add_argument("--box", help="crop to x0,y0,x1,y1 instead of the dancer's box in this clip: give clips "
+                                   "of one camera the same box and she stays the same size in all of them")
     ap.add_argument("--glow", default="#7cf2ff", help="a rim of light around her, so dark clothes read on a dark "
                                                       "page ('none' for none)")
     args = ap.parse_args()
@@ -77,6 +80,8 @@ def main() -> None:
     m = 12
     box = (max(0, xs.min() - m), max(0, ys.min() - m), min(frames[0].width, xs.max() + m),
            min(frames[0].height, ys.max() + m))
+    if args.box:
+        box = tuple(int(v) for v in args.box.split(","))
     scale = args.height / (box[3] - box[1])
     size = (int(round((box[2] - box[0]) * scale / 2)) * 2, args.height)
     glow = None if args.glow == "none" else tuple(int(args.glow.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))

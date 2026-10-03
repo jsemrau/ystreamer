@@ -83,7 +83,9 @@ def test_ui_server_serves_the_page_and_ui_json(isolated_runtime):
         assert "live.tidal" in classic and "app.js" in classic
         data = json.loads(urllib.request.urlopen(f"{base}/ui.json?t=1").read())
         assert data["phase"] == "outro"
-        for asset in ("deck.js", "deck.css", "app.js", "dancer/wave.webm", "dancer/dance.webm", "dancer/groove.webm"):
+        for asset in ("deck.js", "deck.css", "app.js", "dancer/wave.webm", "dancer/dance.webm", "dancer/groove.webm",
+                      "dancer/hakken.webm", "dancer/darkwave.webm", "dancer/bow.webm", "dancer/wave2.webm",
+                      "dancer/breakdown.webm", "dancer/breakdown2.webm", "dancer/rebuild.webm", "dancer/trance.webm"):
             assert urllib.request.urlopen(f"{base}/{asset}").status == 200
     finally:
         server.shutdown()

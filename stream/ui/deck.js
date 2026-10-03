@@ -324,18 +324,51 @@ function renderAgent() {
 }
 
 // ------------------------------------------------------------------ the dancer
-// She waves hello as a track builds and goodbye in its outro, dances through
-// the groove and the breakdown, and gives it all at the peak. Each loop is
-// played at the speed that makes it last a whole number of bars.
-const DANCE_FOR = { build: "wave", groove: "dance", breakdown: "dance", rebuild: "dance", groove2: "groove",
-                    outro: "wave" };
+// She waves hello as a track builds, dances through the groove, sways with
+// her eyes closed in the breakdown, claps and crouches as it rebuilds, gives
+// it all at the peak, and in the outro bows once (a geisha's bow after a heel
+// turn) and then waves goodbye. Trance gets its hands-up peak, hardcore
+// hakken, darkwave a slow gothic sway, and the chill styles no rave jumping
+// or crouching. Where a part has two takes, each track gets one of them, so
+// tracks don't all look alike. Each loop is played at the speed that makes it
+// last a whole number of bars.
+const DANCE_FOR = { build: ["wave", "wave2"], groove: "dance", breakdown: ["breakdown", "breakdown2"],
+                    rebuild: "rebuild", groove2: "groove", outro: "bow" };
+const CHILL_DANCE = { rebuild: "dance", groove2: "dance" };
+const STYLE_DANCE = {
+  trance: { groove2: "trance" },
+  hardcore: { groove: "hakken", groove2: "hakken" },
+  darkwave: { groove: "darkwave", breakdown: "darkwave", groove2: "darkwave" },
+  lofi: CHILL_DANCE, downtempo: CHILL_DANCE, ambient: CHILL_DANCE, piano: CHILL_DANCE,
+};
 let dancing = null;
+let bowedFor = null;   // the outro she has bowed in (once each, then she waves)
+
+function outroKey() {
+  return `${(ui.track && ui.track.title) || ""}|${ui.phase_start || 0}`;
+}
+
+// One of a part's takes, the same all through a track (from its title and
+// the part, so each part picks its take on its own).
+function take(clips, phase) {
+  if (!Array.isArray(clips)) return clips;
+  let h = 2166136261;                                    // FNV-1a: every bit of the text mixes in
+  for (const c of `${(ui.track && ui.track.title) || ""}|${phase}`) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
+  return clips[(h >>> 16) % clips.length];
+}
+
+function clipFor() {
+  const phase = ui && ui.phase, style = ui && ui.track && ui.track.style;
+  const clip = take((STYLE_DANCE[style] || {})[phase] || DANCE_FOR[phase] || "dance", phase);
+  return clip === "bow" && bowedFor === outroKey() ? "wave" : clip;
+}
 
 function updateDancer() {
-  const clip = DANCE_FOR[ui && ui.phase] || "dance";
+  const clip = clipFor();
   const cps = ui && ui.clock && ui.clock.cps;
   document.querySelectorAll("#dancer video").forEach((v) => {
     const on = v.dataset.clip === clip;
+    if (on && v.dataset.clip === "bow" && dancing !== "bow") v.currentTime = 0;   // the bow from its start
     v.classList.toggle("on", on);
     if (on && cps && v.duration) {
       const bar = 1 / cps, bars = Math.max(1, Math.round(v.duration / bar));
@@ -552,6 +585,10 @@ $("ask").addEventListener("submit", async (e) => {
 
 // A clip that finishes loading late gets its beat-synced speed then.
 document.querySelectorAll("#dancer video").forEach((v) => v.addEventListener("loadedmetadata", () => ui && updateDancer()));
+// After the bow, she waves for the rest of the outro.
+$("dancer").querySelector('video[data-clip="bow"]').addEventListener("ended", () => {
+  if (ui) { bowedFor = outroKey(); updateDancer(); }
+});
 
 fit();
 poll();

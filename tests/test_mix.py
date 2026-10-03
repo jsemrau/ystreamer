@@ -212,7 +212,8 @@ def test_the_director_picks_the_sounds_and_the_track_plays_them():
     from music.performer import Performer
 
     fallback = plan_piece(random.Random(2), style="trance")
-    assert set(fallback.sounds) == {"chords", "keys", "lead", "arp"}       # the built-in planner picks too
+    # The built-in planner picks too (and a pad bed where the subgenre has one).
+    assert {"chords", "keys", "lead", "arp"} <= set(fallback.sounds) <= {"chords", "keys", "lead", "arp", "texture"}
     piece, notes = validate_piece({"sounds": {"chords": "ys_housepiano", "lead": "ys_supersaw",
                                               "drums": "ys_epiano"}}, fallback)
     assert piece.sounds["chords"] == "ys_housepiano"
@@ -252,3 +253,16 @@ def test_pads_are_atmosphere_never_the_main_chords():
     assert '# s "ys_acid"' in find_block("trance", "high_acid").make(random.Random(0), sounds).body
     assert '# s "ys_vinyl"' in find_block("deephouse", "vinyl").make(random.Random(0), sounds).body
     assert '# s "ys_epiano"' in find_block("trance", "piano_stabs").make(random.Random(0), sounds).body
+
+
+def test_every_oscillator_sits_on_a_harmonic_of_its_note():
+    # An oscillator at an inharmonic multiple of the note (ys_glass's old 2.76:
+    # an octave and a tritone up, 42 cents flat) sounds sour on every note of a
+    # melody. A little stretch (a piano's 6.08) is fine; filter cutoffs aren't pitches.
+    with open(os.path.join(os.path.dirname(__file__), "..", "tidal", "synthdefs.scd")) as f:
+        src = f.read()
+    for name, body in re.findall(r"SynthDef\(\\(\w+)(.*?)\}\)\.add;", src, re.S):
+        for ratio in re.findall(r"(?:SinOsc|LFTri|LFSaw|Saw|Pulse|VarSaw|SawDPW)\.ar\(\s*fr? \* ([\d.]+)", body):
+            r = float(ratio)
+            harmonic = max(round(r * 2) / 2, 0.5)
+            assert abs(1200 * math.log2(r / harmonic)) < 30, (name, r)

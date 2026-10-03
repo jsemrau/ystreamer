@@ -190,7 +190,9 @@ CHOICE_SLOTS = {
     "clap": ["~", "~ cp ~ cp", "~ ~ ~ cp", "~ cp ~ [cp cp]", "~ cp ~ <cp cp cp [cp cp]>",
              "~ cp ~ <cp cp cp [~ cp cp cp]>"],
 }
-LOCKED_SLOTS = {"synth"}                         # chosen when the line is added
+# Chosen when the line is added: the synth, and a break loop (loopAt fits the
+# loop to its bar count; another hit or sample would put it out of time).
+LOCKED_SLOTS = {"synth", "loop"}
 
 # What a mini-notation pattern value may contain.
 _PATTERN_RE = re.compile(r"^[0-9a-z_~\s\[\]<>*!.,:\-|/?@]+$")
@@ -469,7 +471,36 @@ def check_pattern(value: str) -> str:
     return value
 
 
-_SOUND_RE = re.compile(r"[a-z][a-z0-9]*(?::\d+)?")
+# A sound's whole name in a drum pattern, with its sample number: "808oh",
+# "ys_kick", "cpu:3" (never a piece of one: "oh" out of "808oh" let an edit
+# ask for a sample that doesn't exist).
+_SOUND_RE = re.compile(r"(?<![\w:])\w*[a-z]\w*(?::\d+)?")
+_KNOWN_SOUNDS: set[str] | None = None
+
+
+def known_sounds() -> set[str]:
+    """Every sound SuperDirt can play here: the sample banks (Dirt-Samples and
+    the project's samples/) and the SynthDefs. Empty if they can't be found
+    (then nothing is checked against it)."""
+    global _KNOWN_SOUNDS
+    if _KNOWN_SOUNDS is None:
+        import os
+
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        names: set[str] = set()
+        for folder in (os.path.expanduser("~/.local/share/SuperCollider/downloaded-quarks/Dirt-Samples"),
+                       os.path.join(repo, "samples")):
+            if os.path.isdir(folder):
+                names |= {d for d in os.listdir(folder) if os.path.isdir(os.path.join(folder, d))}
+        try:
+            with open(os.path.join(repo, "tidal", "synthdefs.scd")) as f:
+                names |= set(re.findall(r"SynthDef\(\\(\w+)", f.read()))
+        except OSError:
+            pass
+        if names:
+            names |= {"superpiano", "supersaw", "superhammond", "superchip", "supergong", "superfm"}
+        _KNOWN_SOUNDS = names
+    return _KNOWN_SOUNDS
 
 # Harmony. Melodic slots are scale degrees relative to the current chord's
 # root, so every note is in the key, but not every note is in the chord:
@@ -525,24 +556,99 @@ def range_problem(role: str, value: str) -> str | None:
     return None
 
 
+def _top_split(text: str) -> list[str]:
+    """Split mini-notation on spaces outside [] and <>."""
+    out, depth, cur = [], 0, ""
+    for ch in text:
+        depth += ch in "[<"
+        depth -= ch in "]>"
+        if ch.isspace() and depth == 0:
+            if cur:
+                out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    return out + ([cur] if cur else [])
+
+
+def _unwrap(text: str, open_: str, close: str) -> str | None:
+    """The inside of text if one bracket pair wraps all of it, else None."""
+    if not (text.startswith(open_) and text.endswith(close)):
+        return None
+    depth = 0
+    for i, ch in enumerate(text):
+        depth += ch in "[<"
+        depth -= ch in "]>"
+        if depth == 0 and i < len(text) - 1:
+            return None
+    return text[1:-1]
+
+
+def phrase_steps(value: str) -> list[list[tuple[str, bool]]] | None:
+    """A melody's bars as (token, on the beat?) per step: one bar, or one per
+    alternation step in <[bar 1] [bar 2] ...>. 8 steps are 8ths (beats on
+    1, 3, 5, 7), 16 are 16ths (beats on 1, 5, 9, 13), a [..] inside a step
+    splits it (its first note keeps the step's place). None when the timing
+    can't be read (fast repeats, stretched or random steps, chords)."""
+    if re.search(r"[*!{}(),|@/.]", value):
+        return None
+    inner = _unwrap(value.strip(), "<", ">")
+    bars = []
+    for bar in _top_split(inner) if inner is not None else [value.strip()]:
+        steps = _top_split(_unwrap(bar, "[", "]") or bar)
+        n = len(steps)
+        per_beat = n // 4 if n % 4 == 0 else (2 if n % 2 == 0 else 0)
+        seq = []
+        for i, step in enumerate(steps):
+            strong = per_beat <= 1 or i % per_beat == 0
+            if step.startswith("<"):
+                return None
+            sub = _unwrap(step, "[", "]")
+            for j, tok in enumerate(_top_split(sub) if sub is not None else [step]):
+                if tok.startswith(("[", "<")):
+                    return None
+                seq.append((tok.rstrip("?"), strong and j == 0))
+        bars.append(seq)
+    return bars
+
+
 def harmony_problem(role: str, value: str) -> str | None:
-    """Why a melodic pattern would clash with the chords, or None if it fits."""
+    """Why a melodic pattern would clash with the chords, or None if it fits.
+    Bass, acid, arps and fast repeating figures play chord tones only. A lead
+    or keys melody puts chord tones on the beats and may use the scale's other
+    notes between them, as passing or neighbour notes: a step from or to the
+    note beside it, not held on into the next beat."""
     degrees = [int(d) for d in _DEGREE_RE.findall(value)]
     if not degrees:
         return None
     off = sorted({d for d in degrees if d % 7 not in CHORD_TONES})
     if not off:
         return None
-    tokens = value.split()
-    flat = not re.search(r"[\[\]<>*!{}(),|]", value)
-    if role in _STRICT_ROLES or not flat:
+    bars = None if role in _STRICT_ROLES else phrase_steps(value)
+    if bars is None:
         return (f"degrees {off} are not in the chord; {role} lines and repeating patterns play chord "
                 "tones only (0, 2, 4, 6, 7, 9 ... and below: -1, -3, -5)")
-    strong = [t for i, t in enumerate(tokens) if i % 2 == 0 and _DEGREE_RE.fullmatch(t)]
-    clash = sorted({int(t) for t in strong if int(t) % 7 not in CHORD_TONES})
+    seq = [tok for bar in bars for tok in bar]
+    clash, leaps = set(), set()
+    for i, (tok, strong) in enumerate(seq):
+        if not _DEGREE_RE.fullmatch(tok) or int(tok) % 7 in CHORD_TONES:
+            continue
+        d = int(tok)
+        if strong:
+            clash.add(d)
+            continue
+        # (The phrase loops: the last note's neighbour is the first.)
+        prev = seq[i - 1][0] if i > 0 else seq[-1][0]
+        nxt = seq[i + 1][0] if i + 1 < len(seq) else seq[0][0]
+        by_step = any(_DEGREE_RE.fullmatch(t) and abs(int(t) - d) == 1 for t in (prev, nxt))
+        if not by_step or nxt == "_":
+            leaps.add(d)
     if clash:
-        return (f"degrees {clash} fall on strong steps but aren't in the chord; put chord tones "
-                "(0, 2, 4, 6, 7 ...) on the strong steps and other notes only in between")
+        return (f"degrees {sorted(clash)} fall on the beat but aren't in the chord; put chord tones "
+                "(0, 2, 4, 6, 7 ...) on the beats and other notes only in between")
+    if leaps:
+        return (f"degrees {sorted(leaps)} aren't in the chord: between the beats they must step from or to "
+                "the note beside them (a passing or neighbour note, e.g. 4 3 2 or 2 3 2) and not be held")
     return None
 
 
@@ -651,6 +757,11 @@ def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
             used = set(_SOUND_RE.findall(value))
             if allowed and not used <= allowed:
                 raise EditError(f"{sorted(used - allowed)} not in this line's kit; use {sorted(allowed)}")
+            # Never a sound that isn't there (SuperDirt would play silence and complain).
+            missing = sorted(u for u in used if u.split(":")[0] not in known_sounds()) if known_sounds() else []
+            if missing:
+                raise EditError(f"no sample or synth named {', '.join(missing)}"
+                                + (f"; this line's kit: {sorted(allowed)}" if allowed else ""))
         line.patterns[edit.name] = value
     elif op == "set_sound":
         # Another sound from the part's palette (blocks.LIVE_SOUNDS), on a line
