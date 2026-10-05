@@ -101,12 +101,16 @@ def notify(cfg: WatchdogConfig, message: str) -> None:
         print(f"[watchdog] notify failed: {e}", flush=True)
 
 
+_ffmpeg: subprocess.Popen | None = None     # the silence listener, stopped with the watchdog
+
+
 def listen_for_silence(cfg: WatchdogConfig, tracker: SilenceTracker, stop: threading.Event) -> None:
+    global _ffmpeg
     cmd = ["ffmpeg", "-hide_banner", "-nostats", "-f", "pulse", "-i", cfg.source,
            "-af", f"silencedetect=n={cfg.silence_db}dB:d=5", "-f", "null", "-"]
     while not stop.is_set():
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            proc = _ffmpeg = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         except FileNotFoundError:
             print("[watchdog] ffmpeg not found; silence detection disabled", flush=True)
             return
@@ -119,7 +123,12 @@ def listen_for_silence(cfg: WatchdogConfig, tracker: SilenceTracker, stop: threa
         time.sleep(5)  # source vanished (e.g. PipeWire restart); retry
 
 
+def _terminate(_signum, _frame) -> None:
+    raise KeyboardInterrupt
+
+
 def main() -> None:
+    signal.signal(signal.SIGTERM, _terminate)     # stream/live.sh stops it with SIGTERM
     cfg = WatchdogConfig()
     tracker = SilenceTracker()
     stop = threading.Event()
@@ -140,6 +149,8 @@ def main() -> None:
                 tracker.reset()
     except KeyboardInterrupt:
         stop.set()
+        if _ffmpeg:
+            _ffmpeg.kill()
 
 
 def restart_engine(cfg: WatchdogConfig) -> None:

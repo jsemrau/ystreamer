@@ -439,8 +439,11 @@ def run_engine(args) -> None:
         engine = MusicEngine(send, director, use_custom_synths=not args.no_custom_synths, narrator=narrator,
                              free_layer=args.free_layer, type_checker=type_checker, max_pieces=args.pieces)
 
+    stop_requested = []
+
     def shutdown(signum, _frame):
         print(f"\n[orchestrator] Received signal {signum}, stopping...")
+        stop_requested.append(time.monotonic())
         engine.stop()
 
     signal.signal(signal.SIGINT, shutdown)
@@ -462,6 +465,11 @@ def run_engine(args) -> None:
     worker.start()
     while worker.is_alive():
         worker.join(timeout=1)
+        # A model call can take minutes; don't let it keep SuperCollider
+        # running past the supervisor's patience (stream/live.sh waits 20 s).
+        if stop_requested and time.monotonic() - stop_requested[0] > 8:
+            print("[orchestrator] the engine is waiting on a model call; shutting down without it")
+            break
 
     if live:
         session_log.close(edits=engine.edits)

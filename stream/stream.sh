@@ -24,6 +24,9 @@
 #             YS_BG_DIM / YS_BG_BLUR  darken (0-1, default 0.35) / blur (pixels) the background
 #             YS_STREAM_SEGMENT_HOURS reconnect every N hours (default 11; YouTube
 #                                     stops archiving very long single sessions)
+#             YS_STREAM_SEGMENT_SECONDS the same in seconds, wins over the hours
+#             YS_STREAM_ONCE          stop after one segment instead of reconnecting
+#                                     (stream/record.sh uses both to record a file)
 #             YS_AUDIO_INPUT          ffmpeg audio input args (default: pulse sink monitor)
 #             YS_FONT / YS_MONO_FONT  font files for drawtext
 #             YS_VIDEO_SIZE, YS_FPS, YS_VIDEO_BITRATE (default 1920x1080, 30, 4500k;
@@ -102,7 +105,7 @@ SIZE="${YS_VIDEO_SIZE:-$DEFAULT_SIZE}"
 W="${SIZE%x*}"; H="${SIZE#*x}"
 FPS="${YS_FPS:-30}"
 VBITRATE="${YS_VIDEO_BITRATE:-$DEFAULT_BITRATE}"
-SEGMENT_SECONDS=$(( ${YS_STREAM_SEGMENT_HOURS:-11} * 3600 ))
+SEGMENT_SECONDS="${YS_STREAM_SEGMENT_SECONDS:-$(( ${YS_STREAM_SEGMENT_HOURS:-11} * 3600 ))}"
 FONT="${YS_FONT:-/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf}"
 MONO="${YS_MONO_FONT:-/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf}"
 SINK="${YS_SINK_NAME:-ystream_sink}"
