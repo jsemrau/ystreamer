@@ -28,7 +28,7 @@ from .blocks import STYLE_SETTINGS, Block, blocks_for, find_block, subgenre, sub
 from .livecode import (ALL_WRAPPERS, BASS_WRAPPERS, CHOICE_SLOTS, CLUB_DRUM_WRAPPERS, CLUB_STYLES, DRUM_WRAPPERS,
                        EDIT_OPS, FX_RANGES,
                        FX_NOTES, LEAD_WRAPPERS, LOCKED_SLOTS, MELODIC_WRAPPERS, PF_RANGES, ROLE_CHANNELS, ROLE_FX,
-                       WRAPPER_NOTES, Edit, EditError,
+                       NOTE_BUDGET, VOCAL_WRAPPERS, WRAPPER_NOTES, notes_per_bar, Edit, EditError,
                        Program, Track, allowed_wrappers, apply_edit, complexity, line_controls)
 from .narrator import clean_narration
 from .plan import (DEFAULT_LIVE_PLAN, LIVE_PIECE_MINUTES, arc_summary, fit_live_plan, live_plan, plan_piece,
@@ -91,6 +91,21 @@ class SetState:
 
 PHASE_LABELS = {"groove2": "peak"}
 
+# The vocal (chops or an acapella) is the payoff: it comes in for the
+# breakdown, a voice in the space the kick leaves, and sings through the peak.
+VOCAL_PHASES = ("breakdown", "rebuild", "groove2")
+VOCAL_CUE = {"do": "start", "part": "vocal", "say": "In comes the vocal"}
+
+
+def with_vocal_cue(cues: dict) -> dict:
+    """The track's cues, with the vocal brought in for the breakdown (or the
+    peak, if there's no breakdown) unless a cue already brings it in."""
+    if any(isinstance(c, dict) and c.get("part") == "vocal" for cs in cues.values() for c in cs):
+        return cues
+    phase = "breakdown" if "breakdown" in cues else "groove2"
+    return {**cues, phase: list(cues.get(phase, [])) + [dict(VOCAL_CUE)]}
+
+
 def builtin_cues(piece) -> dict[str, list[str]]:
     """Plain instructions for a track when no Director wrote any: the turns a
     live set takes, named after the parts the track has."""
@@ -129,6 +144,7 @@ class Performer:
         # ("jevtypesafe") chooses blind among them and built-in candidates.
         self.judge = judge
         self._last_piece = None
+        self._recent_vocals: deque[str] = deque(maxlen=3)   # the last acapellas sung
         self.track_narration = ""   # the Director's spoken line for the current track
         self.track_mood = ""
         # Called as on_surprise(name) when one of the track's surprises fires
@@ -237,6 +253,7 @@ class Performer:
             piece = plan_piece(self.rng, prev_piece, style=self.style, target_minutes=LIVE_PIECE_MINUTES,
                                theme=self.theme)
         self._last_piece = piece
+        vocal = self._choose_acapella(piece)
         self.track_narration = getattr(piece, "narration", "") or ""
         self.track_mood = piece.mood
         from .theory import Key as _Key, progression_named, progressions_for
@@ -256,6 +273,8 @@ class Performer:
         cues = {p: [c for c in cs if not (isinstance(c, dict) and "surprise" in c)]
                 for p, cs in (piece.cues or {}).items()}
         cues = {p: cs for p, cs in cues.items() if cs} or builtin_cues(piece)
+        if vocal or any(b.role == "vocal" for b in blocks_for(self.style)):
+            cues = with_vocal_cue(cues)
         plan = fit_live_plan(live_plan(piece), piece.cps, getattr(self.director, "target_minutes", LIVE_PIECE_MINUTES))
         fake_step = -1
         if piece.surprise == "fake_drop":
@@ -302,7 +321,32 @@ class Performer:
                      degrees=degrees, bars_per_chord=piece.cycles_per_chord, progressions=progressions,
                      sounds=dict(piece.sounds), hook=dict(piece.hook), idea=piece.idea,
                      parts=dict(piece.parts), motion=dict(piece.motion), subgenre=piece.subgenre,
-                     kit=dict(subgenre(self.style, piece.subgenre).get("kit", {})), surprise=piece.surprise)
+                     kit=dict(subgenre(self.style, piece.subgenre).get("kit", {})), surprise=piece.surprise,
+                     vocal=vocal or {})
+
+    def _choose_acapella(self, piece) -> dict | None:
+        """Now and then a licensed acapella (music/vocals.py) for the track:
+        the track takes its tempo and the nearest key it can be sung in, and
+        loses a surprise that would move either."""
+        from . import vocals
+        from .plan import STYLES
+
+        sub = subgenre(self.style, piece.subgenre)
+        style_cfg = STYLES.get(self.style, {})
+        vocal = vocals.choose(self.rng, self.style, piece.key, tuple(sub.get("bpm") or style_cfg.get("bpm", (60, 180))),
+                              list(sub.get("modes") or style_cfg.get("modes", [])), list(self._recent_vocals))
+        if vocal is None:
+            return None
+        self._recent_vocals.append(vocal["name"])
+        moved = [f"{piece.key} -> {vocal['key']}"] if vocal["key"] != piece.key else []
+        moved += [f"{piece.bpm:g} -> {vocal['bpm']:g} BPM"] if vocal["bpm"] != piece.bpm else []
+        piece.key, piece.bpm = vocal["key"], vocal["bpm"]
+        if piece.surprise in ("tempo_lift", "key_lift"):
+            self.log(f"[Performer] no {piece.surprise} this track: the acapella keeps its key and tempo")
+            piece.surprise = ""
+        self.log(f"🎤 Acapella: {vocal['name']} ({vocal['key']}, {vocal['bpm']:g} BPM, {vocal['cycles']} bars)"
+                 + (f"; the track moves {', '.join(moved)}" if moved else ""))
+        return vocal
 
     # Which progression plays in each phase of the arc.
     HARMONY_PARTS = {"build": "main", "groove": "main", "breakdown": "breakdown", "rebuild": "breakdown",
@@ -541,8 +585,8 @@ class Performer:
         if do == "start" and line is not None and line.muted or do == "bring back" and line is not None and line.muted:
             edit = Edit("unmute", role=role)
         elif do == "start" and line is None:
-            block = find_block(self.style, cue.get("block", "")) or next(
-                iter(track_blocks(self.style, program.track.subgenre, program.track.sounds, role)), None)
+            block = find_block(self.style, cue.get("block", ""), program.track) or next(
+                iter(track_blocks(self.style, program.track.subgenre, program.track.sounds, role, program.track)), None)
             if block is None or self.melodic_problem(program, role) \
                     or len(program.active_roles()) >= self.settings["max_lines"]:
                 return None
@@ -556,7 +600,7 @@ class Performer:
         elif do == "stop" and line is not None and not line.muted and len(program.active_roles()) > 1:
             edit = Edit("mute", role=role)
         elif do == "pattern" and line is not None and cue.get("pattern"):
-            block = find_block(self.style, line.block)
+            block = find_block(self.style, line.block, program.track)
             slot = cue.get("slot") or ((block.sketch_slot() or (None,))[0] if block else None)
             if slot in line.patterns:
                 edit = Edit("set_pattern", role=role, name=slot, value=cue["pattern"])
@@ -588,7 +632,8 @@ class Performer:
                  "hat": "perc", "perc": "perc", "clap": "perc", "lead": "lead", "melod": "lead",
                  "hook": "lead", "chord": "chords", "pad": "chords", "string": "chords", "keys": "keys",
                  "piano": "keys", "arp": "arp", "acid": "acid", "303": "acid", "texture": "texture",
-                 "noise": "texture", "vinyl": "texture"}
+                 "noise": "texture", "vinyl": "texture", "vocal": "vocal", "vox": "vocal", "voice": "vocal",
+                 "sing": "vocal", "acapella": "vocal"}
         role = next((r for w, r in roles.items() if w in words), None)
         if role == "perc" and "perc" not in program.lines and "beat" in program.lines and "clap" in words:
             role = "beat"                         # styles that keep the clap on the beat line
@@ -600,7 +645,8 @@ class Performer:
         if role and line is not None and line.muted and ("back" in words or any(w in words for w in starts)):
             edit = Edit("unmute", role=role, review=f"bringing the {role} back in")
         elif role and line is None and any(w in words for w in starts):
-            if any(b.role == role for b in blocks_for(self.style)) and len(active) < self.settings["max_lines"] \
+            if any(b.role == role for b in blocks_for(self.style, track=program.track)) \
+                    and len(active) < self.settings["max_lines"] \
                     and not self.melodic_problem(program, role):
                 edit = self._add(program, role)
                 edit.review = f"starting the {role}"
@@ -633,7 +679,7 @@ class Performer:
                             review=f"{'darker' if darker else 'brighter'}: the {target} filter to {value} Hz")
         elif role and any(w in words for w in ("more", "louder", "up", "bigger", "add", "need")):
             if line is None or line.muted:
-                blocks = [b for b in blocks_for(self.style) if b.role == role]
+                blocks = blocks_for(self.style, role, program.track)
                 if blocks and len(active) < self.settings["max_lines"]:
                     edit = self._add(program, role)
                     edit.review = f"bringing in the {role}"
@@ -666,13 +712,16 @@ class Performer:
         return fallback
 
     def _addable(self, program: Program) -> list[Block]:
-        """Blocks for the parts not in the program yet (the subgenre's own, where it has them)."""
-        roles = dict.fromkeys(b.role for b in blocks_for(self.style) if b.role not in program.lines)
-        return [b for r in roles for b in subgenre_blocks(self.style, program.track.subgenre, r)]
+        """Blocks for the parts not in the program yet (the subgenre's own, where it has them);
+        the vocal only from the breakdown on."""
+        roles = dict.fromkeys(b.role for b in blocks_for(self.style, track=program.track)
+                              if b.role not in program.lines
+                              and (b.role != "vocal" or self.state.phase in VOCAL_PHASES))
+        return [b for r in roles for b in subgenre_blocks(self.style, program.track.subgenre, r, program.track)]
 
     def _block_for(self, role: str, track=None) -> Block:
         return self.rng.choice(track_blocks(self.style, track.subgenre if track else "",
-                                            track.sounds if track else None, role))
+                                            track.sounds if track else None, role, track))
 
     def _add(self, program: Program, role: str) -> Edit:
         block = self._block_for(role, program.track)
@@ -712,7 +761,8 @@ class Performer:
         """Roles not playing yet, in the order a track builds up; the part
         carrying the Director's hook comes first, so the hook is always heard.
         Melodic roles over the style's limit are left out."""
-        available = [b.role for b in blocks_for(self.style)]
+        available = [b.role for b in blocks_for(self.style, track=program.track)
+                     if b.role != "vocal" or self.state.phase in VOCAL_PHASES]
         order = [r for r in ROLE_ORDER.get(self.style, list(ROLE_CHANNELS)) if r in available]
         # Every part the style has blocks for can come in, even one the order
         # forgot (hardcore once had no bass in it, so no track ever had one).
@@ -748,6 +798,9 @@ class Performer:
             for role in ("beat", "bass"):
                 if role in active and len(active) > 1 and role not in st.muted_for_breakdown:
                     return Edit("mute", role=role, reason=f"drop the {role} for a breakdown")
+            if "vocal" not in program.lines and blocks_for(self.style, "vocal", program.track) \
+                    and len(active) < self.settings["max_lines"]:
+                return self._add(program, "vocal")
             return self._tweak(program, calm=True)
         if st.phase == "rebuild":
             for role in ("bass", "beat"):
@@ -764,7 +817,7 @@ class Performer:
         missing = self._missing_roles(program)
         if missing and len(active) < self.settings["max_lines"] and rng.random() < 0.35:
             return self._add(program, missing[0])
-        if rng.random() < 0.05:
+        if rng.random() < 0.05 and not program.track.vocal:
             delta = rng.choice([-2, -1, 1, 2])
             return Edit("tempo", value=str(program.track.bpm + delta), reason="nudge the tempo")
         return self._tweak(program)
@@ -870,7 +923,10 @@ class Performer:
                             reason=f"one {'hit more' if small.count('~') < current.count('~') else 'hit less'} "
                                    f"in the {role} {slot}")
         elif block and block.pool and rng.random() < 0.3:
-            small = self._melodic_step(current, block.pool)
+            # (No note more once the line is at its budget: less is more.)
+            budget = line.max_notes or NOTE_BUDGET.get(role, 0)
+            full = bool(budget) and notes_per_bar(line.body, slot, current) >= budget
+            small = self._melodic_step(current, block.pool, add=not full)
             if small:
                 return Edit("set_pattern", role=role, name=slot, value=small,
                             reason=f"{'a rest' if small.count('~') > current.count('~') else 'one more note'} "
@@ -905,16 +961,16 @@ class Performer:
         layers[k] = (" " if layers[k].startswith(" ") else "") + " ".join(tokens)
         return ",".join(layers)
 
-    def _melodic_step(self, pattern: str, pool: list[int]) -> str | None:
+    def _melodic_step(self, pattern: str, pool: list[int], add: bool = True) -> str | None:
         """In a flat melody: one note becomes a rest, or a rest a note (a
-        chord tone, so it stays in harmony)."""
+        chord tone, so it stays in harmony); only a rest when `add` is False."""
         tokens = pattern.split()
         if len(tokens) < 4 or not all(re.fullmatch(r"~|-?\d+", t) for t in tokens):
             return None
         rests = [i for i, t in enumerate(tokens) if t == "~"]
         notes = [i for i, t in enumerate(tokens) if t != "~"]
         chord_tones = [n for n in pool if n % 7 in (0, 2, 4, 6)] or [0]
-        if rests and (len(notes) <= 2 or self.rng.random() < 0.5):
+        if add and rests and (len(notes) <= 2 or self.rng.random() < 0.5):
             tokens[self.rng.choice(rests)] = str(self.rng.choice(chord_tones))
         elif len(notes) > 2:
             tokens[self.rng.choice(notes)] = "~"
@@ -1456,7 +1512,7 @@ class Performer:
         if op == "unmute" and self.melodic_problem(program, role):
             raise EditError(self.melodic_problem(program, role))
         if op == "add":
-            block = find_block(self.style, str(data.get("block", "")))
+            block = find_block(self.style, str(data.get("block", "")), program.track)
             if block is None:
                 raise EditError(f"unknown block {data.get('block')!r}")
             edit.role = block.role
@@ -1560,10 +1616,13 @@ class Performer:
 def _wrapper_kinds(style: str | None) -> dict[str, list[str]]:
     """The wrapper groups for a style (club drums stay straight)."""
     return {"drum wrappers": CLUB_DRUM_WRAPPERS if style in CLUB_STYLES else DRUM_WRAPPERS,
-            "bass wrappers": BASS_WRAPPERS, "melodic wrappers": MELODIC_WRAPPERS, "lead wrappers": LEAD_WRAPPERS}
+            "bass wrappers": BASS_WRAPPERS, "melodic wrappers": MELODIC_WRAPPERS, "lead wrappers": LEAD_WRAPPERS,
+            "vocal wrappers": VOCAL_WRAPPERS}
 
 
 def _wrapper_kind(line) -> str:
+    if line.role == "vocal":
+        return "vocal wrappers"
     if line.drums:
         return "drum wrappers"
     return {"bass": "bass wrappers", "lead": "lead wrappers"}.get(line.role, "melodic wrappers")
@@ -1615,7 +1674,8 @@ PHASE_HELP = {
               "edit: change one note, add or drop one hit, ride the acid knob or a filter a little "
               "further in the same direction. Now and then a bigger touch (a second bar with "
               "`<[...] [...]>`, an octave layer). Keep every line in harmony.",
-    "breakdown": "Breakdown: mute the beat and/or bass, and make what's left more spacious.",
+    "breakdown": "Breakdown: mute the beat and/or bass, and make what's left more spacious. "
+                 "If there's a vocal, bring it in now: a voice in the space the kick leaves.",
     "rebuild": "Bring the muted lines back (unmute), building tension.",
     "groove2": "Second peak: the richest part of the track. Bring in what was missing, intensify, "
                "then start easing off.",
@@ -1706,6 +1766,7 @@ PHASE_EXAMPLES = {
     ],
     "breakdown": [
         "Mute the beat first; the space it leaves is the point.",
+        "Then bring in the vocal: the voice over the breakdown is the moment people remember.",
         "Make what remains bigger: more room on the keys or chords, slower filter sweeps.",
         "Thin the melody (more ~ rests) so the breakdown breathes.",
     ],

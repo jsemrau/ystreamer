@@ -28,6 +28,7 @@ from .theory import Key
 # Channel per role (d1..d8): fixed so the code reads the same way every time.
 ROLE_CHANNELS = {
     "beat": 1, "bass": 2, "chords": 3, "keys": 4, "lead": 5, "acid": 6, "texture": 7, "perc": 8, "arp": 9,
+    "vocal": 12,                  # (d10 and d11 are the arranger's riser and fills)
 }
 ROLES = list(ROLE_CHANNELS)
 
@@ -73,8 +74,13 @@ DRUM_WRAPPERS = [
 CLUB_DRUM_WRAPPERS = ["whenmod 8 7 (# crush 6)", "every 3 (# lpf 1500)", "whenmod 16 15 (# hpf 1200)"]
 CLUB_STYLES = ("trance", "techno", "hardcore", "deephouse", "darkwave")
 BASS_WRAPPERS = ["degradeBy 0.1", "sometimesBy 0.2 (degradeBy 0.5)", "whenmod 8 6 (# lpf 300)"]
+# Vocal chops (spoken phrases, no pitch to keep) may stutter, play backwards
+# or go thin; a sung acapella (a "loop" in key and on the beat) only changes
+# its tone and space, so it stays in time and in tune.
+ACAPELLA_WRAPPERS = ["whenmod 8 6 (# hpf 1500)", "every 2 (# room 0.5)"]
+VOCAL_WRAPPERS = ["sometimesBy 0.25 (echo 3 0.125 0.6)", "every 4 (# speed (-1))"] + ACAPELLA_WRAPPERS
 ALL_WRAPPERS = (set(MELODIC_WRAPPERS) | set(DRUM_WRAPPERS) | set(CLUB_DRUM_WRAPPERS) | set(BASS_WRAPPERS)
-                | set(RETIRED_WRAPPERS))
+                | set(VOCAL_WRAPPERS) | set(RETIRED_WRAPPERS))
 
 # What each wrapper does to the sound, for the performer's prompt (a model
 # that only sees "off 0.25 (|+ n 12)" has to guess).
@@ -100,6 +106,9 @@ WRAPPER_NOTES = {
     "every 3 (# lpf 1500)": "every 3rd bar darker: subtle variation",
     "sometimesBy 0.1 (echo 3 0.125 0.5)": "occasional stuttered echo: a glitchy fill",
     "whenmod 8 6 (# lpf 300)": "last 2 bars of every 8 the bass goes subby: tension before the turn",
+    "sometimesBy 0.25 (echo 3 0.125 0.6)": "now and then the vocal stutters (a chopped echo): a DJ's vocal chop",
+    "every 4 (# speed (-1))": "every 4th bar the vocal plays backwards: an eerie reversed phrase",
+    "whenmod 8 6 (# hpf 1500)": "last 2 bars of every 8 the vocal goes thin, like a telephone: a lift before the turn",
 }
 
 # What each effect and control sounds like.
@@ -166,12 +175,15 @@ ROLE_FX = {
     "lead": ["lpf", "room", "delay", "delayfeedback", "legato", "gain"],
     "acid": ["lpf", "room", "delay", "legato", "gain", "resonance"],
     "arp": ["lpf", "room", "delay", "delayfeedback", "legato", "gain", "pan"],
+    "vocal": ["room", "size", "delay", "delaytime", "delayfeedback", "hpf", "lpf", "pan", "gain"],
 }
 
 
 def allowed_wrappers(line: "LineSpec", style: str | None = None) -> list[str]:
     if line.role == "texture":
         return []
+    if line.role == "vocal":
+        return ACAPELLA_WRAPPERS if "loop" in line.patterns else VOCAL_WRAPPERS
     if line.drums:
         return CLUB_DRUM_WRAPPERS if style in CLUB_STYLES else DRUM_WRAPPERS
     if line.role == "bass":
@@ -200,6 +212,93 @@ _NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
 _SINE_RE = re.compile(r"^\(slow (\d+) \$ range (-?[\d.]+) (-?[\d.]+) (sine|saw|tri)\)$")
 
 
+# Less is more: the most new notes a melodic line starts in a bar (its
+# busiest bar). A tune sings in a few notes, held (_) and with rests (~); the
+# arps and acid of trance are streams by design and have no budget.
+NOTE_BUDGET = {"lead": 5, "keys": 4}
+_NOTE_TOKEN_RE = re.compile(r"^-?\d+$")
+
+
+def _bars(pattern: str) -> list[list[str]]:
+    """A tune's bars as their steps: each top-level [..] of a <[..] [..]>, or
+    the whole pattern."""
+    p = pattern.strip()
+    if p.startswith("<[") or p.startswith("["):
+        groups = re.findall(r"\[([^\[\]]*)\]", p)
+        if groups:
+            return [g.split() for g in groups]
+    return [p.strip("<>").split()]
+
+
+def notes_per_bar(body: str, slot: str, value: str) -> float:
+    """How many new notes the busiest bar of a line's tune starts: a phrase
+    ("{melody}") counts its notes per bar, a cycle streamed N a bar
+    ("<{arp}>*N") plays N steps a bar, its notes among them."""
+    m = re.search(r'"<\{' + re.escape(slot) + r'\}>\*(\d+)"', body)
+    if m:
+        steps = [t for t in value.replace("<", " ").replace(">", " ").replace("[", " ").replace("]", " ").split()]
+        notes = sum(bool(_NOTE_TOKEN_RE.match(t)) for t in steps)
+        return int(m.group(1)) * notes / max(1, len(steps))
+    if f'"{{{slot}}}"' not in body:
+        return 0.0
+    repeat = re.fullmatch(r"\s*\[([^\[\]]*)\]\*(\d+)\s*", value)        # "[0 4 7 4]*2": the bar twice
+    if repeat:
+        return float(sum(bool(_NOTE_TOKEN_RE.match(t)) for t in repeat.group(1).split()) * int(repeat.group(2)))
+    return float(max((sum(bool(_NOTE_TOKEN_RE.match(t)) for t in bar) for bar in _bars(value)), default=0))
+
+
+def hold_between(pattern: str, every: int, pickups: bool = True) -> str:
+    """In each bar, a note off the grid of `every` steps becomes a hold of the
+    note before it: the line keeps its notes on the beats, so its harmony and
+    shape, with fewer notes. A note right after a rest (a pickup) stays,
+    unless `pickups` is False: then it joins the rest."""
+    def bar(tokens: list[str]) -> str:
+        out = []
+        for i, t in enumerate(tokens):
+            if i % every and _NOTE_TOKEN_RE.match(t) and out:
+                if out[-1] != "~":
+                    t = "_"
+                elif not pickups:
+                    t = "~"
+            out.append(t)
+        return " ".join(out)
+    p = pattern.strip()
+    if (p.startswith("<[") or p.startswith("[")) and re.search(r"\[[^\[\]]*\]", p):
+        return re.sub(r"\[([^\[\]]*)\]", lambda m: "[" + bar(m.group(1).split()) + "]", pattern)
+    wrapped = p.startswith("<") and p.endswith(">")
+    text = bar(p.strip("<>").split())
+    return f"<{text}>" if wrapped else text
+
+
+def space_cycle(pattern: str) -> str:
+    """A streamed cycle with a rest after each note: half as many notes a bar."""
+    p = pattern.strip()
+    wrapped = p.startswith("<") and p.endswith(">")
+    text = " ".join(f"{t} ~" if _NOTE_TOKEN_RE.match(t) else t for t in p.strip("<>").split())
+    return f"<{text}>" if wrapped else text
+
+
+def within_budget(body: str, slot: str, value: str, budget: int) -> str:
+    """The tune, thinned until its busiest bar starts at most `budget` notes.
+    A phrase: notes between the 8ths held, then those between the beats,
+    then the pickups after rests too. A streamed cycle: a rest after each note."""
+    if not budget:
+        return value
+    if re.search(r'"<\{' + re.escape(slot) + r'\}>\*\d+"', body):
+        for _ in range(3):
+            if notes_per_bar(body, slot, value) <= budget:
+                break
+            value = space_cycle(value)
+        return value
+    steps = max((len(b) for b in _bars(value)), default=8)
+    beat = max(1, steps // 4)
+    for every, pickups in ([(2, True)] if steps >= 16 else []) + [(beat, True), (beat, False)]:
+        if notes_per_bar(body, slot, value) <= budget:
+            break
+        value = hold_between(value, every, pickups)
+    return value
+
+
 @dataclass
 class LineSpec:
     role: str
@@ -212,6 +311,7 @@ class LineSpec:
     drums: bool = False
     block: str = ""                 # which library block it came from
     base_gain: str = ""             # the level the line entered at; gain edits stay within +/-3 dB of it
+    max_notes: int = 0              # its note budget a bar (0: the role's, NOTE_BUDGET)
 
     @property
     def channel(self) -> int:
@@ -270,6 +370,28 @@ def arp_sequences(voicing: str) -> dict[str, str]:
     return {"up": up, "down": down, "updown": updown, "pedal": pedal}
 
 
+# Echo lengths that sit on the beat, in beats: a 16th, an 8th, a dotted 8th
+# (the Balearic and trance delay), a quarter, a dotted quarter, a half.
+BEAT_DIVISIONS = (0.25, 0.5, 0.75, 1.0, 1.5, 2.0)
+
+
+def beat_delay(value: str, bpm: float) -> str:
+    """A block's echo time (seconds, written for one tempo) moved to the
+    nearest division of the beat at `bpm`, so the echoes fall on the groove
+    instead of smearing it; anything but a plain number is left alone."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return value
+    if seconds <= 0 or bpm <= 0:
+        return value
+    beat = 60.0 / bpm
+    import math
+
+    best = min(BEAT_DIVISIONS, key=lambda d: abs(math.log(seconds / (d * beat))))
+    return f"{best * beat:.4f}"
+
+
 @dataclass
 class Track:
     """The musical frame of the current track: key, tempo, progression."""
@@ -301,10 +423,16 @@ class Track:
     subgenre: str = ""
     kit: dict = field(default_factory=dict)
     surprise: str = ""              # the art director's rule-break for this track (music/surprises.py)
+    # The acapella this track sings (music/vocals.fit: bank, n, cycles, ...);
+    # it set the key and tempo, so the tempo stays.
+    vocal: dict = field(default_factory=dict)
 
     def make(self, block, rng) -> "LineSpec":
-        """A line from a block, with this track's sounds, sketch, voicing and kit."""
-        return block.make(rng, self.sounds, self.hook, self.parts, self.motion, voicing=self.voicing, kit=self.kit)
+        """A line from a block, with this track's sounds, sketch, voicing and
+        kit, its echo on the beat at this track's tempo."""
+        line = block.make(rng, self.sounds, self.hook, self.parts, self.motion, voicing=self.voicing, kit=self.kit)
+        line.fx = [[n, beat_delay(v, self.bpm) if n == "delaytime" else v] for n, v in line.fx]
+        return line
 
     @property
     def cps(self) -> float:
@@ -685,6 +813,9 @@ def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
         bpm = float(_check_number(edit.value, lo, hi))
         if abs(bpm - program.track.bpm) > 12:
             raise EditError("tempo changes must be gradual (at most 12 BPM at a time)")
+        if program.track.vocal and bpm != program.track.bpm:
+            raise EditError(f"the tempo stays at {program.track.bpm:g} BPM: the acapella "
+                            f"({program.track.vocal.get('name', '')}) is sung at it, faster or slower puts it out of tune")
         new.track.bpm = bpm
         return new
     if op == "add":
@@ -730,6 +861,12 @@ def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
     elif op == "set_pattern":
         if edit.name not in line.patterns:
             raise EditError(f"pattern {edit.name!r} not on this line (has {sorted(line.patterns)})")
+        budget = line.max_notes or NOTE_BUDGET.get(line.role, 0)
+        if budget and not line.drums:
+            busy = notes_per_bar(line.body, edit.name, str(edit.value))
+            if busy > budget:
+                raise EditError(f"{busy:g} new notes in a bar is too busy for the {line.role}: at most {budget} "
+                                "(less is more: hold notes with _ and breathe with ~ rests)")
         if edit.name in LOCKED_SLOTS:
             raise EditError(f"{edit.name!r} can't be edited")
         if edit.name in CHOICE_SLOTS:

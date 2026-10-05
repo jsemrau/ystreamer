@@ -45,6 +45,11 @@ fi
 [[ -f voices/en_GB-jenny_dioco-medium.onnx ]] || \
     ./venv/bin/python -m piper.download_voices en_GB-jenny_dioco-medium --download-dir voices
 
+# Real instruments (FreePats, CC0: guitar, piano, sax, electric guitar and bass,
+# harp, kalimba); without them the modelled SynthDefs play
+[[ -d instruments/piano ]] || ./venv/bin/python -m music.instruments \
+    || echo "NOTE: couldn't fetch all the instrument samples; the modelled ones play instead"
+
 # 3. Configuration
 [[ -f .env ]] || cp .env.example .env
 echo "Edit .env (stream key, model), then:"

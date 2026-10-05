@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass, field
 import config
 
 from . import presets as P
-from .blocks import LIVE_SOUNDS
+from .blocks import LIVE_SOUNDS, RETIRED_SOUNDS
 from .theory import (CHORD_COLORS, MODES, PROGRESSIONS_BY_NAME, Key, mode_chords, parse_progression,
                      progression_named, progressions_for)
 
@@ -121,7 +121,7 @@ STYLES["hardcore"]["modes"] = ["minor", "phrygian", "dorian", "major", "mixolydi
 # picked, by default, by the Director or by the model. Styles fall back to
 # the soft pad, air, piano, glass and electric piano.
 UNWANTED_SYNTHS = {"ys_supersaw", "ys_gatesaw", "ys_pad", "ys_strings", "ys_choir", "supersaw",
-                   "ys_organ", "superhammond", "ys_pulsepad"}
+                   "ys_organ", "superhammond", "ys_pulsepad"} | RETIRED_SOUNDS
 UNWANTED_PRESETS = {name for role in P.PRESETS.values() for name, pr in role.items()
                     if pr.synth in UNWANTED_SYNTHS}
 _FALLBACK = {"pad": ["soft_pad", "air_pad", "piano_pad"], "melody": ["glass"], "arp": ["glass_arp"],
@@ -145,7 +145,8 @@ THEME_STYLE_KEYWORDS = [
     ("darkwave", ("darkwave", "dark wave", "coldwave", "cold wave", "cold electro", "minimal wave",
                   "minimal synth", "post-punk", "post punk", "ebm")),
     ("techno", ("techno", "hard techno", "acid techno", "industrial", "rave", "berghain")),
-    ("trance", ("trance", "switch angel", "switchangel", "uplifting", "psytrance", "supersaw")),
+    ("trance", ("trance", "switch angel", "switchangel", "uplifting", "psytrance", "supersaw", "chicane",
+                "saltwater", "balearic trance")),
     ("deephouse", ("deep house", "house", "garage", "club", "dance")),
     ("lofi", ("lofi", "lo-fi", "hip hop", "hiphop", "study", "beats")),
     ("ambient", ("ambient", "sleep", "drone", "meditation", "space")),
@@ -161,6 +162,25 @@ def style_from_theme(theme: str | None) -> str | None:
         if any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", text) for w in words):
             return style
     return None
+
+# Theme words that ask for a subgenre of the style (blocks.SUBGENRES): every
+# track of a stream with that theme is one, by either planner.
+THEME_SUBGENRE_KEYWORDS = {
+    "trance": [("balearic", ("saltwater", "chicane", "balearic", "ibiza", "sunset", "cafe del mar", "café del mar")),
+               ("psy", ("psytrance", "psy trance", "goa"))],
+    "hardcore": [("happy", ("happy hardcore", "wonderful days")), ("gabber", ("gabber", "gabba", "rotterdam"))],
+}
+
+
+def subgenre_from_theme(style: str | None, theme: str | None) -> str:
+    """The subgenre of `style` the theme asks for ("Chicane's Saltwater at
+    sunset" -> trance's balearic), or ""."""
+    text = f" {(theme or '').lower()} "
+    for name, words in THEME_SUBGENRE_KEYWORDS.get(style or "", []):
+        if any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", text) for w in words):
+            return name
+    return ""
+
 
 # A live track's target length: long enough to build and drop, short enough
 # that the next track's key, chords, hook and sound come before it wears thin.
@@ -354,6 +374,8 @@ def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | N
     variants = [v for v in SUBGENRES.get(style, {}) if not previous or v != previous.subgenre] or list(
         SUBGENRES.get(style, {}))
     variant = rng.choice(variants) if variants else ""
+    if subgenre_from_theme(style, theme) in SUBGENRES.get(style, {}):
+        variant = subgenre_from_theme(style, theme)        # the theme asks for it, every track
     # A subgenre with its own modes (happy hardcore: major) moves the key to
     # the nearest one of them.
     key = fit_mode(key, SUBGENRES[style][variant].get("modes") if variant else None)
@@ -425,8 +447,8 @@ _CLUB_SOUNDS = {"chords": ["ys_housepiano", "ys_epiano"], "keys": ["ys_housepian
 STYLE_SOUNDS = {
     "trance": _CLUB_SOUNDS, "techno": _CLUB_SOUNDS, "hardcore": _CLUB_SOUNDS,
     "darkwave": {"chords": ["ys_coldstrings", "ys_glass"], "keys": ["ys_glass", "ys_epiano"],
-                 "lead": ["ys_wavelead", "ys_pulselead", "ys_coldguitar"],
-                 "arp": ["ys_wavesynth", "ys_coldguitar", "ys_pluck"]},
+                 "lead": ["ys_wavelead", "ys_pulselead", "ys_fmlead"],
+                 "arp": ["ys_wavesynth", "ys_pluck"]},
     "deephouse": {"chords": ["ys_epiano", "ys_housepiano", "ys_m1organ"],
                   "keys": ["ys_housepiano", "ys_epiano", "ys_marimba", "ys_vibes", "ys_m1organ"],
                   "lead": ["ys_glass", "ys_pulselead", "ys_marimba", "ys_vox", "ys_trumpet", "ys_melodica"],
@@ -436,13 +458,13 @@ STYLE_SOUNDS = {
     # trip-hop voices for the theme to choose from.
     "lofi": {"lead": ["ys_keys", "ys_glass", "ys_vibes", "ys_melodica", "ys_trumpet", "ys_flute", "ys_nylon"],
              "keys": ["ys_epiano", "ys_keys", "ys_vibes"],
-             "arp": ["ys_glass", "ys_vibes", "ys_nylon", "ys_harpsichord"]},
+             "arp": ["ys_glass", "ys_vibes", "ys_nylon", "ys_harpsichord", "ys_kalimba"]},
     "downtempo": {"lead": ["ys_epiano", "ys_melodica", "ys_trumpet", "ys_vibes", "ys_flute", "ys_harpsichord",
                            "ys_sitar"],
                   "keys": ["ys_keys", "ys_vibes", "ys_epiano"],
-                  "arp": ["ys_pluck", "ys_nylon", "ys_vibes", "ys_harpsichord"]},
+                  "arp": ["ys_pluck", "ys_nylon", "ys_vibes", "ys_harpsichord", "ys_harp"]},
     "ambient": {"lead": ["ys_glass", "ys_flute", "ys_vibes", "ys_vox"], "keys": ["ys_keys", "ys_vibes"],
-                "arp": ["ys_glass", "ys_vibes", "ys_nylon"]},
+                "arp": ["ys_glass", "ys_vibes", "ys_nylon", "ys_harp", "ys_kalimba"]},
 }
 
 
@@ -451,6 +473,11 @@ if config.HYPERSAW:
     STYLE_SOUNDS["hardcore"] = {**_CLUB_SOUNDS, "lead": ["ys_sawlead", "ys_hoover", "ys_pulselead", "ys_glass"]}
     STYLE_SOUNDS["techno"] = {**_CLUB_SOUNDS, "lead": [*_CLUB_SOUNDS["lead"], "ys_hoover"],
                               "chords": [*_CLUB_SOUNDS["chords"], "ys_m1organ"]}
+# The sounds taken off air (blocks.RETIRED_SOUNDS), and real instruments not
+# installed here (blocks: harp, kalimba), aren't in any style's frame.
+STYLE_SOUNDS = {style: {role: [o for o in options if o not in RETIRED_SOUNDS and o in LIVE_SOUNDS.get(role, {})]
+                        for role, options in roles.items()}
+                for style, roles in STYLE_SOUNDS.items()}
 
 
 def sounds_summary(sounds: dict[str, str]) -> str:
@@ -545,7 +572,15 @@ def choose_sounds(piece: Piece, rng: random.Random, previous: Piece | None = Non
         return bool(moods & set(SOUND_CHARACTER.get(synth, ())))
 
     choices: dict[str, list[str]] = {}
+    # A theme that names the subgenre ("Chicane's Saltwater") wants its
+    # signature: the subgenre's first sound for a part (the choir, the nylon
+    # guitar) on most tracks, even two in a row.
+    signature = bool(preferred) and subgenre_from_theme(piece.style, theme) == piece.subgenre
     for role in dict.fromkeys([*style_sounds, *preferred]):
+        if signature and preferred.get(role) and rng.random() < 0.65:
+            choices[role] = preferred[role][:1]
+            piece.sounds[role] = preferred[role][0]
+            continue
         frame = [o for o in dict.fromkeys([*(preferred.get(role) or []), *style_sounds.get(role, [])])
                  if o in LIVE_SOUNDS.get(role, {})] or preferred.get(role) or style_sounds.get(role, [])
         if previous is not None and previous.sounds.get(role) and len(frame) > 1:
@@ -782,7 +817,8 @@ MAX_CUES_PER_PHASE = 5
 CUE_ACTIONS = ("start", "stop", "bring back", "pattern", "knob", "sound", "wrap", "tempo")
 CUE_PARTS = {"kick": "beat", "beat": "beat", "drums": "beat", "hats": "perc", "claps": "perc",
              "hats and claps": "perc", "perc": "perc", "bass": "bass", "chords": "chords", "stabs": "chords",
-             "keys": "keys", "acid": "acid", "arp": "arp", "lead": "lead", "pad": "texture", "texture": "texture"}
+             "keys": "keys", "acid": "acid", "arp": "arp", "lead": "lead", "pad": "texture", "texture": "texture",
+             "vocal": "vocal", "vocals": "vocal", "voice": "vocal", "vox": "vocal", "acapella": "vocal"}
 PART_NAMES = {"beat": "kick", "perc": "hats and claps", "texture": "pad"}
 
 
@@ -990,7 +1026,72 @@ def validate_hook(raw, style: str) -> tuple[dict[str, str], str]:
     problem = _part_problem(role, kinds[role], pattern)
     if problem:
         return {}, problem
+    # Less is more: a phrase within its part's note budget (livecode.NOTE_BUDGET),
+    # the notes between the beats held, so the tune keeps its shape.
+    from .livecode import NOTE_BUDGET, within_budget
+
+    if kinds[role] == "phrase" and NOTE_BUDGET.get(role):
+        pattern = within_budget('"{hook}"', "hook", pattern, NOTE_BUDGET[role])
     return {"role": role, "kind": kinds[role], "pattern": pattern}, ""
+
+
+# Tunes this alike (hook_similarity) are the same tune to a listener.
+HOOK_SIMILAR = 0.6
+_TUNE_DEGREE_RE = re.compile(r"(?<![*!/@%\d.:])-?\d+")
+
+
+def tune_degrees(pattern: str) -> list[int]:
+    """The notes of a tune in order (rests, holds and step counts aside)."""
+    return [int(d) for d in _TUNE_DEGREE_RE.findall(pattern or "")]
+
+
+def hook_similarity(a: str, b: str) -> float:
+    """How alike two tunes are, 0 to 1: how much of their note sequence
+    they share, in order. A tune and the same tune with one note changed
+    or a rest moved score about 0.8; different tunes under 0.5."""
+    import difflib
+
+    da, db = tune_degrees(a), tune_degrees(b)
+    if not da or not db:
+        return 0.0
+    return difflib.SequenceMatcher(None, da, db, autojunk=False).ratio()
+
+
+def _tune_bars(pattern: str) -> list[list[str]]:
+    """A tune's bars as their steps: each [..] of a <[..] [..]> is a bar,
+    else the whole pattern is one."""
+    groups = re.findall(r"\[([^\[\]]*)\]", pattern)
+    if not groups or pattern.strip().startswith("<") and not pattern.strip().startswith("<["):
+        groups = [pattern.strip("<> ")]
+    return [g.split() for g in groups if g.split()]
+
+
+def melody_brief(patterns: list[str]) -> str:
+    """What the recent tunes have in common (their step grid, range and
+    ending), said plainly so the next one can be different: an LLM shown a
+    list of tunes and told "write something different" writes their sibling."""
+    tunes = [p for p in patterns if tune_degrees(p)]
+    if len(tunes) < 2:
+        return ""
+    traits = []
+    grids = {len(bar) for p in tunes for bar in _tune_bars(p)}
+    if len(grids) == 1:
+        traits.append(f"all have {grids.pop()} steps a bar")
+    lows, highs = [min(tune_degrees(p)) for p in tunes], [max(tune_degrees(p)) for p in tunes]
+    if max(highs) - min(lows) <= 9:
+        traits.append(f"stay between {min(lows)} and {max(highs)}")
+    endings = [" ".join(map(str, tune_degrees(p)[-3:])) for p in tunes]
+    common = max(set(endings), key=endings.count)
+    if endings.count(common) >= 2:
+        traits.append(f"end on \"{common}\"")
+    finals = [tune_degrees(p)[-1] for p in tunes]
+    if finals.count(0) >= len(finals) - 1:
+        traits.append("come home to the root (0) at the end")
+    if not traits:
+        return ""
+    return (f"The last {len(tunes)} tunes {', '.join(traits)}. This track's hook must differ from them in at "
+            "least two of: its rhythm (16ths, or long notes held with _, or entries off the beat), its register "
+            "(up on 7, 9, 11 or higher), its contour and its last note.")
 
 
 def validate_parts(raw, style: str) -> tuple[dict[str, dict], list[str]]:

@@ -23,8 +23,9 @@ from .narrator import clean_narration
 from . import presets as P
 from .melody import STEPS_PER_CYCLE
 from .blocks import hook_kinds
-from .plan import (STYLES, Arrangement, Piece, Section, arrange, director_vocabulary, plan_piece,
-                   resolve_surprise_cues, validate_arrangement, validate_piece)
+from .plan import (HOOK_SIMILAR, STYLES, Arrangement, Piece, Section, arrange, director_vocabulary, hook_similarity,
+                   melody_brief, plan_piece, resolve_surprise_cues, subgenre_from_theme, validate_arrangement,
+                   validate_hook, validate_piece)
 from .theory import Key, progressions_for
 
 PROMPTS_DIR = os.path.join(config.REPO_DIR, "prompts")
@@ -38,6 +39,7 @@ def _load_prompt(name: str) -> str:
 # The Director's calls, as the agents they are: (name, what it is asked).
 _AGENTS = {
     "piece": ("Director", "plan the next piece"),
+    "hook": ("Director", "write a fresher hook"),
     "section": ("Arranger", "arrange the next section"),
     "free": ("Composer", "write a counter-melody"),
 }
@@ -205,6 +207,8 @@ class Director:
         return _load_prompt("director_piece.md").format(
             theme=self.theme, target_minutes=round(self.target_minutes),
             style_line=(f"Style: {style} ({cfg['bpm'][0]}-{cfg['bpm'][1]} BPM, modes: {', '.join(cfg['modes'])})."
+                        + (f" Subgenre: {sub} (the theme asks for it: every track is one)."
+                           if (sub := subgenre_from_theme(style, self.theme)) else "")
                         if cfg else "Choose `style` from `styles` and include it."),
             options=json.dumps(director_vocabulary(style)),
             previous=json.dumps({k: previous.to_dict()[k] for k in
@@ -214,6 +218,8 @@ class Director:
             if previous and previous.sections else "none",
             recent_keys=", ".join(self.recent_keys) or "none",
             recent_hooks=", ".join(self.recent_hooks) or "none",
+            melody_brief=(f"- {brief}\n" if (brief := melody_brief([h.split(": ", 1)[-1] for h in self.recent_hooks]))
+                          else ""),
             recent_progressions=", ".join(self.recent_progressions) or "none",
             recent_sounds="; ".join(", ".join(f"{r} {s}" for r, s in sorted(snd.items())) for snd in self.recent_sounds)
             or "none",
@@ -243,6 +249,23 @@ class Director:
             notes.append(f"{piece.key} doesn't suit {piece.style}; using {fallback.key}")
             piece.key, piece.progression = fallback.key, fallback.progression
             piece.section_progressions = dict(fallback.section_progressions)
+        # The subgenre the theme asks for ("Saltwater" -> balearic), at its tempo.
+        from .blocks import SUBGENRES as _SUBGENRES
+
+        wanted = subgenre_from_theme(piece.style, self.theme)
+        if wanted in _SUBGENRES.get(piece.style, {}) and piece.subgenre != wanted:
+            notes.append(f"the theme asks for {wanted} {piece.style}, not {piece.subgenre or 'none'}")
+            piece.subgenre = wanted
+            lo, hi = _SUBGENRES[piece.style][wanted]["bpm"]
+            piece.bpm = float(min(hi, max(lo, piece.bpm)))
+        if wanted in _SUBGENRES.get(piece.style, {}):
+            # ...and its sounds (Saltwater's lead is the pluck or the nylon guitar, not any lead).
+            from .blocks import subgenre_sounds as _subgenre_sounds
+
+            for role, options in _subgenre_sounds(piece.style, wanted).items():
+                if piece.sounds.get(role) and piece.sounds[role] not in options:
+                    notes.append(f"{role} {piece.sounds[role]} isn't a {wanted} sound; using {options[0]}")
+                    piece.sounds[role] = options[0]
         # A subgenre with its own modes (happy hardcore: major).
         from .blocks import subgenre as _subgenre
         from .plan import fit_mode
@@ -312,6 +335,46 @@ class Director:
         piece.narration = clean_narration(data.get("narration"))
         return piece, notes
 
+    def close_hook(self, pattern: str) -> tuple[str, float] | None:
+        """The recent tune this one is too close to (and how close), or None."""
+        scored = [(h, hook_similarity(pattern, h.split(": ", 1)[-1])) for h in self.recent_hooks]
+        best = max(scored, key=lambda x: x[1], default=None)
+        return best if best and best[1] >= HOOK_SIMILAR else None
+
+    def _freshen_hook(self, piece: Piece, prompt: str) -> None:
+        """A hook that is a recent one again (Claude, shown its last tunes,
+        still tends to write their sibling): ask once more, for the hook
+        alone, with the plan as it stands; keep the old one if the new one
+        isn't fresher or doesn't fit."""
+        if not piece.hook:
+            return
+        close = self.close_hook(piece.hook["pattern"])
+        if close is None:
+            return
+        role, old = piece.hook["role"], piece.hook["pattern"]
+        self.log(f"[Director] the hook {old} is {close[1]:.0%} like a recent one ({close[0]}); asking for another")
+        ask = (f"{prompt}\n\n## One change to your plan\n\nYou planned '{piece.title}' in {piece.key} on "
+               f"{piece.progression}, the hook on the {role}: {old}. It is too close to a tune played recently "
+               f"({close[0]}). Keep the rest of the plan; write only a new hook for the {role}, by the same rules, "
+               f"that differs from every recent tune in its rhythm, its register and its ending. Reply with JSON "
+               f'only: {{"hook": {{"role": "{role}", "pattern": "..."}}, "reason": "what is new about it"}}')
+        data = self._ask("hook", self.PIECE_SYSTEM, ask, cache_ttl="1h") if self._llm_available() else None
+        hook, why = validate_hook((data or {}).get("hook"), piece.style)
+        if not hook or hook["role"] != role:
+            self.log(f"[Director] kept the hook: the new one didn't fit ({why or 'another part'})")
+            return
+        from .surprises import hook_notes
+
+        if piece.surprise == "three_note_hook" and hook_notes(hook["pattern"]) > 3:
+            self.log("[Director] kept the hook: the new one has more than three notes (three-note-hook surprise)")
+            return
+        again = self.close_hook(hook["pattern"])
+        if again and again[1] >= close[1]:
+            self.log(f"[Director] kept the hook: the new one {hook['pattern']} is no fresher")
+            return
+        self.log(f"🎣 Fresher hook: {hook['pattern']}")
+        piece.hook = hook
+
     def next_piece(self, previous: Piece | None) -> Piece:
         avoid = feedback.disliked()
         fallback = plan_piece(self.rng, previous, style=self.style,
@@ -328,6 +391,7 @@ class Director:
             if data:
                 piece, notes = self.review_piece(data, fallback, avoid)
                 self.choose_surprise(piece, data, notes)
+                self._freshen_hook(piece, prompt)
                 notes.extend(resolve_surprise_cues(piece))
                 if notes:
                     self.log(f"[Director] corrected LLM piece plan: {'; '.join(notes)}")

@@ -20,6 +20,9 @@ def test_every_part_the_style_has_can_come_in(style):
     performer = Performer(random.Random(0), style=style, log=lambda *_: None)
     program = Program(performer.new_track(None))
     performer.settings = dict(performer.settings, max_melodic=None)      # count every role, not the cap
+    # The vocal waits for the breakdown; every other part can come in as the track builds.
+    assert set(performer._missing_roles(program)) == {b.role for b in BLOCKS[style]} - {"vocal"}
+    performer.state.phase = "breakdown"
     assert set(performer._missing_roles(program)) == {b.role for b in BLOCKS[style]}
 
 

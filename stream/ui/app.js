@@ -341,7 +341,7 @@ function noise(x) { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f);
 // chords roll, and lead / arp / acid ripple fast. From the live code (roles
 // that play and aren't muted), eased so a new line swells in.
 const ROLE_WAVES = { beat: "kick", perc: "kick", bass: "bass", chords: "pad", keys: "pad", texture: "pad",
-                     lead: "high", arp: "high", acid: "high" };
+                     lead: "high", arp: "high", acid: "high", vocal: "high" };
 let energy = { kick: 0, bass: 0, pad: 0, high: 0 };
 
 function targetEnergy() {

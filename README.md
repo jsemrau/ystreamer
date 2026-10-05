@@ -317,7 +317,14 @@ live trance demo, translated to Tidal:
   (`livecode.harmony_problem`). `_` holds a note, so phrases can end on a
   long one. The Director writes 2-4 bar calls and answers, develops the hook
   at the peak instead of stripping it, and sees the last lead melodies so it
-  doesn't repeat them.
+  doesn't repeat them. Seeing them wasn't enough: in a run of hardcore
+  tracks Claude wrote one tune five times, an 8-step line between -3 and 4
+  falling to the root. The prompt now says what the recent tunes share
+  (`plan.melody_brief`), and a hook too close to a recent one
+  (`plan.hook_similarity` ≥ 0.6, the order of their notes) is written again
+  once, the hook alone (`Director._freshen_hook`). Techno and hardcore also
+  have a second lead line, `anthem_lead`: the tune an octave up in long
+  notes ringing into the reverb, not pumping with the kick.
 
 Trance comes in **subgenres** (`blocks.SUBGENRES`), each with its own tempo,
 drum kit (hat and clap patterns), bass rhythm, sounds and voicings:
@@ -392,9 +399,84 @@ Lownoise & Mental Theo's "Wonderful Days": piano, `ys_chipvox`, the sped-up
 chipmunk vocal, in a major key); deep house's `deep` and `piano house`
 (Guru Josh's "Infinity": M1 piano and organ, `ys_sax`). A subgenre may
 name its own modes (happy hardcore: major/mixolydian); the key moves to the
-nearest one (`plan.fit_mode`). The choir is a voice in the style of that
-music, not a copy of any singer; for a real voice with words, put licensed
-vocal samples in `samples/` or record a singer.
+nearest one (`plan.fit_mode`). A theme can ask for a subgenre
+(`plan.THEME_SUBGENRE_KEYWORDS`): "Chicane", "Saltwater", "Balearic",
+"Ibiza" or "sunset" make every trance track `balearic` (with either
+planner), and its signature sounds, the choir on the lead and as a bed and
+the nylon guitar on the arp, play on most tracks; e.g.
+`stream/live.sh --style trance --theme "Chicane's Saltwater at sunset"`.
+The balearic lead is the Café del Mar pluck (`ys_cafepluck`, Energy 52) or
+the nylon guitar, an octave up in a dotted-8th echo (`cafe_lead`); every
+line's echo is moved onto the beat at the track's tempo (`livecode.beat_delay`).
+**Real instruments.** Seven sounds are recordings, all from
+[FreePats](https://freepats.zenvoid.org) under CC0 (public domain):
+
+| SynthDef | instrument | where it plays |
+|---|---|---|
+| `ys_nylon` | Spanish classical guitar, 48 notes | Balearic lead and arp, lounge |
+| `ys_keys` | Upright Piano KW, the soft layer | the felt piano (lofi, piano, downtempo) |
+| `ys_sax` | tenor saxophone, the loud layer, looped | deep/piano house, lounge |
+| `ys_coldguitar` | FSBS clean electric guitar, through the chorus | darkwave |
+| `ys_chorusbass` | picked electric bass, through the chorus | post-punk darkwave |
+| `ys_harp` | concert harp (new) | Balearic, ambient, downtempo arps |
+| `ys_kalimba` | kalimba (new) | Balearic, ambient, lofi arps |
+
+`./venv/bin/python -m music.instruments` (also in `install.sh`; or name
+some: `... piano sax`) downloads them to `instruments/` and keeps one
+recording per note from the SFZ map (the velocity layer chosen per
+instrument, the first round robin), cut to its attack and levelled (they
+were up to 10 dB apart), with its tuning and loop points (`meta.scd`).
+SuperDirt loads them at boot, and `~ysSampled` (`tidal/synthdefs.scd`)
+makes each SynthDef play the nearest recorded note shifted to the pitch, an
+octave nearer for notes far outside the recorded range (the bass covers one
+octave), looping the sax for long notes, each at its model's level in the
+mix (`mix.SYNTH_LUFS`). Without the recordings the modelled SynthDefs play,
+and the harp and kalimba, which have no model, aren't offered. Hear them:
+`python -m eval.sound_preview --instruments`, `--balearic` and `--darkwave`
+(`YS_PREVIEW_MODELLED=1` for the models). The choir is a voice in the style of that
+music, not a copy of any singer; for a real voice with words, see **Vocals**
+below.
+
+**Vocals.** Tracks have a vocal part (`vocal`, on d12). It comes in for the
+breakdown, as a voice in the space the kick leaves, and sings through the
+peak; it never comes in during the build. If the Director's cues don't bring
+it in, the track gets a cue that does.
+
+- *Vocal chops*: darkwave, techno, hardcore and downtempo have `vocal_chop`, Blood
+  Sport's spoken and half-sung phrases (`samples/bsvocals`: "What is work",
+  "I am here", "Hush", ...). It plays one phrase a bar at most, every few
+  bars, lost in reverb and delay, at -20 LUFS, just above the lead. The
+  phrases have no key to keep, so the vocal wrappers may stutter them (`echo`),
+  play them backwards or make them thin like a telephone.
+- *Acapellas* (licensed, yours): sung hooks for any style. Put each file in
+  `acapellas/` and describe it in `acapellas/acapellas.json`:
+
+  ```json
+  [{"name": "Night Calls", "file": "night_calls.wav", "key": "A minor",
+    "bpm": 124, "start": 0.48, "bars": 8, "styles": ["deephouse", "trance"],
+    "license": "Loopmasters Deep House Vocals, royalty-free licence"}]
+  ```
+
+  `start` is the first downbeat in seconds, `bars` the loop's length from
+  there, `styles` who may sing it (all styles if left out). `license` is
+  required: write where the acapella came from and why the stream may play
+  it, because YouTube's Content ID flags vocals lifted from released songs.
+  Then run `./venv/bin/python -m music.vocals` (needs sox and ffmpeg).
+  It renders each acapella to its own SuperDirt bank (`samples/vox_<name>/`):
+  cut to its bars, at -16 LUFS, in seven versions from three semitones down
+  to three up. Restart the stream so SuperDirt loads them.
+
+  On `YS_ACAPELLA_CHANCE` of the tracks (0.5 by default) where one fits, the
+  track sings an acapella. One fits when its mode is one the style plays and
+  its tempo, or double or half of it, is in the style's (or subgenre's) range.
+  The track takes that tempo, and the key nearest the Director's choice that
+  one of the seven versions reaches. The Director's hook and sketch are in
+  scale degrees, so they move with it.
+  The acapella plays with `loopAt` and is chopped into beats, so it is in
+  step wherever it comes in. While it plays, the tempo stays put: a tempo
+  edit, the tempo-lift and key-change surprises would put it out of tune.
+  An acapella was sung over another song's chords, so key-matching (what DJs
+  do) usually works, but not always. Listen to a few tracks with each one.
 
 The **progressions** come from [NRG-CP](https://doi.org/10.5281/zenodo.15304989)
 (WaivOps / Patchbanks, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)):
@@ -697,12 +779,31 @@ thumbnail, banner and logo (`stream/thumbnail.py`).
 stream/live.sh                      # local model performs, jevtypesafe judges; Ctrl-C stops
 stream/live.sh --style darkwave     # extra flags go to orchestrator.py and win over the defaults
 stream/live.sh --judge none         # e.g. without the judge
+stream/live.sh --hours 3            # stop after 3 hours (any number, e.g. 2.5), once the song playing then ends
 ```
 
 It runs in that terminal until Ctrl-C. Watch the stream in YouTube Studio
 (Go live → Stream), or on your channel once it shows LIVE. If the stream
 part stops (no `YT_STREAM_KEY`, no Chromium/Xvfb, ...), the terminal says so
 and prints the end of `logs/stream.log`.
+
+### Record a video file instead
+
+To upload a finished set rather than stream it (YouTube won't let a new
+channel share its live streams for a while, say), record it to a file:
+
+```bash
+stream/record.sh                          # one hour, to recordings/show-<date>.mkv
+stream/record.sh --hours 2.5              # any length, in hours
+stream/record.sh --out ~/Videos/set.mkv   # another file
+stream/record.sh --hours 1 --style darkwave   # other flags go to orchestrator.py
+```
+
+The same show as `live.sh`, but captured to the file, starting with the first
+track (not the model loading), and everything stops when the time is up. No
+stream key needed. `.mkv` stays playable if you stop early with Ctrl-C;
+YouTube takes it as is. The default bitrate is 8000k (about 3.6 GB an hour);
+set `YS_VIDEO_BITRATE` to change it.
 
 | Part | What it does |
 |---|---|
@@ -822,6 +923,8 @@ Tunables such as the layer cap, timeouts and paths live in `.env` (see
 |---|---|
 | `music/livecode.py` | the live program: lines, edits, validation, rendering |
 | `music/blocks.py` | per-style building blocks the performer adds |
+| `music/instruments.py`, `instruments/` | real instruments (FreePats, CC0): guitar, piano, sax, electric guitar and bass, harp, kalimba |
+| `music/vocals.py`, `acapellas/` | licensed acapellas: manifest, key and tempo fit, preparing their banks |
 | `music/performer.py`, `prompts/performer.md` | the performer (built-in and LLM) and its phases |
 | `music/live_engine.py` | plays the program and applies one edit every few bars |
 | `music/theory.py` | keys, modes, progression library, voice leading |
@@ -830,7 +933,7 @@ Tunables such as the layer cap, timeouts and paths live in `.env` (see
 | `music/plan.py`, `music/director.py` | piece/section plans, the LLM Director with validation and fallback |
 | `music/engine.py` | cycle clock, phrase-quantised scheduling (`jumpMod`), state/overlay files |
 | `tidal/synthdefs.scd`, `tidal/superdirt_boot.scd` | custom SynthDefs and the master compressor/limiter |
-| `stream/` | `live.sh` (go live), audio sink, stream page and capture, watchdog, thumbnail |
+| `stream/` | `live.sh` (go live), `record.sh` (record a video file), audio sink, stream page and capture, watchdog, thumbnail |
 | `eval/` | analysis, quality monitor, feedback, preview renderer, dataset export |
 | `tidal_backend.py`, `prompts/composer_prompt.md` | the old free-form agent loop (`orchestrator.py --legacy "..."`) |
 

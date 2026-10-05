@@ -20,7 +20,9 @@ Stream theme: {theme}. Style: {style}.
   others (1, 3, 5 ...) clash with it. So bass and acid lines, and any
   repeating pattern (with `*`), use chord tones only; melodies put chord
   tones on the strong steps (1st, 3rd, 5th, 7th) and other notes only in
-  between. Fewer notes and rests (`~`) = calmer; more notes, higher degrees
+  between. Less is more: a lead starts at most 5 new notes a bar and keys 4 (an
+  edit that plays more is refused); hold notes (`_`) and rest (`~`) rather
+  than fill every step, and at most two melodic lines play at once. Fewer notes and rests (`~`) = calmer; more notes, higher degrees
   = more energy.
 - Drum patterns use sample names, e.g. `"bd ~ ~ bd ~ ~ bd ~"`, but only the
   sounds listed for that slot (`sounds`): the kit is fixed, so the track

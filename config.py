@@ -83,6 +83,12 @@ CHANNEL_NAME = _env("YS_CHANNEL_NAME", "InfiniTrance")
 HYPERSAW = _env("YS_HYPERSAW", "0") == "1"
 # The art director's surprises (music/surprises.py): at most one every N tracks.
 SURPRISE_EVERY = max(1, int(_env("YS_SURPRISE_EVERY", "2") or 2))
+# Licensed acapellas (music/vocals.py): the sources and their manifest, and
+# the share of tracks that sing one when one fits the style (0 = never).
+ACAPELLA_DIR = _env("YS_ACAPELLA_DIR", os.path.join(REPO_DIR, "acapellas"))
+# Sampled instruments (music/instruments.py: real recordings, CC0).
+INSTRUMENTS_DIR = _env("YS_INSTRUMENTS_DIR", os.path.join(REPO_DIR, "instruments"))
+ACAPELLA_CHANCE = _env_float("YS_ACAPELLA_CHANCE", 0.5)
 LLAMA_CTX_SIZE = int(_env("LLAMA_CTX_SIZE", "16384"))
 LLAMA_GPU_LAYERS = _env("LLAMA_GPU_LAYERS", "999")
 LLAMA_SERVER_ARGS = _env("LLAMA_SERVER_ARGS", "")

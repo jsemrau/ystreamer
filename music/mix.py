@@ -28,7 +28,9 @@ SYNTH_LUFS = {
     "ys_flute": -20.8, "ys_marimba": -24.2, "ys_sitar": -22.9, "ys_vox": -24.3, "ys_fmlead": -19.2,
     "ys_hoover": -22.3, "ys_m1organ": -23.6, "ys_nylon": -20.0, "ys_melodica": -22.2, "ys_vibes": -22.6,
     "ys_trumpet": -22.2, "ys_harpsichord": -23.8,
-    "ys_sax": -19.1, "ys_angelchoir": -21.6, "ys_chipvox": -21.6,
+    "ys_sax": -19.1, "ys_angelchoir": -21.6, "ys_chipvox": -21.6, "ys_cafepluck": -21.9,
+    # The real harp and kalimba (music/instruments.py), set at -21 by their SynthDefs' gain.
+    "ys_harp": -21.0, "ys_kalimba": -20.9,
 }
 # Chords measured as chords (3 voices), for synths that are only used that way.
 CHORD_LUFS = {"ys_gatesaw": -18.0, "ys_supersaw": -15.7, "ys_hypersaw": -12.7, "ys_m1organ": -18.0}
@@ -74,7 +76,7 @@ def calibrated_gain(synth: str | None, role: str, chord: bool) -> float | None:
 
 
 # Live density: beds step back when the front is busy; a full mix gives a little.
-FRONT_ROLES = ("lead", "keys", "acid", "arp")
+FRONT_ROLES = ("lead", "keys", "acid", "arp", "vocal")
 BED_ROLES = ("chords", "texture")
 UNDUCKED_ROLES = ("beat", "bass", "perc")
 

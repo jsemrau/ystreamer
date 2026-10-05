@@ -23,7 +23,7 @@ const STYLES = {
   darkwave:  { accent: "#cfd8ff", accent2: "#8f9bd6" },
 };
 const ROLE_ENERGY = { beat: "kick", perc: "kick", bass: "bass", chords: "pad", keys: "pad", texture: "pad",
-                      lead: "high", arp: "high", acid: "high" };
+                      lead: "high", arp: "high", acid: "high", vocal: "high" };
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -423,12 +423,40 @@ function burst(label, count = 110) {
   }
 }
 
+// Each glyph's glow is drawn once into a sprite and then only scaled: a
+// shadowBlur per glyph per frame took the captured page (Chromium on Xvfb, no
+// GPU) down to a few frames a second, and the burst crawled instead of flying.
+const SPRITE_SCALE = 2;                                        // crisp up to twice the base size
+let sprites = new Map();
+document.fonts?.addEventListener("loadingdone", () => { sprites = new Map(); });   // drawn in a fallback font
+
+function glyphSprite(p, colour) {
+  const key = `${p.text}|${p.title ? 1 : 0}|${p.mono ? 1 : 0}|${colour}|${Math.round(p.size)}`;
+  let s = sprites.get(key);
+  if (s) return s;
+  if (sprites.size > 400) sprites = new Map();               // style changes leave old colours behind
+  const px = Math.round(p.size * SPRITE_SCALE), blur = 26 * SPRITE_SCALE;
+  const font = `${p.title ? 700 : 400} ${px}px ${p.mono ? "JetBrains Mono" : "Silkscreen"}, monospace`;
+  const c = document.createElement("canvas"), g = c.getContext("2d");
+  g.font = font;
+  const pad = blur * 1.5;
+  c.width = Math.ceil(g.measureText(p.text).width + 2 * pad);
+  c.height = Math.ceil(px * 1.3 + 2 * pad);
+  g.font = font;                                               // resizing the canvas reset it
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.shadowColor = colour; g.shadowBlur = blur;
+  g.fillStyle = p.title ? "#ffffff" : colour;
+  g.fillText(p.text, c.width / 2, c.height / 2);
+  s = c;
+  sprites.set(key, s);
+  return s;
+}
+
 function drawGlyphs(dt) {
   const c = $("fly"), g = c.getContext("2d"), W = c.width, H = c.height, now = performance.now();
   g.clearRect(0, 0, W, H);
   if (!glyphs.length) return;
   g.globalCompositeOperation = "lighter";
-  g.textAlign = "center"; g.textBaseline = "middle";
   const focal = 1.6;
   glyphs = glyphs.filter((p) => p.z > 0.35);
   for (const p of glyphs) {
@@ -441,14 +469,12 @@ function drawGlyphs(dt) {
     // Fade in from the distance, out before the glass.
     const alpha = Math.min(1, (p.z0 - p.z) / 0.8) * Math.min(1, (p.z - 0.35) / 1.1) * (p.title ? 1 : 0.9);
     if (alpha <= 0) continue;
+    const sprite = glyphSprite(p, p.tint ? accent2 : accent), k = scale / SPRITE_SCALE;
     g.save();
     g.translate(sx, sy);
     g.rotate(p.spin * (1 / p.z));
-    g.font = `${p.title ? 700 : 400} ${Math.round(p.size * scale)}px ${p.mono ? "JetBrains Mono" : "Silkscreen"}, monospace`;
-    const colour = p.tint ? accent2 : accent;
-    g.shadowColor = colour; g.shadowBlur = 26 * scale;
-    g.fillStyle = hexA(p.title ? "#ffffff" : colour, alpha);
-    g.fillText(p.text, 0, 0);
+    g.globalAlpha = alpha;
+    g.drawImage(sprite, -sprite.width * k / 2, -sprite.height * k / 2, sprite.width * k, sprite.height * k);
     g.restore();
   }
   g.globalCompositeOperation = "source-over";
@@ -528,7 +554,9 @@ function frame() {
     updateArcFill(cycle);
   }
   drawVisual(cycle, kick);
-  const t = performance.now(), dt = Math.min(0.05, (t - (frame.last || t)) / 1000);
+  // Real time, so a slow frame doesn't slow the flight down; capped only for a
+  // tab that was hidden.
+  const t = performance.now(), dt = Math.min(0.25, (t - (frame.last || t)) / 1000);
   frame.last = t;
   drawGlyphs(dt);
   requestAnimationFrame(frame);

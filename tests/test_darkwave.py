@@ -55,8 +55,9 @@ def test_each_subgenre_brings_its_own_drums():
     assert set(SUBGENRES["darkwave"]["minimal synth"]["kit"]) == {"rhythm"}
 
 
-def test_a_post_punk_track_plays_chorused_bass_and_guitar():
-    for synth_role, synth in (("bass", "ys_chorusbass"), ("arp", "ys_coldguitar")):
+def test_a_post_punk_track_plays_chorused_bass_and_the_sequencer_arp():
+    # (The chorused clean guitar is off air: blocks.RETIRED_SOUNDS.)
+    for synth_role, synth in (("bass", "ys_chorusbass"), ("arp", "ys_pluck")):
         for seed in range(5):
             performer = Performer(random.Random(seed), style="darkwave", log=lambda *_: None)
             track = Track("Test", "darkwave", "A minor", 132, [0, 5, 2, 6], 2, subgenre="post-punk",
@@ -83,7 +84,7 @@ def test_a_wave_sound_brings_the_lines_written_for_it():
     assert [b.name for b in track_blocks("darkwave", "minimal synth", {"lead": "ys_wavelead"}, "lead")] == ["wave_lead"]
     assert [b.name for b in track_blocks("darkwave", "minimal synth", {"arp": "ys_wavesynth"}, "arp")] == ["wave_arp"]
     # Another sound: the blocks that take it (the wave lead keeps its own voice).
-    assert [b.name for b in track_blocks("darkwave", "minimal synth", {"lead": "ys_pulselead"}, "lead")] == ["cold_arp"]
+    assert [b.name for b in track_blocks("darkwave", "minimal synth", {"lead": "ys_fmlead"}, "lead")] == ["cold_arp"]
     line = find_block("darkwave", "wave_lead").make(random.Random(0), {"lead": "ys_glass"})
     assert '# s "ys_wavelead"' in line.body
 

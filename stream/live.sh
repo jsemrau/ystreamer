@@ -4,8 +4,9 @@
 #   stream/live.sh                         # local model performs, jevtypesafe judges
 #   stream/live.sh --style darkwave        # extra flags go to orchestrator.py
 #   stream/live.sh --judge none            # ...and win over the defaults
+#   stream/live.sh --hours 3               # stop after 3 hours, once the song playing then ends
 #
-# Runs, in this terminal, until Ctrl-C:
+# Runs, in this terminal, until Ctrl-C (or --hours):
 #   - the stream page (stream/ui_server.py) on http://127.0.0.1:8765, to
 #     preview what the stream shows, even before YouTube is set up
 #   - the audio sink the stream captures (stream/setup_audio.sh)
@@ -23,6 +24,23 @@ cd "$REPO"
 PY="$REPO/venv/bin/python"; [[ -x "$PY" ]] || PY=python3
 mkdir -p logs runtime
 PIDFILE="$REPO/runtime/engine.pid"
+
+# --hours N: how long to stream (any number above 0, e.g. 2.5); the rest of
+# the flags go to orchestrator.py.
+HOURS=""
+ARGS=()
+while (($#)); do
+    case "$1" in
+        --hours) HOURS="${2:-}"; shift; (($#)) && shift ;;
+        --hours=*) HOURS="${1#*=}"; shift ;;
+        *) ARGS+=("$1"); shift ;;
+    esac
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
+if [[ -n "$HOURS" ]] && { ! [[ "$HOURS" =~ ^[0-9]*\.?[0-9]+$ ]] || awk -v h="$HOURS" 'BEGIN { exit !(h <= 0) }'; }; then
+    echo "--hours needs a number above 0, e.g. --hours 1 or --hours 2.5 (got '$HOURS')" >&2
+    exit 1
+fi
 
 "$REPO/stream/setup_audio.sh" || { echo "Couldn't create the audio sink (see above)" >&2; exit 1; }
 
@@ -83,7 +101,19 @@ trap stop INT TERM
 ) & LOOP_PID=$!; PIDS+=($LOOP_PID)
 
 # SuperCollider, Tidal and the local model need a moment before the stream.
-sleep 20
+# A recording (stream/record.sh) waits for the first track instead, so the
+# file starts with music, not with the model loading.
+if [[ -n "${YS_STREAM_ONCE:-}" ]]; then
+    echo "[live] the recording starts with the first track..."
+    for _ in $(seq 600); do
+        [[ "$REPO/runtime/now_playing.txt" -nt "$PIDFILE" ]] && break
+        sleep 1
+    done
+    [[ "$REPO/runtime/now_playing.txt" -nt "$PIDFILE" ]] \
+        || echo "[live] no track after 10 minutes; recording anyway" >&2
+else
+    sleep 20
+fi
 echo "[live] starting the stream (log: logs/stream.log) and the watchdog (log: logs/watchdog.log)"
 "$REPO/stream/stream.sh" >> "$REPO/logs/stream.log" 2>&1 & STREAM_PID=$!; PIDS+=($STREAM_PID)
 # The stream's health (keeping up? how much it sends) and warnings, here in
@@ -96,9 +126,38 @@ tail -n0 -F --pid=$$ "$REPO/logs/stream.log" 2>/dev/null \
     sleep 15
     while kill -0 "$STREAM_PID" 2>/dev/null; do sleep 5; done
     [[ "$STOPPING" == 1 ]] && exit 0
+    if [[ -n "${YS_STREAM_ONCE:-}" ]]; then
+        # Recording (stream/record.sh): the stream ends when the file is done.
+        echo "[live] the recording ended; stopping everything" >&2
+        kill -TERM $$
+        exit 0
+    fi
     echo "[live] the stream stopped; the last lines of logs/stream.log:" >&2
     tail -n 8 "$REPO/logs/stream.log" | sed 's/^/[live]   /' >&2
 ) & PIDS+=($!)
 YS_ENGINE_PIDFILE="$PIDFILE" "$PY" -m stream.watchdog >> "$REPO/logs/watchdog.log" 2>&1 & PIDS+=($!)
+
+# --hours: when the time is up, let the song that is playing finish (the
+# title in now_playing.txt changes when the next one starts), then stop
+# everything; at most 15 minutes more, whatever happens.
+if [[ -n "$HOURS" ]]; then
+    LIMIT=$(awk -v h="$HOURS" 'BEGIN { printf "%d", h * 3600 + 0.5 }')
+    echo "[live] streaming for ${HOURS} h; then the song playing finishes and everything stops"
+    (
+        title() { sed -n '1s/ *·.*//p' "$REPO/runtime/now_playing.txt" 2>/dev/null; }
+        # (A Ctrl-C before then stops the wait too, leaving no sleep behind.)
+        trap 'kill "$WAIT_PID" 2>/dev/null; exit 0' TERM
+        sleep "$LIMIT" & WAIT_PID=$!; wait "$WAIT_PID"
+        playing="$(title)"
+        echo "[live] ${HOURS} h are up; stopping after this song (${playing:-?})" >&2
+        for _ in $(seq 180); do
+            sleep 5
+            now="$(title)"
+            [[ -n "$now" && "$now" != "$playing" ]] && break
+        done
+        echo "[live] the song is over: stopping" >&2
+        kill -TERM $$
+    ) & PIDS+=($!)
+fi
 
 wait

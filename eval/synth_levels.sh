@@ -37,7 +37,8 @@ cat > "$OUT/render.scd" <<SC
   [\ys_flute, [74], 1], [\ys_marimba, [74], 1], [\ys_sitar, [69], 1], [\ys_vox, [69], 1], [\ys_fmlead, [69], 1],
   [\ys_hoover, [57], 0.5], [\ys_m1organ, [57, 60, 64, 67], 0.3], [\ys_nylon, [64], 1], [\ys_melodica, [69], 1],
   [\ys_vibes, [72], 1], [\ys_trumpet, [67], 1], [\ys_harpsichord, [69], 1],
-  [\ys_sax, [67], 1], [\ys_angelchoir, [69], 2], [\ys_angelchoir, [57, 64, 69], 3], [\ys_chipvox, [76], 0.3]
+  [\ys_sax, [67], 1], [\ys_angelchoir, [69], 2], [\ys_angelchoir, [57, 64, 69], 3], [\ys_chipvox, [76], 0.3],
+  [\ys_cafepluck, [69], 1]
 ];
 Routine {
   ~jobs.do { |job|

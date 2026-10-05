@@ -244,8 +244,11 @@ def test_the_hooks_part_comes_in_right_after_the_opener():
 def test_distilled_answers_are_kept_only_when_nothing_needed_fixing():
     from eval.distill_director import _situation, check
 
+    from music.plan import subgenre_from_theme
+
     req = _situation(random.Random(5), 0)
-    while req["style"] != "trance":
+    # (A trance scenario whose theme doesn't ask for a subgenre: "Ibiza" asks for balearic.)
+    while req["style"] != "trance" or subgenre_from_theme("trance", req["theme"]):
         req = _situation(random.Random(len(req["prompt"])), 0)
     # (A subgenre without modes of its own: the fallback's may be balearic, dorian/minor only.)
     answer = {"title": "Glass Minaret", "subgenre": "acid", "key": "C# phrygian", "bpm": 138, "progression": "i-II-VI-vii",
@@ -307,11 +310,11 @@ def test_the_directors_cues_are_carried_out_by_the_performer_one_per_move():
     from music.plan import validate_cues
 
     cues, notes = validate_cues({"intro": ["Start the bass now"], "peak": [
-        {"do": "sound", "part": "lead", "sound": "ys_pulselead", "say": "Lead to the square wave"},
+        {"do": "sound", "part": "lead", "sound": "ys_fmlead", "say": "Lead to the FM lead"},
         {"do": "sound", "part": "lead", "sound": "ys_supersaw"}], "nowhere": ["x"]}, "trance")
     assert cues == {"build": [{"say": "Start the bass now"}],
-                    "groove2": [{"do": "sound", "part": "lead", "sound": "ys_pulselead",
-                                 "say": "The lead to the square-wave trance lead"}]}       # exact words
+                    "groove2": [{"do": "sound", "part": "lead", "sound": "ys_fmlead",
+                                 "say": "The lead to the FM lead: DX7"}]}       # exact words
     assert any("supersaw" in n for n in notes) and any("nowhere" in n for n in notes)
     # A sound the named block can't play moves to a block of that part that can.
     cues, notes = validate_cues({"build": [{"do": "start", "part": "arp", "block": "high_acid", "sound": "ys_pluck"}]},
@@ -326,7 +329,7 @@ def test_the_directors_cues_are_carried_out_by_the_performer_one_per_move():
         {"do": "start", "part": "arp", "block": "pluck_16", "sound": "ys_glass", "pattern": "0 4 7 4 9",
          "say": "Start the glass arp, 0 4 7 4 9"},                          # precise: played exactly
         {"do": "knob", "part": "arp", "knob": "lpf", "to": [800, 4000, 16], "say": "Open the arp filter"},
-        {"do": "sound", "part": "arp", "sound": "ys_pulselead", "say": "Arp to the square wave"}]}
+        {"do": "sound", "part": "arp", "sound": "ys_fmlead", "say": "Arp to the FM arp"}]}
     performer.state.cue_queue = list(performer.state.cues["build"])
     first = performer.next_edit(program)
     assert first.request == "Start the bass now" and first.op == "add" and first.role == "bass"
@@ -340,7 +343,7 @@ def test_the_directors_cues_are_carried_out_by_the_performer_one_per_move():
     program = apply_edit(program, third)
     fourth = performer.next_edit(program)
     program = apply_edit(program, fourth)
-    assert line_synth(program.lines["arp"]) == "ys_pulselead" and not performer.state.cue_queue
+    assert line_synth(program.lines["arp"]) == "ys_fmlead" and not performer.state.cue_queue
     # A part of the arc brings its own instructions.
     performer.state.cues["groove"] = [{"do": "stop", "part": "bass", "say": "Drop the bass"}]
     performer.state.plan, performer.state.step = [["build", 1], ["groove", 64]], 0
@@ -366,3 +369,60 @@ def test_cues_that_name_a_surprise_are_not_moves():
     assert "outro" not in piece.cues                           # nothing left there
     assert len(notes) == 1 and "stripped_peak" in notes[0]     # the surprise that won't happen is noted
     assert "surprise" not in _json.dumps(piece.cues)
+
+
+# The hooks of one hardcore session (2026-10-05): the last five are one tune.
+SESSION_HOOKS = ["<[4 _ 6 ~ 4 2 0 ~] [6 _ 4 2 0 ~ -3 ~]>", "<[0 ~ 2 ~ 4 ~ 2 ~] [4 ~ 2 0 ~ -3 ~ 0]>",
+                 "<[0 ~ 2 ~ -1 ~ 0 ~] [4 _ 2 0 ~ -1 ~ 0]>", "<[0 ~ -1 ~ 0 2 ~ ~] [4 _ 2 0 ~ -1 0 ~]>",
+                 "<[0 ~ 2 ~ ~ 4 ~ ~] [2 ~ 0 ~ ~ -1 0 ~]>", "<[0 ~ -1 0 ~ 2 ~ ~] [4 3 2 0 ~ ~ -1 ~]>"]
+
+
+def test_hook_similarity_hears_the_same_tune_and_tells_different_ones_apart():
+    from music.plan import HOOK_SIMILAR, hook_similarity
+
+    happy = "<0 ~ 4 ~ 7 _ 4 ~ 0 ~ 4 7 0 ~ ~ ~ [0 ~ 4 ~ 0 ~ 4 7 0 _ ~ ~ 4 ~ 0 ~]>"
+    for a in SESSION_HOOKS[2:]:
+        assert hook_similarity(happy, a) < HOOK_SIMILAR
+        assert max(hook_similarity(a, b) for b in SESSION_HOOKS[1:] if b != a) >= HOOK_SIMILAR
+
+
+def test_the_melody_brief_names_what_the_recent_tunes_share():
+    from music.plan import melody_brief
+
+    brief = melody_brief(SESSION_HOOKS[1:])
+    assert "8 steps a bar" in brief and "between -3 and 4" in brief and "differ" in brief
+    assert melody_brief(SESSION_HOOKS[:1]) == ""
+
+
+def _director_with_hooks(monkeypatch, reply):
+    director = D.Director("fake/model", random.Random(1), log=lambda m: None, style="hardcore")
+    director.recent_hooks.extend(f"lead: {h}" for h in SESSION_HOOKS)
+    calls = []
+    monkeypatch.setattr(director, "_ask", lambda kind, *a, **k: calls.append((kind, a[1])) or reply)
+    piece = plan_piece(random.Random(0), style="hardcore")
+    piece.hook = {"role": "lead", "kind": "phrase", "pattern": "<[0 ~ 2 ~ -1 ~ 0 ~] [4 _ 2 0 ~ -1 0 ~]>"}
+    return director, piece, calls
+
+
+def test_a_hook_too_like_a_recent_one_is_written_again(monkeypatch):
+    fresh = "<[7 _ _ ~ 9 7 ~ 4] [6 _ _ _ 4 ~ 2 ~]>"
+    director, piece, calls = _director_with_hooks(monkeypatch, {"hook": {"role": "lead", "pattern": fresh}})
+    director._freshen_hook(piece, "PROMPT")
+    assert [k for k, _ in calls] == ["hook"] and calls[0][1].startswith("PROMPT")
+    assert piece.hook["pattern"] == fresh
+
+
+def test_the_old_hook_stays_when_the_new_one_is_no_fresher_or_breaks_the_rules(monkeypatch):
+    old = "<[0 ~ 2 ~ -1 ~ 0 ~] [4 _ 2 0 ~ -1 0 ~]>"
+    for reply in ({"hook": {"role": "lead", "pattern": "<[0 ~ 2 ~ -1 ~ 0 ~] [4 _ 2 0 ~ -1 ~ 0]>"}},
+                  {"hook": {"role": "lead", "pattern": "1 1 1 1"}}, None):
+        director, piece, _ = _director_with_hooks(monkeypatch, reply)
+        director._freshen_hook(piece, "PROMPT")
+        assert piece.hook["pattern"] == old
+
+
+def test_a_fresh_hook_is_left_alone(monkeypatch):
+    director, piece, calls = _director_with_hooks(monkeypatch, None)
+    piece.hook["pattern"] = "<[7 _ _ ~ 9 7 ~ 4] [6 _ _ _ 4 ~ 2 ~]>"
+    director._freshen_hook(piece, "PROMPT")
+    assert calls == []

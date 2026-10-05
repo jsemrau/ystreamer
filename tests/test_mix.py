@@ -203,7 +203,9 @@ def test_the_directors_sounds_are_1990s_and_real():
     for role, sounds in LIVE_SOUNDS.items():
         for synth in sounds:
             assert synth in defined and synth in SYNTH_LUFS and synth not in UNWANTED_SYNTHS, (role, synth)
-    assert {"ys_housepiano", "ys_pulselead"} <= set().union(*LIVE_SOUNDS.values())
+    assert {"ys_housepiano", "ys_fmlead"} <= set().union(*LIVE_SOUNDS.values())
+    # Off air after listening (eval.sound_preview 12 and 13): the square lead and the saw pad.
+    assert not {"ys_pulselead", "ys_sawpad"} & set().union(*LIVE_SOUNDS.values())
     assert "ys_pulsepad" not in set().union(*LIVE_SOUNDS.values())         # out of rotation: too buzzy
 
 
@@ -225,13 +227,13 @@ def test_the_director_picks_the_sounds_and_the_track_plays_them():
 
         def next_piece(self, previous):
             p = plan_piece(random.Random(0), style="trance")
-            p.sounds = {"chords": "ys_housepiano", "lead": "ys_pulselead", "arp": "ys_glass"}
+            p.sounds = {"chords": "ys_housepiano", "lead": "ys_fmlead", "arp": "ys_glass"}
             return p
 
     performer = Performer(random.Random(1), style="trance", log=lambda *_: None, director=Director())
     program = Program(performer.new_track(None))
     assert program.track.sounds["chords"] == "ys_housepiano"
-    for role, synth in (("chords", "ys_housepiano"), ("lead", "ys_pulselead"), ("arp", "ys_glass")):
+    for role, synth in (("chords", "ys_housepiano"), ("lead", "ys_fmlead"), ("arp", "ys_glass")):
         line = performer._add(program, role).line
         assert f'# s "{synth}"' in line.body or line.patterns.get("synth") == synth, (role, line.body)
 

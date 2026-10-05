@@ -741,10 +741,11 @@ SynthDef(\ys_sax, { |out, sustain = 1, pan, freq = 440, speed = 1|
     OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
 }).add;
 
-// Angel choir (the ethereal, layered female voices of Celtic and Balearic
+// The first angel choir, kept to compare (eval.sound_preview --choir), off
+// air: it sounded like a cheap MIDI choir. (The ethereal, layered female voices of Celtic and Balearic
 // trance): five voices singing a soft open "aah", each a little apart in
 // pitch and vibrato, breath in the sound, a slow swell and a long release.
-SynthDef(\ys_angelchoir, { |out, sustain = 2, pan, freq = 440, speed = 1|
+SynthDef(\ys_angelchoir_v1, { |out, sustain = 2, pan, freq = 440, speed = 1|
     var f = freq * speed;
     var len = sustain.max(0.3);
     var env = EnvGen.ar(Env([0, 1, 0.9, 0], [0.25, len, 0.9], [2, 0, -3]), doneAction: 2);
@@ -756,6 +757,47 @@ SynthDef(\ys_angelchoir, { |out, sustain = 2, pan, freq = 440, speed = 1|
     };
     var sig = [voices[0] + voices[1] + (voices[2] * 0.7), voices[3] + voices[4] + (voices[2] * 0.7)] * 0.5;
     sig = HPF.ar(LPF.ar(sig, 6000), 200) * 0.67;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
+// The angel choir (Chicane's "Saltwater", Clannad): a breathy soprano, not
+// a synth pad. A soft glottal pulse (band-limited, its top rolled off twice,
+// with a little cycle-to-cycle jitter and shimmer, so it isn't machine-
+// perfect) through five soprano formants that move from "ah" towards "oh";
+// the formants widen with the pitch, as a soprano's do, so the vibrato
+// doesn't sweep the harmonics through narrow peaks (that whistled, heard
+// alone). Breath is broadband air, not noise through the formants, strongest
+// as a note starts; a scoop up into the note, vibrato that blooms late, slow
+// drift; three voices close together (one singer, double-tracked).
+SynthDef(\ys_angelchoir, { |out, sustain = 2, pan, freq = 440, speed = 1, breathiness = 1|
+    var f = freq * speed;
+    var len = sustain.max(0.3);
+    var env = EnvGen.ar(Env([0, 1, 0.85, 0], [0.16, len, 1.2], [2, 0, -3]), doneAction: 2);
+    var breath = EnvGen.kr(Env([0, 1, 0.35], [0.05, 0.5], -3)) * breathiness;
+    var morph = EnvGen.kr(Env([0, 0, 1], [0.2, len * 1.3])) * Rand(0.4, 0.9);
+    var fa = [800, 1150, 2900, 3900, 4950], fo = [450, 800, 2830, 3800, 4950];
+    var aa = [1, 0.5, 0.03, 0.1, 0.004], ao = [1, 0.28, 0.08, 0.1, 0.004];
+    var bw = [130, 160, 220, 260, 300] * (f / 300).clip(1, 3);
+    var harm = (9000 / f).floor.clip(1, 40);
+    var sig = [-0.06, 0, 0.07].collect { |det|
+        var scoop = EnvGen.kr(Env([Rand(-1.0, -0.5), 0], [Rand(0.07, 0.13)], -4));
+        var vib = SinOsc.kr(Rand(5.0, 5.8), Rand(0, 2pi)) * EnvGen.kr(Env([0, 0, 1], [0.3, 0.9])) * Rand(0.22, 0.32);
+        var drift = LFNoise2.kr(Rand(0.2, 0.6)) * 0.07;
+        var pitch = f * (det + scoop + vib + drift).midiratio * (1 + (LFNoise1.ar(90) * 0.003));
+        var shimmer = (1 + (LFNoise2.kr(Rand(2, 5)) * 0.1)) * (1 + (LFNoise1.ar(70) * 0.05));
+        var glottal = OnePole.ar(OnePole.ar(Blip.ar(pitch, harm), 0.5), 0.5);
+        var voiced = Mix.fill(5, { |k|
+            var ff = fa[k] + (morph * (fo[k] - fa[k]));
+            var amp = aa[k] + (morph * (ao[k] - aa[k]));
+            if(k == 0) { ff = ff.max(pitch * 1.1) };      // a soprano tunes her first formant above the note
+            Resonz.ar(glottal, ff, bw[k] / ff) * amp
+        });
+        var air = HPF.ar(PinkNoise.ar, 1500);
+        var breathy = (BPF.ar(air, 3200, 1.4) + (BPF.ar(air, 1800 - (morph * 500), 1.0) * 0.6)) * breath;
+        ((voiced * 9) + (breathy * 4)) * shimmer
+    };
+    sig = [sig[0] + (sig[1] * 0.7), sig[2] + (sig[1] * 0.7)];
+    sig = HPF.ar(LPF.ar(sig, 5500), 180) * 0.145;         // at the first choir's level (mix.SYNTH_LUFS)
     OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
 }).add;
 
@@ -773,4 +815,97 @@ SynthDef(\ys_chipvox, { |out, sustain = 0.3, pan, freq = 440, speed = 1|
     sig = (sig * 2.5).tanh * 0.47;
     OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
 }).add;
+
+
+// The Cafe del Mar pluck (Energy 52, 1993/98; the 90s Balearic trance lead):
+// two oscillators a little apart (a saw and a hollow square), one per side,
+// through a resonant low-pass that opens on each note and closes within a
+// quarter second, a short soft tail. The line puts it in a long dotted-8th
+// delay, which makes the sound.
+SynthDef(\ys_cafepluck, { |out, sustain = 0.3, pan, freq = 440, speed = 1|
+    var f = freq * speed;
+    var len = sustain.clip(0.08, 2);
+    var env = EnvGen.ar(Env([0, 1, 0.3, 0], [0.002, len * 0.9 + 0.12, 0.25], [0, -4, -4]), doneAction: 2);
+    var fenv = EnvGen.ar(Env([1, 0], [0.2 + (len * 0.15)], -5));
+    var cut = ((f * 1.5) + (fenv * f * 8)).clip(150, 9000);
+    var osc = [-0.07, 0.07].collect { |d, i|
+        (Saw.ar(f * d.midiratio) * 0.5) + (Pulse.ar(f * (d * -1).midiratio, [0.42, 0.38][i]) * 0.4)
+    };
+    var sig = RLPF.ar(osc, cut, 0.45);
+    sig = (sig * 1.2).tanh * 0.3;
+    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+}).add;
+
+
+// Real instruments (music/instruments.py: FreePats recordings, CC0), loaded by
+// superdirt_boot.scd into ~ysInstruments. ~ysSampled makes a SynthDef that
+// plays the recorded note nearest the pitch asked for, shifted to it (each
+// recording's own tuning applied); a note further than `fold` semitones from
+// any recording is played an octave nearer instead of being stretched (the
+// bass, recorded over one octave). A sustained instrument (the sax) loops
+// between its recording's loop points; `ring` x the note's length is how
+// long it sounds before letting go over `release` seconds; `chorus` puts it
+// through a stereo chorus pedal; `gain` sets it at the level of the modelled
+// SynthDef it replaces (mix.SYNTH_LUFS). A wind instrument (the sax) can
+// `scoop` up into each note (semitones from below, over 120 ms), let a
+// `vibrato` (semitones) in once a note is held, and soften the tongue's
+// `attack` (seconds). Defined after the models, so a loaded instrument wins;
+// none loaded, and the model plays.
+~ysSampled = { |name, inst, gain = 1, ring = 2, release = 0.35, fold = 7, loop = false, chorus = 0, lpf = 12000,
+                scoop = 0, vibrato = 0, attack = 0.002|
+    var keys = inst[\bufs].keys.asArray.sort;
+    var pick = (0..127).collect { |k|
+        var near = keys.minItem { |m| (m - k).abs };
+        var shift = 0;
+        while { ((k + shift) - near).abs > fold and: { (k + shift) > near } } { shift = shift - 12 };
+        while { ((k + shift) - near).abs > fold and: { (k + shift) < near } } { shift = shift + 12 };
+        near = keys.minItem { |m| (m - (k + shift)).abs };
+        [near, shift]
+    };
+    var bufs = pick.collect { |p| inst[\bufs][p[0]].bufnum };
+    // (SFZ `tune` is the cents a recording is raised to play in tune: its
+    // pitch is that much below the note it's mapped to.)
+    var centers = pick.collect { |p| p[0] - (((inst[\meta][p[0]] ? ())[\tune] ? 0) / 100) };
+    var shifts = pick.collect { |p| p[1] };
+    var lstart = pick.collect { |p| (((inst[\meta][p[0]] ? ())[\loop]) ? [0, 0])[0] };
+    var lend = pick.collect { |p| (((inst[\meta][p[0]] ? ())[\loop]) ? [0, 0])[1] };
+    SynthDef(name, { |out, sustain = 1, pan, freq = 440, speed = 1|
+        var midi = (freq * speed).cpsmidi;
+        var key = midi.round.clip(0, 127);
+        var buf = Select.kr(key, bufs);
+        var bend = (EnvGen.kr(Env([scoop.neg, 0], [0.12], -1.5)) + (SinOsc.kr(Rand(4.8, 5.6), Rand(0, 2pi))
+            * vibrato * EnvGen.kr(Env([0, 0, 1], [0.3, 0.5]))));
+        var rate = (midi + Select.kr(key, shifts) - Select.kr(key, centers) + bend).midiratio * BufRateScale.kr(buf);
+        var env = EnvGen.ar(Env([0, 1, 1, 0], [attack, (sustain * ring).clip(0.1, 8), release], [2, 0, -3]),
+            doneAction: 2);
+        var sig, ls, le, phase;
+        if(loop) {
+            ls = Select.kr(key, lstart);
+            le = Select.kr(key, lend);
+            phase = Phasor.ar(0, rate, 0, 1e9);
+            phase = Select.ar(BinaryOpUGen('>', phase, le) * BinaryOpUGen('>', le, ls),
+                [phase, ls + ((phase - ls) % (le - ls).max(1))]);
+            sig = BufRd.ar(1, buf, phase, 0, 4);
+        } {
+            sig = PlayBuf.ar(1, buf, rate);
+        };
+        sig = LPF.ar(sig, lpf) * gain;
+        if(chorus > 0) {
+            var sweep = SinOsc.kr(0.9, Rand(0, 2pi) + [0, pi]).range(0.005, 0.014);
+            var wet = DelayC.ar(sig, 0.02, sweep);
+            sig = [sig + (wet[0] * chorus), sig + (wet[1] * chorus)] * 0.7;
+        };
+        OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    }).add;
+};
+if(~ysInstruments.notNil) {
+    var have = { |k| ~ysInstruments[k].notNil };
+    if(have.(\nylon)) { ~ysSampled.(\ys_nylon, ~ysInstruments[\nylon], gain: 1.7) };
+    if(have.(\piano)) { ~ysSampled.(\ys_keys, ~ysInstruments[\piano], gain: 1.93, ring: 3, release: 0.6, lpf: 5000) };
+    if(have.(\sax)) { ~ysSampled.(\ys_sax, ~ysInstruments[\sax], gain: 1.2, ring: 1, release: 0.3, loop: true,
+        scoop: 0.6, vibrato: 0.12, attack: 0.025, lpf: 5000) };
+    if(have.(\bass)) { ~ysSampled.(\ys_chorusbass, ~ysInstruments[\bass], gain: 1.26, ring: 1.2, release: 0.12, chorus: 0.7) };
+    if(have.(\harp)) { ~ysSampled.(\ys_harp, ~ysInstruments[\harp], gain: 1.91, ring: 3, release: 1.5) };
+    if(have.(\kalimba)) { ~ysSampled.(\ys_kalimba, ~ysInstruments[\kalimba], gain: 1.78, ring: 3, release: 1.0) };
+};
 )

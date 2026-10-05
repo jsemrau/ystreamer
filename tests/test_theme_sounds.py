@@ -68,7 +68,7 @@ def test_the_director_turns_a_repeated_set_into_a_new_one():
     fallback = _plan("darkwave", "Vampyre Nights in London", n=1)[0]
     same = {"chords": "ys_coldstrings", "keys": "ys_glass", "lead": "ys_wavelead", "arp": "ys_wavesynth"}
     director.recent_sounds.append(dict(same))
-    fallback.sounds = {**same, "lead": "ys_coldguitar"}
+    fallback.sounds = {**same, "lead": "ys_fmlead"}
     piece, notes = director.review_piece({"sounds": same}, fallback, {"progressions": set(), "presets": set()})
     assert piece.sounds != same and any("repeat" in n for n in notes)
 
@@ -83,7 +83,9 @@ def test_a_halloween_theme_gets_eerie_sounds_dark_keys_and_spooky_titles():
     # "party" also asks for euphoric (dorian, major too): two in three dark is right.
     assert sum(p.key.endswith(("phrygian", "minor")) for p in pieces) > 0.6 * len(pieces)
     eerie = {s for s, moods in SOUND_CHARACTER.items() if "eerie" in moods}
-    assert sum(p.sounds["lead"] in eerie for p in pieces) > 0.5 * len(pieces)
+    # About half: the subgenres' own leads (balearic's pluck and guitar) take the rest.
+    many = [p for seed in range(10) for p in _plan("trance", "Halloween trance party", n=10, seed=seed)]
+    assert sum(p.sounds["lead"] in eerie for p in many) > 0.45 * len(many)
 
 
 def test_the_director_keeps_the_chords_in_the_styles_frame():
@@ -93,3 +95,46 @@ def test_the_director_keeps_the_chords_in_the_styles_frame():
                                          {"progressions": set(), "presets": set()})
     assert piece.sounds["chords"] != "ys_coldstrings" and piece.sounds["lead"] == "ys_wavelead"
     assert any("chord sounds" in n for n in notes)
+
+
+def test_a_saltwater_theme_plays_balearic_trance_with_its_pluck_guitar_and_choir():
+    from music.plan import plan_piece, style_from_theme, subgenre_from_theme
+
+    theme = "Chicane's Saltwater at sunset"
+    assert style_from_theme(theme) == "trance" and subgenre_from_theme("trance", theme) == "balearic"
+    assert subgenre_from_theme("trance", "rough metallic monday") == ""
+    assert subgenre_from_theme("techno", theme) == ""                  # only a style that has it
+    previous, leads, arps = None, [], []
+    for seed in range(20):
+        piece = plan_piece(random.Random(seed), previous, style="trance", theme=theme)
+        assert piece.subgenre == "balearic" and 130 <= piece.bpm <= 136
+        leads.append(piece.sounds.get("lead"))
+        arps.append(piece.sounds.get("arp"))
+        previous = piece
+    # The 90s Balearic lead: the Cafe del Mar pluck mostly, else the nylon guitar; the choir is the bed.
+    assert set(leads) <= {"ys_cafepluck", "ys_nylon"} and leads.count("ys_cafepluck") >= 12
+    assert arps.count("ys_nylon") >= 12
+
+
+def test_the_director_keeps_to_the_subgenre_the_theme_asks_for():
+    from music.director import Director
+
+    director = Director(None, random.Random(0), style="trance", theme="Chicane Saltwater")
+    fallback = plan_piece(random.Random(0), style="trance", theme="Chicane Saltwater")
+    piece, notes = director.review_piece({"title": "T", "subgenre": "psy", "bpm": 145, "key": "A minor"}, fallback,
+                                         {"progressions": set(), "presets": set()})
+    assert piece.subgenre == "balearic" and 130 <= piece.bpm <= 136
+    assert any("balearic" in n for n in notes)
+    assert "Subgenre: balearic" in director.piece_prompt(None, fallback, {"progressions": set(), "presets": set()})
+
+
+def test_echoes_fall_on_the_beat_at_the_tracks_tempo():
+    from music.blocks import find_block
+    from music.livecode import Track, beat_delay
+
+    assert beat_delay("0.375", 132) == "0.3409"          # a dotted 8th at 132 BPM
+    assert beat_delay("0.5", 120) == "0.5000"            # a quarter
+    assert beat_delay("(slow 8 $ range 0.2 0.4 sine)", 132).startswith("(slow")
+    line = Track("T", "trance", "E dorian", 132, [0], 2, subgenre="balearic").make(
+        find_block("trance", "cafe_lead"), random.Random(0))
+    assert dict(line.fx)["delaytime"] == "0.3409" and not line.wrappers      # dotted, and no pump

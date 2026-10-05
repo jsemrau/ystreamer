@@ -699,8 +699,8 @@ def test_club_styles_build_to_a_rich_moving_peak(style):
     # Fewer, better layers: trance peaks at its own maximum (5); others at 6+.
     assert len(peak) >= min(6, STYLE_SETTINGS[style]["max_lines"])
     # A 16th-note acid or arp; post-punk darkwave drives in 8ths instead (the
-    # chorused bass and the running guitar arp).
-    assert "*16" in code or style == "darkwave" and "ys_coldguitar" in code
+    # chorused bass).
+    assert "*16" in code or style == "darkwave"
     assert "sine" in code                         # something sweeps
 
 

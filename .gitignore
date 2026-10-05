@@ -20,3 +20,9 @@ runtime/
 voices/
 sessions/
 dataset/
+
+# Licensed acapellas (music/vocals.py) and their prepared banks
+acapellas/
+samples/vox_*/
+# Sampled instruments, downloaded and prepared by music/instruments.py
+instruments/

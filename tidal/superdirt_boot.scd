@@ -19,7 +19,21 @@ s.waitForBoot {
     ~dirt.loadSoundFiles;
     // The project's own banks (licensed): break, bs*, cpu, foley, ...
     ~dirt.loadSoundFiles("/home/moebius/Projects/youtube-stream-music-generation/samples/*");
+    // Sampled instruments (music/instruments.py): ~ysInstruments[\name] =
+    // (bufs: MIDI note -> Buffer, meta: MIDI note -> (tune, loop)), played by
+    // pitch by their SynthDefs (~ysSampled in synthdefs.scd); none, and those
+    // are modelled.
+    ~ysInstruments = ();
+    PathName("/home/moebius/Projects/youtube-stream-music-generation/instruments").folders.do { |dir|
+        var bufs = (), meta = File.exists(dir.fullPath +/+ "meta.scd").if({ (dir.fullPath +/+ "meta.scd").load }, { () });
+        dir.files.do { |p|
+            if(p.extension == "wav") { bufs[p.fileNameWithoutExtension.asInteger] = Buffer.read(s, p.fullPath) };
+        };
+        if(bufs.size > 0) { ~ysInstruments[dir.folderName.asSymbol] = (bufs: bufs, meta: meta) };
+    };
     s.sync;
+    "Sampled instruments: %".format(~ysInstruments.keys.asArray.sort.collect { |k|
+        "% (%)".format(k, ~ysInstruments[k].bufs.size) }.join(", ")).postln;
     ~dirt.start(57120, 0 ! 12);
 
     if(synthdefs.notNil and: { File.exists(synthdefs) }) {

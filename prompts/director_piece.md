@@ -50,8 +50,12 @@ story your cues tell.
     odd count (5, 7) rolls against the beat. Chord tones only: 0 2 4 6 7 9
     11 -1 -3 -5, and `~` for a rest. E.g. "0 7 0 4 9 4 2".
   - a `phrase` part (lead) is a melody, the line a singer would remember,
-    not an arpeggio (running up and down the chord is the arp's job):
-    - 8 steps a bar (8ths) or 16 (16ths); `~` a rest, `_` holds the note
+    not an arpeggio (running up and down the chord is the arp's job).
+    Less is more: 3 to 5 new notes a bar (5 at most; a busier bar is
+    thinned), most of them held (`_`), with rests to breathe; a few notes
+    that sing beat many that run, and a tune that stays within an octave
+    is easier to remember than one that climbs the chord:
+    - 8 steps a bar (8ths), or 16 for a quick pickup; `~` a rest, `_` holds the note
       before it. One bar, or better 2-4 bars as `<[bar 1] [bar 2] ...>`: a
       call and its answer, the answer ending somewhere else than the call.
     - Chord tones (0 2 4 6 7 9 ...) on the beats (steps 1, 3, 5, 7 of 8;
@@ -96,8 +100,8 @@ story your cues tell.
   `blocks`, `sounds` and `knobs`, so the right sound comes in. A cue is:
   {{"do": <action>, "part": <part>, ..., "say": <the instruction in plain
   words, under 12 words, shown to the audience>}}, where `part` is one of
-  kick, hats and claps, bass, chords, keys, acid, arp, lead, pad (only those
-  this style has in `blocks`), and `do` is one of:
+  kick, hats and claps, bass, chords, keys, acid, arp, lead, pad, vocal (only
+  those this style has in `blocks`), and `do` is one of:
   - "start": bring a part in. Name the `block` (from `blocks`), its `sound`
     (from `sounds`, for parts that have a choice) and, if you want, its
     `pattern` (same rules as `parts`).
@@ -162,7 +166,7 @@ Reply with ONE JSON object and nothing else:
 - Previous track's shape (if you write `sections`, make it different): {previous_shape}
 - Keys played recently (don't reuse them): {recent_keys}
 - Hooks and lead melodies played recently (write something different): {recent_hooks}
-- Progressions played recently (don't reuse them): {recent_progressions}
+{melody_brief}- Progressions played recently (don't reuse them): {recent_progressions}
 - Sounds played recently (choose a different set): {recent_sounds}
 - Listeners disliked: {avoid}
 
