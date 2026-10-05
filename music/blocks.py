@@ -534,14 +534,15 @@ BLOCKS: dict[str, list[Block]] = {
                   ["delayfeedback", "0.35"]], octave=" + 12",
                  wrappers=['(|* gain "[0.67 0.91 1 1]*4")']),
         # The 90s Balearic lead (Energy 52's "Cafe del Mar", Chicane): the tune
-        # an octave up on a soft pluck, or the nylon guitar, in a long dotted-8th
-        # delay (Track.make puts the echo on the beat) and some room, not
-        # pumping with the kick.
+        # an octave up on a soft pluck, or the nylon guitar, in a dotted-8th
+        # echo (Track.make puts it on the beat) that answers each note once or
+        # twice and dies away (more piled the echoes over the next notes), some
+        # room, not pumping with the kick.
         _melodic("cafe_lead", "lead", "ys_cafepluck", "melody",
                  ["<[4 3 2 ~ 0 _ _ ~] [2 ~ 4 5 4 _ 2 ~]>", "<[0 ~ 2 3 4 _ _ ~] [7 ~ 6 ~ 4 _ _ ~]>",
                   "<[7 _ 6 ~ 4 ~ 2 3] [4 _ _ ~ 2 ~ 0 ~]>", "4 3 2 ~ 0 _ _ ~"],
-                 [["gain", "1.0"], ["legato", "0.9"], ["lpf", "6000"], ["room", "0.35"], ["size", "0.7"],
-                  ["delay", "0.45"], ["delaytime", "0.34"], ["delayfeedback", "0.45"]], octave=" + 12"),
+                 [["gain", "1.0"], ["legato", "0.9"], ["lpf", "6000"], ["room", "0.3"], ["size", "0.6"],
+                  ["delay", "0.28"], ["delaytime", "0.34"], ["delayfeedback", "0.25"]], octave=" + 12"),
         Block("high_acid", "arp",
               'n (scale "{mode}" ("<{motif}>*16" |+ "<{roots}>") {root}) # s "ys_acid"',
               {"motif": ["0 4 0 9 7", "7 4 0 4", "0 2 4 7 9 7 4 2", "9 7 4 0 4"]},
@@ -806,14 +807,15 @@ BLOCKS["hardcore"].append(_vocal_chop(["~ ~ ~ bsvocals:11", "~ ~ bsvocals:5 ~", 
 
 
 # The real kalimba (music/instruments.py) plays slowly: a note on the beat or
-# less, ringing into the next, in a soft echo, not the 16ths of a synth arp.
+# less, ringing until the next and no further (they overlapped into a blur),
+# one soft echo, not the 16ths of a synth arp.
 # Written for it, so a track whose arp sound is the kalimba brings this line in.
 def _kalimba_arp() -> Block:
     return Block("kalimba_arp", "arp",
                  'n (scale "{mode}" ("<{arp}>*8" |+ "<{roots}>") {root} + 12) # s "ys_kalimba"',
                  {"arp": ["0 ~ 4 ~ 7 ~ 4 ~", "0 ~ ~ 4 ~ ~ 7 ~", "7 ~ 4 ~ ~ 2 ~ ~", "0 ~ 4 ~ 2 ~ ~ ~"]},
-                 fx=[["gain", "0.9"], ["legato", "2"], ["room", "0.5"], ["size", "0.8"], ["delay", "0.3"],
-                     ["delaytime", "0.5"], ["delayfeedback", "0.3"], ["pan", "(slow 12 $ range 0.35 0.65 sine)"]],
+                 fx=[["gain", "0.9"], ["legato", "1"], ["room", "0.4"], ["size", "0.7"], ["delay", "0.15"],
+                     ["delaytime", "0.5"], ["delayfeedback", "0.15"], ["pan", "(slow 12 $ range 0.35 0.65 sine)"]],
                  pool=[0, 2, 4, 7, 9], keep_sound=True, max_notes=4)
 
 

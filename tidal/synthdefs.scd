@@ -900,12 +900,12 @@ SynthDef(\ys_cafepluck, { |out, sustain = 0.3, pan, freq = 440, speed = 1|
 };
 if(~ysInstruments.notNil) {
     var have = { |k| ~ysInstruments[k].notNil };
-    if(have.(\nylon)) { ~ysSampled.(\ys_nylon, ~ysInstruments[\nylon], gain: 1.7) };
-    if(have.(\piano)) { ~ysSampled.(\ys_keys, ~ysInstruments[\piano], gain: 1.93, ring: 3, release: 0.6, lpf: 5000) };
+    if(have.(\nylon)) { ~ysSampled.(\ys_nylon, ~ysInstruments[\nylon], gain: 1.7, ring: 1.5, release: 0.3) };
+    if(have.(\piano)) { ~ysSampled.(\ys_keys, ~ysInstruments[\piano], gain: 1.38, ring: 1.5, release: 0.5, lpf: 5000) };
     if(have.(\sax)) { ~ysSampled.(\ys_sax, ~ysInstruments[\sax], gain: 1.2, ring: 1, release: 0.3, loop: true,
         scoop: 0.6, vibrato: 0.12, attack: 0.025, lpf: 5000) };
     if(have.(\bass)) { ~ysSampled.(\ys_chorusbass, ~ysInstruments[\bass], gain: 1.26, ring: 1.2, release: 0.12, chorus: 0.7) };
-    if(have.(\harp)) { ~ysSampled.(\ys_harp, ~ysInstruments[\harp], gain: 1.91, ring: 3, release: 1.5) };
-    if(have.(\kalimba)) { ~ysSampled.(\ys_kalimba, ~ysInstruments[\kalimba], gain: 1.78, ring: 3, release: 1.0) };
+    if(have.(\harp)) { ~ysSampled.(\ys_harp, ~ysInstruments[\harp], gain: 1.68, ring: 1.5, release: 0.8) };
+    if(have.(\kalimba)) { ~ysSampled.(\ys_kalimba, ~ysInstruments[\kalimba], gain: 1.78, ring: 1.2, release: 0.5) };
 };
 )

@@ -104,9 +104,9 @@ LEVELS = {"kick": 0, "bass": -3, "chords": -6, "lead": -4, "snare": -2, "arp": -
           "echolead": -3, "bed": -15}
 # Stems heard in a big space, as on the stream (SuperDirt's room and delay).
 WET = {"choir": "aecho=0.8:0.7:90|160|240|375:0.45|0.35|0.28|0.3,aecho=0.8:0.6:1100:0.25",
-       # A dotted-8th echo (feedback 0.45) and a little room, as cafe_lead has on the stream.
-       "echolead": f"aecho=1:0.9:{BAR * 3 / 16 * 1000:.0f}|{BAR * 6 / 16 * 1000:.0f}|{BAR * 9 / 16 * 1000:.0f}:"
-                   "0.45|0.2|0.09,aecho=0.8:0.8:70|130:0.25|0.18",
+       # A dotted-8th echo (0.28, feedback 0.25) and a little room, as cafe_lead has on the stream.
+       "echolead": f"aecho=1:0.9:{BAR * 3 / 16 * 1000:.0f}|{BAR * 6 / 16 * 1000:.0f}:"
+                   "0.28|0.07,aecho=0.8:0.8:70|130:0.22|0.15",
        "bed": "aecho=0.8:0.7:90|160|240|375:0.45|0.35|0.28|0.3"}
 
 
