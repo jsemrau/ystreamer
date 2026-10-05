@@ -195,9 +195,10 @@ class Performer:
             return
         total = sum(self.stats.values())
         fallbacks = ", ".join(f"{n} {why}" for why, n in self.stats.most_common() if why != "llm")
-        fallbacks = ", ".join(f"{n} {why}" for why, n in self.stats.most_common()
-                              if why not in ("llm", "judge_llm", "judge_builtin"))
-        total = sum(n for why, n in self.stats.items() if why not in ("judge_llm", "judge_builtin"))
+        counted = lambda why: why not in ("llm", "judge_llm", "judge_builtin") and not why.startswith("pick_")
+        fallbacks = ", ".join(f"{n} {why}" for why, n in self.stats.most_common() if counted(why))
+        total = sum(n for why, n in self.stats.items()
+                    if why not in ("judge_llm", "judge_builtin") and not why.startswith("pick_"))
         self.log(f"[Performer] last track: {self.stats['llm']}/{total} edits by the LLM"
                  + (f" (built-in: {fallbacks})" if fallbacks else ""))
         judged = self.stats["judge_llm"] + self.stats["judge_builtin"]
@@ -206,6 +207,9 @@ class Performer:
                     "its probability" if self.judge_mass else "")
             self.log(f"[Performer] the judge preferred the LLM's idea {self.stats['judge_llm']}/{judged} times "
                      f"({100 * self.stats['judge_llm'] / judged:.0f}%) over the built-in candidates{mass}")
+        picks = {k[5:]: n for k, n in self.stats.items() if k.startswith("pick_")}
+        if picks:
+            self.log("[Performer] the judge's picks: " + ", ".join(f"{n} {k}" for k, n in sorted(picks.items())))
         self.judge_mass.clear()
         self.stats.clear()
 
@@ -1261,10 +1265,7 @@ class Performer:
             "Recent edits (oldest first):", *(self.recent or ["(none yet)"]),
         ])
         questions = {
-            "edit": {"type": "choice",
-                     "instructions": "Which edit should the live coder make next? Choose the one that best "
-                                     "develops the track at this point of its arc and fits the theme: a change "
-                                     "a listener will notice, not a jolt, and not a repeat of a recent move.",
+            "edit": {"type": "choice", "instructions": JUDGE_CRITERIA[BOLDNESS.get(self.state.phase, "medium")],
                      "criteria": options},
         }
         asks = (f"choose the next edit for '{program.track.title}' ({self.state.phase}) "
@@ -1312,7 +1313,7 @@ class Performer:
 
     def _proposals(self, program: Program, timeout: float) -> list[Edit]:
         """The LLM proposes up to 3 different legal edits (one call)."""
-        edit_schema = self._edit_schema(program)
+        edit_schema = self._edit_schema(program, proposal=True)
         schema = {"type": "object", "properties": {"proposals": {"type": "array", "items": edit_schema,
                                                                  "minItems": 1, "maxItems": 3}},
                   "required": ["proposals"], "additionalProperties": False}
@@ -1396,8 +1397,14 @@ class Performer:
                     "p": probs[i] if i < len(probs) else None} for i, e in enumerate(pool)]
         runtime.ui_event("judge", compared=compared, confidence=info.get("confidence"),
                          chosen=pool.index(chosen), chosen_from="ai" if from_llm else "random", options=options)
+        # How bold the chosen move was: the proposal's own label, or built-in.
+        kind = (chosen.boldness or "unlabelled") if from_llm else "built-in"
+        self.stats[f"pick_{kind}"] += 1
+        bold_offered = any(e.boldness == "bold" for e in proposals)
         chosen.judgement = {"options": options, "chosen": pool.index(chosen), "compared": compared,
-                            "confidence": info.get("confidence"), "why": why}
+                            "confidence": info.get("confidence"), "why": why, "boldness": kind,
+                            "phase_boldness": BOLDNESS.get(self.state.phase, "medium"), "bold_offered": bold_offered}
+        detail.append(f"a {kind} move" if from_llm else "built-in")
         self.log(f"⚖️  Judge chose {'the LLM' if from_llm else 'a built-in'} idea "
                  f"({', '.join(detail + [f'from {len(proposals)} LLM + {len(builtin)} built-in'])}"
                  + ("" if compared else "; not a comparison") + ")" + (f": {why}" if why else ""))
@@ -1438,7 +1445,7 @@ class Performer:
             self.log("[Performer] too many LLM failures; the built-in performer plays the next 5 edits")
         return None
 
-    def _edit_schema(self, program: Program, review: bool = False) -> dict:
+    def _edit_schema(self, program: Program, review: bool = False, proposal: bool = False) -> dict:
         """JSON schema of every edit that is legal right now. A local server
         decodes under it, so only real block, role, slot, effect and wrapper
         names can come out; numbers are still range-checked afterwards."""
@@ -1450,6 +1457,8 @@ class Performer:
             # itself before it commits.
             # Answering a host's request, the review comes first.
             head = {"review": note} if review else {}
+            if proposal:
+                head = {**head, "boldness": {"enum": ["safe", "bold"]}}
             properties = {**head, "listening": note, "reason": note, "op": {"const": op}, **props,
                           "narration": {"type": "string", "maxLength": 160}}
             return {"type": "object", "properties": properties,
@@ -1501,7 +1510,9 @@ class Performer:
         edit = Edit(op, role=role, name=name, value=value,
                     reason=" ".join(str(data.get("reason", "")).split())[:200],
                     narration=clean_narration(data.get("narration")),
-                    listening=" ".join(str(data.get("listening", "")).split())[:200])
+                    listening=" ".join(str(data.get("listening", "")).split())[:200],
+                boldness=str(data.get("boldness", "")).strip().lower() if data.get("boldness") in ("safe", "bold")
+                else "")
         if op == "set_fx" and name == "gain" and role in program.lines:
             # Pull a gain edit into the line's +/-3 dB window instead of rejecting it.
             from .livecode import gain_range
@@ -1570,7 +1581,9 @@ class Performer:
             # The system rules and the track (the same for a whole track) come
             # first: Claude caches them up to here.
             track=json.dumps(program.track.to_dict()), cache_break=CACHE_BREAK, phase=self.state.phase,
-            phase_help=PHASE_HELP[self.state.phase], edits_in_phase=self.state.edits_in_phase,
+            phase_help=PHASE_HELP[self.state.phase] + (
+                f" This phase wants {BOLDNESS.get(self.state.phase, 'medium')} moves." if proposals else ""),
+            edits_in_phase=self.state.edits_in_phase,
             complexity=self.complexity_note(program),
             bars_left=round(self.phase_bars_left()), phase_bars=self.step_bars(),
             code="\n".join(program.code_lines()),
@@ -1668,12 +1681,32 @@ def _clamp_value(op: str, name: str, value: str, program: Program) -> str:
     return value
 
 
+# How bold a move each phase wants: the proposals' range and the judge's
+# criterion. The peaks get the moves people remember; the build, breakdown and
+# outro the ones that keep their shape.
+BOLDNESS = {"build": "gentle", "groove": "bold", "breakdown": "gentle", "rebuild": "medium", "groove2": "bold",
+            "outro": "gentle"}
+JUDGE_CRITERIA = {
+    "bold": "Which edit should the live coder make next? Choose the most musically interesting one that "
+            "still serves the track and its theme: a move a listener would remember (a new answer phrase, "
+            "a counter-line, a stripped-back moment, a new colour) beats a safe nudge; changing the notes, "
+            "the rhythm or which lines play beats turning a knob. Not a repeat of a recent move, and not "
+            "more notes for their own sake: a busier track is not a more interesting one.",
+    "medium": "Which edit should the live coder make next? Choose the one that builds the most tension "
+              "toward what comes next, clearly and with purpose: a change a listener will notice, not a "
+              "jolt, and not a repeat of a recent move.",
+    "gentle": "Which edit should the live coder make next? Choose the one that best serves this calmer "
+              "moment of the track: clear, unhurried, giving space; a change a listener will notice, "
+              "not a jolt, and not a repeat of a recent move.",
+}
+
 PHASE_HELP = {
     "build": "Build the track up: add the next line almost every edit, until the full groove plays.",
-    "groove": "The track is up: a full, layered groove. Keep it moving with small steps, one per "
-              "edit: change one note, add or drop one hit, ride the acid knob or a filter a little "
-              "further in the same direction. Now and then a bigger touch (a second bar with "
-              "`<[...] [...]>`, an octave layer). Keep every line in harmony.",
+    "groove": "The track is up: a full, layered groove. Keep it moving, and make it memorable: "
+              "between small steps (one note, one hit, a knob ridden further), a move a listener "
+              "would remember (an answer phrase in a second bar `<[...] [...]>`, a counter-line in "
+              "the lead's rests, a phrase with everything but the lead and pad out, the lead in "
+              "another of its sounds). Fewer notes, not more; every line in harmony.",
     "breakdown": "Breakdown: mute the beat and/or bass, and make what's left more spacious. "
                  "If there's a vocal, bring it in now: a voice in the space the kick leaves.",
     "rebuild": "Bring the muted lines back (unmute), building tension.",
@@ -1730,21 +1763,35 @@ ONE JSON object with, in this order:
 ```
 """
 
-REPLY_PROPOSALS = """## Reply: propose N different edits
+REPLY_PROPOSALS = """## Reply: propose N different edits, from safe to bold
 
 A judge will pick one of your ideas (or someone else's), so propose N
-genuinely DIFFERENT moves: e.g. one on the melody, one on the sound, one
-structural. Each is a full edit with, in this order, `"listening"` (what you
+genuinely DIFFERENT moves, and label each `"boldness"`: `"safe"`, a small
+step that keeps the track moving, or `"bold"`, a move a listener would
+remember. At least one must be bold; in a peak (groove, groove2) make two of
+them bold, in the build, breakdown and outro keep them gentle (bold there
+means clearer, not louder). Bold is an idea, not more notes; stay within the
+note budget and the harmony. Bold moves that work:
+- an answer phrase: the hook's second bar as a reply (`<[call] [answer]>`)
+- a counter-line: a second melodic line that sings in the lead's rests
+- strip it back: mute all but the lead and the pad for a phrase
+- a new colour: the lead or arp in another of its `sounds` at a phrase turn
+- a new chord rhythm, or the bass in a new rhythm against the kick
+- the vocal, or a texture, coming in for a moment
+Each is a full edit with, in this order, `"boldness"`, `"listening"` (what you
 hear that matters), `"reason"` (why this move, what should change), the
 operation fields, and optionally `"narration"`.
 
 ```json
 {"proposals": [
-  {"listening": "The melody repeats the same four notes.", "reason": "Answer the phrase a step lower.",
-   "op": "set_pattern", "role": "lead", "name": "melody", "value": "4 ~ 3 ~ 0 ~ ~ ~"},
-  {"listening": "The keys are bright and flat.", "reason": "Let the keys breathe with a slow filter sweep.",
+  {"boldness": "safe", "listening": "The keys are bright and flat.",
+   "reason": "Let the keys breathe with a slow filter sweep.",
    "op": "set_fx", "role": "keys", "name": "lpf", "value": "(slow 16 $ range 1200 4000 sine)"},
-  {"listening": "Everything plays all the time.", "reason": "Drop the hats for air before the next phrase.",
+  {"boldness": "bold", "listening": "The hook asks the same question every bar.",
+   "reason": "Answer it: the second bar falls to the root and rests.",
+   "op": "set_pattern", "role": "lead", "name": "melody", "value": "<[4 _ 2 _ 4 _ ~ ~] [2 _ _ _ 0 _ ~ ~]>"},
+  {"boldness": "bold", "listening": "Everything plays all the time.",
+   "reason": "Strip it back: drop the hats so the lead and pad hang in the air.",
    "op": "mute", "role": "perc"}
 ]}
 ```

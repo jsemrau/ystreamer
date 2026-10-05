@@ -491,7 +491,8 @@ def test_judge_picks_the_llm_idea(monkeypatch):
     logs = []
     performer.log = logs.append
     performer.report_stats()
-    assert "gave them" in logs[-1] and "of its probability" in logs[-1]
+    summary = next(l for l in logs[-2:] if "gave them" in l)          # (then how bold its picks were)
+    assert "of its probability" in summary and "the judge's picks" in logs[-1]
 
 
 def test_judge_picks_a_builtin_idea(monkeypatch):

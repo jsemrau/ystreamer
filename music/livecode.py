@@ -551,6 +551,7 @@ class Edit:
     judgement: dict = field(default_factory=dict)   # with a judge: the options it weighed and chose from
     request: str = ""       # the host's request this edit answers ("more bass")
     review: str = ""        # the performer's answer to it: what it does and why
+    boldness: str = ""      # a proposal's own label: "safe" or "bold" (performer.BOLDNESS)
 
     def describe(self) -> str:
         if self.op == "add":

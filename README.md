@@ -546,6 +546,17 @@ tracks and the Narrator uses hand-written lines for each moment.
 the LLM proposes 3 different edits, the built-in performer adds up to 3
 more, and jevtypesafe picks one *blind* (shuffled, sources hidden):
 
+The proposals run **from safe to bold**: each is labelled `safe` (a small
+step) or `bold` (a move a listener would remember: an answer phrase, a
+counter-line, a stripped-back moment, a new colour), at least one bold, two
+in a peak. The judge's criterion follows the arc (`performer.BOLDNESS`,
+`JUDGE_CRITERIA`): in the groove and the peak it picks the most musically
+interesting move that still serves the track (changing notes, rhythm or
+lines over turning a knob; never more notes for their own sake); in the
+build and rebuild it builds tension; in the breakdown and outro it keeps it
+calm. The note budget and harmony rules hold either way. After each track:
+`the judge's picks: 9 bold, 4 safe, 2 built-in`.
+
 ```bash
 ./venv/bin/python orchestrator.py --style lofi --llm local --judge jevtypesafe
 ```

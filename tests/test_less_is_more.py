@@ -66,3 +66,49 @@ def test_every_written_lead_and_keys_line_is_within_budget():
 
 def test_two_melodic_lines_at_most_in_every_style():
     assert all(settings.get("max_melodic") == 2 for settings in STYLE_SETTINGS.values())
+
+
+def test_proposals_run_from_safe_to_bold_and_the_judge_wants_bold_at_the_peaks():
+    import json
+
+    from music.performer import BOLDNESS, JUDGE_CRITERIA, REPLY_PROPOSALS, Performer
+
+    assert BOLDNESS["groove"] == BOLDNESS["groove2"] == "bold" and BOLDNESS["breakdown"] == "gentle"
+    assert "most musically interesting" in JUDGE_CRITERIA["bold"] and "not a jolt" in JUDGE_CRITERIA["gentle"]
+    assert '"boldness": "bold"' in REPLY_PROPOSALS
+    performer = Performer(random.Random(0), style="trance", log=lambda *_: None)
+    program = Program(performer.new_track(None))
+    for role in ("bass", "beat", "lead"):
+        program = apply_edit(program, performer._add(program, role))
+    schema = performer._edit_schema(program, proposal=True)
+    assert all("boldness" in v["required"] for v in schema["anyOf"])
+    performer.state.phase = "groove"
+    assert "This phase wants bold moves." in performer._prompt(program, proposals=3)
+    edit = performer._edit_from_json({"boldness": "bold", "op": "mute", "role": "beat", "reason": "air"}, program)
+    assert edit.boldness == "bold"
+    assert performer._edit_from_json({"boldness": "wild", "op": "mute", "role": "beat"}, program).boldness == ""
+
+
+def test_the_judge_asks_for_interest_at_the_peak_and_records_how_bold_the_pick_was(monkeypatch):
+    from music import llm
+    from music.livecode import Edit
+    from music.performer import Performer
+
+    performer = Performer(random.Random(0), style="trance", log=lambda *_: None, judge="jevtypesafe")
+    program = Program(performer.new_track(None))
+    program = apply_edit(program, performer._add(program, "beat"))
+    performer.state.phase = "groove2"
+    bold = Edit("mute", role="beat", reason="strip it back", boldness="bold", source="LLM")
+    asked = {}
+
+    def decide(agent, state, questions, **kw):
+        asked.update(questions)
+        return {"edit": {"choice": "e1"}}
+
+    monkeypatch.setattr(llm, "decide", decide)
+    monkeypatch.setattr(performer, "_proposals", lambda program, timeout: [bold])
+    performer.rng = random.Random(1)
+    monkeypatch.setattr(performer.rng, "shuffle", lambda pool: None)        # the LLM's idea stays e1
+    chosen = performer._judged_edit(program)
+    assert "most musically interesting" in asked["edit"]["instructions"]
+    assert chosen.judgement["boldness"] == "bold" and performer.stats["pick_bold"] == 1
