@@ -53,10 +53,10 @@ PF_RANGES: dict[str, tuple[float, float]] = {
 # notes sit between the beats, may not (backwards puts them on the beats).
 MELODIC_WRAPPERS = [
     "sometimesBy 0.2 (degradeBy 0.5)", "jux rev", "every 4 rev", "degradeBy 0.1",
-    "whenmod 8 6 (# lpf 800)", "every 2 (# room 0.5)", "every 4 (|+ n 12)",
+    "whenmod 8 6 (# lpf 800)", "every 2 (# room 0.5)", "every 4 (|+ n 12)", "(|+ n 12)",
 ]
 LEAD_WRAPPERS = ["sometimesBy 0.2 (degradeBy 0.5)", "degradeBy 0.1", "whenmod 8 6 (# lpf 800)",
-                 "every 2 (# room 0.5)", "every 4 (|+ n 12)"]
+                 "every 2 (# room 0.5)", "every 4 (|+ n 12)", "(|+ n 12)"]
 # Earlier versions' melodic wrappers: still understood (e.g. to unwrap them
 # from a resumed track), never offered.
 RETIRED_WRAPPERS = ["every 4 (fast 2)", "every 3 (0.25 <~)", "every 4 (0.125 ~>)", "off 0.125 (|+ n 12)",
@@ -95,6 +95,7 @@ WRAPPER_NOTES = {
     "every 4 rev": "every 4th bar plays backwards: a twist at the phrase end",
     "degradeBy 0.1": "randomly drops 1 in 10 notes: human, less mechanical",
     "every 4 (|+ n 12)": "every 4th bar jumps an octave up: a lift at the end of the phrase",
+    "(|+ n 12)": "the whole line an octave up: the hook returning higher, for the peak",
     "chunk 4 (fast 2)": "each bar a different quarter plays double time: a roll that walks through the bar",
     "whenmod 8 6 (# lpf 800)": "last 2 bars of every 8 go muffled: a dip before the next phrase",
     "every 2 (# room 0.5)": "every other bar gets more reverb: the space pulses",
@@ -312,6 +313,12 @@ class LineSpec:
     block: str = ""                 # which library block it came from
     base_gain: str = ""             # the level the line entered at; gain edits stay within +/-3 dB of it
     max_notes: int = 0              # its note budget a bar (0: the role's, NOTE_BUDGET)
+    # The track's hook, when this line carries it: the tune as given, its
+    # slot, and whether it's written against the key across the progression
+    # (music/hooks.py) rather than on each chord's root.
+    hook: str = ""
+    hook_slot: str = ""
+    key_tune: bool = False
 
     @property
     def channel(self) -> int:
@@ -470,6 +477,9 @@ class Track:
             "root": root_text,          # e.g. " + 2", " - 3" or "" (C)
             "chords": chords,
             "roots": roots,
+            # Cycles a tune written against the key (music/hooks.py) is shifted
+            # by, so its first bar falls on the progression's first chord.
+            "tune_shift": str(shift),
             "bar": f"{bar:.4f}",          # seconds per bar (trance gate locks to it)
             "beat": f"{bar / 4:.4f}",     # seconds per beat (sidechain duck)
         }
@@ -592,7 +602,10 @@ def _check_number(value: str, lo: float, hi: float) -> str:
 
 def check_pattern(value: str) -> str:
     value = " ".join(str(value).split())
-    if not value or len(value) > 120 or not _PATTERN_RE.match(value):
+    # (Long enough for a tune of 8 bars written across the progression.)
+    if len(value) > 260:
+        raise EditError(f"pattern too long ({len(value)} characters, at most 260)")
+    if not value or not _PATTERN_RE.match(value):
         raise EditError(f"invalid pattern {value!r}")
     for a, b in ("[]", "<>"):
         if value.count(a) != value.count(b):
@@ -803,6 +816,20 @@ def gain_range(line: LineSpec) -> tuple[float, float]:
     return round(max(lo, base * 0.92), 3), round(min(hi, base * 1.09), 3)
 
 
+def hook_kept_problem(hook: str, value: str) -> str | None:
+    """Why a new pattern for the line carrying the hook loses it, or None.
+    The hook is what people remember, so it stays: all its bars but the last
+    (the answer) as written; the answer, and any bars added after, may vary.
+    A one-bar hook stays as its first bar."""
+    old, new = _bars(hook), _bars(value)
+    keep = max(1, len(old) - 1)
+    if len(new) < keep or [b for b in new[:keep]] != [b for b in old[:keep]]:
+        shown = " ".join("[" + " ".join(b) + "]" for b in old[:keep])
+        return (f"the hook stays: keep its first {keep} bar{'s' if keep > 1 else ''} ({shown}) as they are and "
+                "vary only its last bar, the answer")
+    return None
+
+
 def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
     """Validate and apply an edit, returning a new Program. Raises EditError."""
     new = copy.deepcopy(program)
@@ -883,9 +910,18 @@ def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
         elif not line.drums:
             if re.search(r"[a-z]", value.replace("~", "")):
                 raise EditError("melodic patterns are scale degrees (numbers), not names")
-            problem = harmony_problem(line.role, value) or range_problem(line.role, value)
+            if line.key_tune and edit.name == line.hook_slot:
+                from .hooks import key_harmony_problem
+
+                problem = key_harmony_problem(value, program.track.degrees, program.track.bars_per_chord)
+            else:
+                problem = harmony_problem(line.role, value) or range_problem(line.role, value)
             if problem:
                 raise EditError(problem)
+            if line.hook and edit.name == line.hook_slot:
+                problem = hook_kept_problem(line.hook, value)
+                if problem:
+                    raise EditError(problem)
         if line.drums:
             # Drum lines keep their kit: only the sounds the block defines for
             # this slot (any other sample could be pitched, out of key, or

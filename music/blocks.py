@@ -279,15 +279,21 @@ class Block:
                     for slot, v in patterns.items()}
         tune = self.hook_slot()
         slot = self.sketch_slot()
-        if hook and tune and hook.get("role") == self.role and hook.get("kind", tune[1]) == tune[1]:
+        body = self.body
+        carries = bool(hook and tune and hook.get("role") == self.role and hook.get("kind", tune[1]) == tune[1])
+        key_tune = carries and hook.get("relative") == "key" and tune[1] == "phrase"
+        if carries:
             patterns[tune[0]] = hook["pattern"]
+            if key_tune:
+                # Written against the key across the progression (music/hooks.py):
+                # not added to each chord's root, shifted to start on its first chord.
+                body = body.replace(f'("{{{tune[0]}}}" |+ "<{{roots}}>")', f'({{tune_shift}} ~> "{{{tune[0]}}}")')
             if self.phrasing:
                 patterns[tune[0]] = self.phrasing(patterns[tune[0]])
         elif parts and slot and (parts.get(self.role) or {}).get("kind") == slot[1]:
             patterns[slot[0]] = parts[self.role]["pattern"]
             if self.phrasing:
                 patterns[slot[0]] = self.phrasing(patterns[slot[0]])
-        body = self.body
         sound = (sounds or {}).get(self.role)
         palette = LIVE_SOUNDS.get(self.role, {})
         own = {mix.synth_of(body), *(self.patterns.get("synth") or [])}
@@ -329,6 +335,7 @@ class Block:
             fx=fx, pfs=pfs,
             wrappers=list(self.wrappers), drums=self.drums, block=self.name,
             base_gain=dict((n, v) for n, v in fx).get("gain", ""), max_notes=self.max_notes,
+            hook=patterns[tune[0]] if carries else "", hook_slot=tune[0] if carries else "", key_tune=key_tune,
         )
 
 

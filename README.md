@@ -326,6 +326,42 @@ live trance demo, translated to Tidal:
   have a second lead line, `anthem_lead`: the tune an octave up in long
   notes ringing into the reverb, not pumping with the kick.
 
+**Memorable melodies** (`music/hooks.py`). A track's hook is its identity:
+
+- *Written against the key, across the progression.* A lead's hook is in the
+  key's degrees, one bar per bar of the progression (`"relative": "key"`):
+  on the beats a tone of that bar's chord, between them a scale note that
+  steps, and a note may be held across a chord change when both chords have
+  it (`hooks.key_harmony_problem`). Arps, acid and basslines still follow
+  each chord's root. A hook a note or two off the chords is fitted to them
+  (`hooks.refit`); one further off is sent back to the Director with which
+  chord plays in which bar.
+- *Measured.* `hooks.analyze` checks what makes a tune memorable: a motif
+  that comes back (AA'AB), one high point about two thirds in, mostly steps
+  with leaps that turn back, a held note, a rest, a note off the beat, a call
+  that ends open and an answer that ends home, within an octave and a
+  third, and not sitting on one note. A Director hook below 0.75 is written
+  again once, told what it misses; the judge sees the score of melodic
+  proposals.
+- *Written when needed.* `hooks.write_hook` writes one for any progression:
+  a rhythmic motif stated, restated (moved to the next chord), varied and
+  answered over an arch-shaped contour, the best of 48 tries that isn't
+  close to a recent hook. The built-in planner gives every track one, and it
+  stands in when the Director's doesn't fit or is weak.
+- *Kept, heard and brought back.* The hook is locked (`livecode.hook_kept_problem`):
+  only its last bar, the answer, may change. The built-in arc lets it repeat
+  in the groove, sings it alone in another voice in the breakdown (re-fitted
+  to the breakdown's chords), and brings it back as written, an octave up,
+  at the peak (a track with a key hook keeps its main progression there).
+  After each track: `the hook played 140 bars as written`.
+- *Learned from the host.* A 👍 / 👎 while a hook plays is kept with it
+  (`runtime/hook_ratings.jsonl`); the hooks liked most are shown to the
+  Director as rules ("4 bars, its first bar's rhythm \"x _ _ x _ x _ ~\",
+  the high point in bar 3, mostly steps ..."), not notes to copy.
+- Hear four written hooks over the same chords, scored:
+  `python -m eval.sound_preview --melodies` (49_ ... 52_, scores in
+  `recordings/preview/melodies.txt`).
+
 Trance comes in **subgenres** (`blocks.SUBGENRES`), each with its own tempo,
 drum kit (hat and clap patterns), bass rhythm, sounds and voicings:
 progressive (126-132 BPM, offbeat bass, soft hats, e-piano and bells),

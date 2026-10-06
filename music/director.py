@@ -23,9 +23,13 @@ from .narrator import clean_narration
 from . import presets as P
 from .melody import STEPS_PER_CYCLE
 from .blocks import hook_kinds
+from .hooks import GOOD as HOOK_GOOD
+from .hooks import analyze as analyze_hook
+from .hooks import key_harmony_problem
+from .hooks import liked as liked_hooks
 from .plan import (HOOK_SIMILAR, STYLES, Arrangement, Piece, Section, arrange, director_vocabulary, hook_similarity,
-                   melody_brief, plan_piece, resolve_surprise_cues, subgenre_from_theme, validate_arrangement,
-                   validate_hook, validate_piece)
+                   melody_brief, plan_piece, progression_degrees, resolve_surprise_cues, subgenre_from_theme,
+                   validate_arrangement, validate_hook, validate_piece, write_piece_hook)
 from .theory import Key, progressions_for
 
 PROMPTS_DIR = os.path.join(config.REPO_DIR, "prompts")
@@ -216,10 +220,19 @@ class Director:
             if previous else "none (this is the first track)",
             previous_shape=" → ".join(f"{s.name} {s.bars}" for s in previous.sections)
             if previous and previous.sections else "none",
+            bars_per_chord_line=(
+                f"In {style}, each chord lasts {cfg['cycles_per_chord']} bar"
+                + (f"s: with four chords the hook has {4 * cfg['cycles_per_chord']} bars, bars 1-{cfg['cycles_per_chord']} "
+                   f"over the first chord, bars {cfg['cycles_per_chord'] + 1}-{2 * cfg['cycles_per_chord']} over the "
+                   "second, and so on." if cfg["cycles_per_chord"] > 1 else ": one bar per chord.")
+                if cfg else "Each chord lasts the style's `cycles_per_chord` bars."),
             recent_keys=", ".join(self.recent_keys) or "none",
             recent_hooks=", ".join(self.recent_hooks) or "none",
             melody_brief=(f"- {brief}\n" if (brief := melody_brief([h.split(": ", 1)[-1] for h in self.recent_hooks]))
                           else ""),
+            # What the host liked (music/hooks.py), as rules to learn from, not tunes to copy.
+            liked_hooks=("- Hooks the host liked (what they had; write something new with that quality): "
+                         + "; ".join(liked) + "\n" if (liked := liked_hooks()) else ""),
             recent_progressions=", ".join(self.recent_progressions) or "none",
             recent_sounds="; ".join(", ".join(f"{r} {s}" for r, s in sorted(snd.items())) for snd in self.recent_sounds)
             or "none",
@@ -332,6 +345,13 @@ class Director:
                     piece.sounds[role] = fallback.sounds[role]
                     break
         _distinct_sections(piece, self.rng)
+        # A hook written against the key must fit the progression as it ended up
+        # (the key or the chords may have been changed above); else a new one.
+        if piece.hook.get("relative") == "key":
+            clash = key_harmony_problem(piece.hook["pattern"], progression_degrees(piece), piece.cycles_per_chord)
+            if clash:
+                notes.append(f"the hook no longer fits {piece.progression} ({clash}); wrote one that does")
+                write_piece_hook(piece, self.rng, [h.split(": ", 1)[-1] for h in self.recent_hooks])
         piece.narration = clean_narration(data.get("narration"))
         return piece, notes
 
@@ -341,6 +361,25 @@ class Director:
         best = max(scored, key=lambda x: x[1], default=None)
         return best if best and best[1] >= HOOK_SIMILAR else None
 
+    def weak_hook(self, piece: Piece) -> tuple[float, list[str]] | None:
+        """(score, what it misses) for a phrase hook under music/hooks.GOOD, or None."""
+        if not piece.hook or piece.hook.get("kind") != "phrase":
+            return None
+        key = piece.hook.get("relative") == "key"
+        a = analyze_hook(piece.hook["pattern"], progression_degrees(piece) if key else None, piece.cycles_per_chord)
+        return (a["score"], a["problems"]) if a and a["score"] < HOOK_GOOD else None
+
+    def _writer_instead(self, piece: Piece, weak: tuple[float, list[str]] | None) -> None:
+        """A weak hook the model couldn't better: the hook writer's
+        (music/hooks.py), when it scores higher and the track has a phrase part."""
+        if weak is None or piece.surprise == "three_note_hook":
+            return
+        trial = type(piece).from_dict(piece.to_dict())
+        if write_piece_hook(trial, self.rng, [h.split(": ", 1)[-1] for h in self.recent_hooks]) \
+                and (self.weak_hook(trial) or (1.0,))[0] > weak[0]:
+            self.log(f"🎣 Written hook instead: {trial.hook['pattern']}")
+            piece.hook = trial.hook
+
     def _freshen_hook(self, piece: Piece, prompt: str) -> None:
         """A hook that is a recent one again (Claude, shown its last tunes,
         still tends to write their sibling): ask once more, for the hook
@@ -349,29 +388,68 @@ class Director:
         if not piece.hook:
             return
         close = self.close_hook(piece.hook["pattern"])
-        if close is None:
+        weak = self.weak_hook(piece)
+        rejected = getattr(self, "_hook_rejected", "")
+        self._hook_rejected = ""
+        if close is None and weak is None and not rejected:
             return
         role, old = piece.hook["role"], piece.hook["pattern"]
-        self.log(f"[Director] the hook {old} is {close[1]:.0%} like a recent one ({close[0]}); asking for another")
+        if rejected:
+            # Its hook didn't fit the chords (the written one stands in): once more,
+            # with which chord sounds in which bar.
+            from .hooks import bar_chords
+
+            weak = self.weak_hook(piece) or (1.0, [])
+            self.log(f"[Director] the hook didn't fit the chords ({rejected[:120]}); asking for another")
+            role = piece.hook["role"]
+            why_new = (f"Your hook didn't fit the chords: {rejected}. Each chord lasts {piece.cycles_per_chord} "
+                       f"bar{'s' if piece.cycles_per_chord > 1 else ''}: "
+                       + bar_chords(piece.progression, progression_degrees(piece), piece.cycles_per_chord)
+                       + ". On the beats play that bar's tones (key degrees).")
+            old = "(rejected)"
+        elif close is not None:
+            self.log(f"[Director] the hook {old} is {close[1]:.0%} like a recent one ({close[0]}); asking for another")
+            why_new = (f"It is too close to a tune played recently ({close[0]}): write one that differs from every "
+                       "recent tune in its rhythm, its register and its ending.")
+        else:
+            self.log(f"[Director] the hook {old} isn't memorable enough (melody {weak[0]:.2f}: "
+                     f"{'; '.join(p.split(':')[0] for p in weak[1])}); asking for another")
+            why_new = ("It misses what makes a hook memorable: " + "; ".join(weak[1])
+                       + ". Write one that has these, by the same rules.")
         ask = (f"{prompt}\n\n## One change to your plan\n\nYou planned '{piece.title}' in {piece.key} on "
-               f"{piece.progression}, the hook on the {role}: {old}. It is too close to a tune played recently "
-               f"({close[0]}). Keep the rest of the plan; write only a new hook for the {role}, by the same rules, "
-               f"that differs from every recent tune in its rhythm, its register and its ending. Reply with JSON "
+               f"{piece.progression}, the hook on the {role}: {old}. {why_new} Keep the rest of the plan; write "
+               f"only a new hook for the {role}. Reply with JSON "
                f'only: {{"hook": {{"role": "{role}", "pattern": "..."}}, "reason": "what is new about it"}}')
         data = self._ask("hook", self.PIECE_SYSTEM, ask, cache_ttl="1h") if self._llm_available() else None
-        hook, why = validate_hook((data or {}).get("hook"), piece.style)
+        hook, why = validate_hook((data or {}).get("hook"), piece.style, progression_degrees(piece),
+                                  piece.cycles_per_chord)
+        hook.pop("fitted", None)
+        if rejected and hook and hook["role"] == role:
+            a = analyze_hook(hook["pattern"], progression_degrees(piece) if hook.get("relative") == "key" else None,
+                             piece.cycles_per_chord)
+            if a and a["score"] >= weak[0] - 0.1:
+                self.log(f"🎣 Hook, fitted to the chords: {hook['pattern']}")
+                piece.hook = hook
+            else:
+                self.log("[Director] kept the written hook: the new one scores lower")
+            return
         if not hook or hook["role"] != role:
             self.log(f"[Director] kept the hook: the new one didn't fit ({why or 'another part'})")
-            return
+            return self._writer_instead(piece, weak)
         from .surprises import hook_notes
 
         if piece.surprise == "three_note_hook" and hook_notes(hook["pattern"]) > 3:
             self.log("[Director] kept the hook: the new one has more than three notes (three-note-hook surprise)")
-            return
+            return self._writer_instead(piece, weak)
         again = self.close_hook(hook["pattern"])
-        if again and again[1] >= close[1]:
+        if close is not None and again and again[1] >= close[1]:
             self.log(f"[Director] kept the hook: the new one {hook['pattern']} is no fresher")
             return
+        if weak is not None:
+            new = self.weak_hook(type(piece).from_dict({**piece.to_dict(), "hook": hook}))
+            if new is not None and new[0] <= weak[0]:
+                self.log(f"[Director] kept the hook: the new one {hook['pattern']} scores no better ({new[0]:.2f})")
+                return self._writer_instead(piece, weak)
         self.log(f"🎣 Fresher hook: {hook['pattern']}")
         piece.hook = hook
 
@@ -390,6 +468,7 @@ class Director:
             data = self._ask("piece", self.PIECE_SYSTEM, prompt, cache_ttl="1h")
             if data:
                 piece, notes = self.review_piece(data, fallback, avoid)
+                self._hook_rejected = next((n[len("hook rejected ("):-1] for n in notes if n.startswith("hook rejected (")), "")
                 self.choose_surprise(piece, data, notes)
                 self._freshen_hook(piece, prompt)
                 notes.extend(resolve_surprise_cues(piece))

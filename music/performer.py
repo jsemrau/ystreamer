@@ -106,19 +106,45 @@ def with_vocal_cue(cues: dict) -> dict:
     return {**cues, phase: list(cues.get(phase, [])) + [dict(VOCAL_CUE)]}
 
 
+def _other_voice(piece, role: str) -> str | None:
+    """Another sound the hook's part can sing in (its subgenre's, else its
+    style's), for the breakdown: the same tune in a new voice."""
+    from .blocks import LIVE_SOUNDS, subgenre_sounds
+    from .plan import STYLE_SOUNDS
+
+    now = (piece.sounds or {}).get(role)
+    options = (subgenre_sounds(piece.style, piece.subgenre).get(role) or []) + STYLE_SOUNDS.get(piece.style, {}).get(role, [])
+    return next((o for o in options if o != now and o in LIVE_SOUNDS.get(role, {})), None)
+
+
 def builtin_cues(piece) -> dict[str, list[str]]:
     """Plain instructions for a track when no Director wrote any: the turns a
-    live set takes, named after the parts the track has."""
+    live set takes, named after the parts the track has. The hook is the
+    track's identity, so it is heard, not replaced: it repeats with only its
+    answer varied, sings alone in another voice in the breakdown, and comes
+    back as written, an octave up, at the peak."""
     hook = (piece.hook or {}).get("role") or "lead"
+    pattern = (piece.hook or {}).get("pattern")
+    voice, home = _other_voice(piece, hook), (piece.sounds or {}).get(hook)
+    breakdown = [{"do": "stop", "part": "beat", "say": "Drop the kick"},
+                 {"do": "stop", "part": "bass", "say": "Drop the bass"}]
+    if voice:
+        breakdown.append({"do": "sound", "part": hook, "sound": voice, "say": "The hook alone, in another voice"})
+    peak = []
+    if pattern:
+        peak.append({"do": "pattern", "part": hook, "pattern": pattern, "say": "The hook returns, as it was"})
+    if voice and home:
+        peak.append({"do": "sound", "part": hook, "sound": home, "say": "The hook in its own voice again"})
+    peak += [{"do": "wrap", "part": hook, "wrap": "(|+ n 12)", "say": "The hook an octave up"},
+             {"do": "knob", "part": hook, "knob": "lpf", "to": 6000, "say": f"Brighter: open the {hook} filter"}]
     return {
-        "groove": [{"say": f"Change the {hook} pattern"}, {"do": "knob", "part": "chords", "knob": "lpf",
-                                                          "to": [1200, 4500, 16], "say": "Open the chord filter slowly"}],
-        "breakdown": [{"do": "stop", "part": "beat", "say": "Drop the kick"},
-                      {"do": "stop", "part": "bass", "say": "Drop the bass"}],
+        "groove": [{"say": f"Let the {hook} hook repeat; vary only its last bar, the answer"},
+                   {"do": "knob", "part": "chords", "knob": "lpf", "to": [1200, 4500, 16],
+                    "say": "Open the chord filter slowly"}],
+        "breakdown": breakdown,
         "rebuild": [{"do": "bring back", "part": "bass", "say": "Bring the bass back"},
                     {"do": "bring back", "part": "beat", "say": "Bring the kick back"}],
-        "groove2": [{"say": f"Change the {hook} melody"},
-                    {"do": "knob", "part": hook, "knob": "lpf", "to": 6000, "say": f"Brighter: open the {hook} filter"}],
+        "groove2": peak,
         "outro": [{"do": "stop", "part": hook, "say": f"Take out the {hook}"},
                   {"do": "stop", "part": "bass", "say": "Drop the bass"}],
     }
@@ -190,15 +216,32 @@ class Performer:
 
     # ------------------------------------------------------------- tracks
 
+    def count_hook(self, program: Program) -> None:
+        """Bars the hook has played as written (its answer may vary): the
+        measure of whether a track's tune got the time to be remembered."""
+        from .livecode import hook_kept_problem
+
+        now = self.bar()
+        line = next((l for l in program.lines.values() if l.hook), None)
+        intact = (line is not None and not line.muted
+                  and hook_kept_problem(line.hook, line.patterns.get(line.hook_slot, "")) is None)
+        if getattr(self, "_hook_last", None) is not None and self._hook_intact and now > self._hook_last:
+            self.stats["hook_bars"] += now - self._hook_last
+        self._hook_last, self._hook_intact = now, intact
+
     def report_stats(self) -> None:
+        if self.stats.get("hook_bars") and not self.model_id:
+            self.log(f"[Performer] the hook played {self.stats['hook_bars']:.0f} bars as written")
+            self.stats.clear()
         if not self.model_id or not self.stats:
             return
         total = sum(self.stats.values())
         fallbacks = ", ".join(f"{n} {why}" for why, n in self.stats.most_common() if why != "llm")
-        counted = lambda why: why not in ("llm", "judge_llm", "judge_builtin") and not why.startswith("pick_")
+        counted = lambda why: (why not in ("llm", "judge_llm", "judge_builtin")
+                               and not why.startswith(("pick_", "hook_")))
         fallbacks = ", ".join(f"{n} {why}" for why, n in self.stats.most_common() if counted(why))
         total = sum(n for why, n in self.stats.items()
-                    if why not in ("judge_llm", "judge_builtin") and not why.startswith("pick_"))
+                    if why not in ("judge_llm", "judge_builtin") and not why.startswith(("pick_", "hook_")))
         self.log(f"[Performer] last track: {self.stats['llm']}/{total} edits by the LLM"
                  + (f" (built-in: {fallbacks})" if fallbacks else ""))
         judged = self.stats["judge_llm"] + self.stats["judge_builtin"]
@@ -207,6 +250,8 @@ class Performer:
                     "its probability" if self.judge_mass else "")
             self.log(f"[Performer] the judge preferred the LLM's idea {self.stats['judge_llm']}/{judged} times "
                      f"({100 * self.stats['judge_llm'] / judged:.0f}%) over the built-in candidates{mass}")
+        if self.stats.get("hook_bars"):
+            self.log(f"[Performer] the hook played {self.stats['hook_bars']:.0f} bars as written")
         picks = {k[5:]: n for k, n in self.stats.items() if k.startswith("pick_")}
         if picks:
             self.log("[Performer] the judge's picks: " + ", ".join(f"{n} {k}" for k, n in sorted(picks.items())))
@@ -268,7 +313,19 @@ class Performer:
         # The harmony moves with the arc: the main progression, its own for
         # the breakdown, another for the peak (from the Director's plan).
         progressions = {"main": {"name": main.name, "degrees": degrees}}
-        for part, section in (("breakdown", "breakdown"), ("peak", "chorus")):
+        key_hook = (piece.hook or {}).get("relative") == "key"
+        if key_hook:
+            from .hooks import key_harmony_problem, write_hook
+
+            # (The mode may have moved, e.g. for an acapella: the hook fits the chords that play.)
+            if key_harmony_problem(piece.hook["pattern"], degrees, piece.cycles_per_chord):
+                piece.hook = {**piece.hook, "pattern": write_hook(self.rng, degrees, piece.cycles_per_chord)}
+        # A hook written against the key across the main progression: the
+        # breakdown may take its own chords (the engine re-fits the hook to
+        # them, hooks.refit); the peak is the main progression, so the hook
+        # returns there exactly as written.
+        for part, section in ((("breakdown", "breakdown"),) if key_hook
+                              else (("breakdown", "breakdown"), ("peak", "chorus"))):
             name = piece.section_progressions.get(section)
             other = progression_named(name, mode) if name and name != main.name else None
             if other is not None:
@@ -301,7 +358,12 @@ class Performer:
         if piece.sounds:
             self.log("🎹 Sounds: " + sounds_summary(piece.sounds))
         if piece.hook:
-            self.log(f"🎣 Hook ({piece.hook['role']}): {piece.hook['pattern']}")
+            from .hooks import summary as _melody
+
+            rel = piece.hook.get("relative") == "key"
+            self.log(f"🎣 Hook ({piece.hook['role']}{', against the key' if rel else ''}): {piece.hook['pattern']}"
+                     + (f" · {m}" if (m := _melody(piece.hook["pattern"], degrees if rel else None,
+                                                    piece.cycles_per_chord)) else ""))
         if piece.cues:
             self.log("🎬 Cues: " + " | ".join(f"{PHASE_LABELS.get(p, p)}: " + "; ".join(
                 c.get("say", "") if isinstance(c, dict) else str(c) for c in cues) for p, cues in piece.cues.items()))
@@ -321,12 +383,14 @@ class Performer:
             voicing = TRANCE_VOICINGS[name]
             self.log(f"🎹 Voicing: {name} ({voicing})")
         self._track_surprise = piece.surprise
-        return Track(title=piece.title, style=self.style, key=piece.key, bpm=piece.bpm, voicing=voicing,
-                     degrees=degrees, bars_per_chord=piece.cycles_per_chord, progressions=progressions,
-                     sounds=dict(piece.sounds), hook=dict(piece.hook), idea=piece.idea,
-                     parts=dict(piece.parts), motion=dict(piece.motion), subgenre=piece.subgenre,
-                     kit=dict(subgenre(self.style, piece.subgenre).get("kit", {})), surprise=piece.surprise,
-                     vocal=vocal or {})
+        self._track_now = Track(title=piece.title, style=self.style, key=piece.key, bpm=piece.bpm, voicing=voicing,
+                                degrees=degrees, bars_per_chord=piece.cycles_per_chord, progressions=progressions,
+                                sounds=dict(piece.sounds), hook=dict(piece.hook), idea=piece.idea,
+                                parts=dict(piece.parts), motion=dict(piece.motion), subgenre=piece.subgenre,
+                                kit=dict(subgenre(self.style, piece.subgenre).get("kit", {})),
+                                surprise=piece.surprise, vocal=vocal or {})
+        self._hook_last = None
+        return self._track_now
 
     def _choose_acapella(self, piece) -> dict | None:
         """Now and then a licensed acapella (music/vocals.py) for the track:
@@ -387,7 +451,9 @@ class Performer:
         """(part, {"name", "degrees"}) for the current phase, or None when the
         track has no separate progression for it."""
         part = self.HARMONY_PARTS.get(self.state.phase, "main")
-        chosen = track.progressions.get(part) or track.progressions.get("main")
+        if part not in track.progressions:
+            part = "main"                    # (no progression of its own: the main one)
+        chosen = track.progressions.get(part)
         return (part, chosen) if chosen else None
 
     # -------------------------------------------------------------- phases
@@ -476,6 +542,7 @@ class Performer:
 
     def next_edit(self, program: Program) -> Edit:
         """Choose the next edit (LLM if available, built-in otherwise)."""
+        self.count_hook(program)
         self._advance_phase(program)
         self._bar_seconds = 1 / program.track.cps
         self._complexity_now = complexity(program)
@@ -518,6 +585,11 @@ class Performer:
         from what wasn't. A 👎 line is the built-in performer's next one to
         change; a 👍 line is left alone while others need work."""
         thumb = "👍 liked" if rating > 0 else "👎 disliked"
+        track = getattr(self, "_track_now", None)
+        if track is not None and track.hook and (not role or role == track.hook.get("role")):
+            from .hooks import record_rating
+
+            record_rating(track.hook, rating, track.title, track.degrees, track.bars_per_chord)
         if role:
             self.line_ratings[role] = rating
             code = line if len(line) <= 160 else line[:157] + "..."
@@ -616,6 +688,8 @@ class Performer:
         elif do == "sound" and line is not None:
             edit = Edit("set_sound", role=role, value=cue["sound"])
         elif do == "wrap" and line is not None:
+            if cue["wrap"] in line.wrappers:
+                return None                  # (already so: a second peak)
             edit = Edit("wrap", role=role, name=cue["wrap"])
         elif do == "tempo":
             edit = Edit("tempo", value=f"{cue['to']:g}")
@@ -1243,6 +1317,12 @@ class Performer:
     @staticmethod
     def _explain(edit: Edit) -> str:
         text = f"{edit.describe()}: {edit.reason}"
+        if edit.op == "set_pattern" and edit.role in ("lead", "keys", "arp") and re.search(r"\d", edit.value):
+            from .hooks import summary
+
+            melody = summary(edit.value)
+            if melody:
+                text += f" [{melody}]"
         if edit.op in ("wrap", "unwrap") and edit.name in WRAPPER_NOTES:
             text += f" ({WRAPPER_NOTES[edit.name]})"
         elif edit.op in ("set_fx", "set_pf", "remove_fx") and edit.name in FX_NOTES:
@@ -1549,6 +1629,11 @@ class Performer:
             wraps_ok = [w for w in allowed_wrappers(line, self.style) if w not in line.wrappers]
             entry = {"line": f"d{line.channel}", "patterns": {k: v for k, v in line.patterns.items()
                                                                if k not in LOCKED_SLOTS}}
+            if line.hook:
+                entry["hook"] = ("this line carries the track's hook: keep its bars as they are, vary only "
+                                 "its last bar (the answer)"
+                                 + ("; written against the key across the progression (key degrees, the bar's "
+                                    "chord tones on the beats)" if line.key_tune else ""))
             if line.muted:
                 entry["muted"] = True
             if line.drums:

@@ -10,6 +10,7 @@ Listen to a sound before it goes on air: render short trance demos offline.
     python -m eval.sound_preview --choir         # the angel choir, the first one against the sung soprano (40_, 41_, 42_)
     python -m eval.sound_preview --balearic      # the 90s Balearic leads: the Cafe del Mar pluck, the nylon guitar (43_, 44_)
     python -m eval.sound_preview --instruments   # the real instruments (music/instruments.py): piano, sax, harp, kalimba (45_ ... 48_)
+    python -m eval.sound_preview --melodies      # four hooks from music/hooks.py over the same chords, scored (49_ ... 52_)
 
 Eight bars at 138 BPM in A minor (i-VI-III-VII, two bars a chord): the 909
 kick, the rolling offbeat bass, chords on Switch Angel's trance gate and,
@@ -267,6 +268,44 @@ INSTRUMENT_DEMOS = {
     "48_kalimba_arp": {**_BALEARIC, "arp": [e for e in arp8("ys_kalimba") if round(e[0] / (BAR / 8)) % 2 == 0]},
 }
 
+# --melodies: four hooks written by music/hooks.py for these chords (A minor,
+# i-VI-III-VII, two bars each), against the key, on the Cafe del Mar pluck
+# in its echo, over the kick, an offbeat bass and the soft pad; their scores
+# go to recordings/preview/melodies.txt.
+def key_tune_events(pattern: str, synth: str) -> list:
+    from music.hooks import parse
+
+    events = []
+    for b, bar in enumerate(parse(pattern) or []):
+        step = BAR / len(bar)
+        for i, t in enumerate(bar):
+            if t.lstrip("-").isdigit():
+                held = 1
+                while i + held < len(bar) and bar[i + held] == "_":
+                    held += 1
+                d = int(t)
+                events.append([b * BAR + i * step, synth, 69 + 12 * (d // 7) + _MINOR[d % 7], step * held * 0.9, {}])
+    return events
+
+
+def melody_demos() -> dict:
+    import random
+
+    from music.hooks import summary, write_hook
+
+    rng, out, notes = random.Random(int(os.getenv("YS_PREVIEW_SEED", "7"))), {}, []
+    for k in range(4):
+        hook = write_hook(rng, [0, 5, 2, 6], 2, recent=notes)
+        notes.append(hook)
+        out[f"{49 + k}_melody_{k + 1}"] = {"kick": kick(), "bass": offbeat_bass(), "pad": pad("ys_softpad"),
+                                           "echolead": key_tune_events(hook, "ys_cafepluck")}
+    os.makedirs(OUT_DIR, exist_ok=True)
+    with open(os.path.join(OUT_DIR, "melodies.txt"), "w", encoding="utf-8") as f:
+        for k, hook in enumerate(notes):
+            f.write(f"{49 + k}_melody_{k + 1}: {hook}\n    {summary(hook, [0, 5, 2, 6], 2)}\n")
+    return out
+
+
 # --saws: the saw voices done properly, against today's sounds and the old saws.
 SAW_DEMOS = {
     "11_saw_lead": {"kick": kick(), "bass": bass(), "chords": gated_chords("ys_housepiano"), "lead": lead("ys_sawlead")},
@@ -356,7 +395,8 @@ def main() -> None:
                   else (LEAD_DEMOS, BAR) if "--leads" in sys.argv[1:]
                   else (CHOIR_DEMOS, BAR) if "--choir" in sys.argv[1:]
                   else (BALEARIC_DEMOS, BAR) if "--balearic" in sys.argv[1:]
-                  else (INSTRUMENT_DEMOS, BAR) if "--instruments" in sys.argv[1:] else (DEMOS, BAR))
+                  else (INSTRUMENT_DEMOS, BAR) if "--instruments" in sys.argv[1:]
+                  else (melody_demos(), BAR) if "--melodies" in sys.argv[1:] else (DEMOS, BAR))
     os.makedirs(OUT_DIR, exist_ok=True)
     tmp = tempfile.mkdtemp()
     defs = open(os.path.join(config.REPO_DIR, "tidal", "synthdefs.scd")).read()

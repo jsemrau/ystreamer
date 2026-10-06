@@ -435,6 +435,8 @@ def _add_variety(piece: Piece, rng: random.Random, avoid: set[str] | None = None
     piece.color = "ninths" if rng.random() < _NINTH_CHANCE.get(piece.style, 0.5) else "sevenths"
     choose_instruments(piece, rng, previous)
     choose_sounds(piece, rng, previous, theme=theme, recent=recent_sounds)
+    # A hook written for the progression (music/hooks.py), not one the last track had.
+    write_piece_hook(piece, rng, [previous.hook["pattern"]] if previous is not None and previous.hook else None)
     if piece.style in _LIFT_STYLES and rng.random() < 0.5:
         apply_key_lift(piece)
 
@@ -1005,7 +1007,8 @@ def validate_cues(raw, style: str = "trance") -> tuple[dict[str, list[dict]], li
     return out, notes
 
 
-def validate_hook(raw, style: str) -> tuple[dict[str, str], str]:
+def validate_hook(raw, style: str, degrees: list[int] | None = None,
+                  bars_per_chord: int = 1) -> tuple[dict[str, str], str]:
     """The Director's hook as {"role", "kind", "pattern"}, or ({}, why not).
     A "cycle" hook (acid, arps) is 3-16 chord-tone degrees or rests that
     cycle as 16ths; a "phrase" hook (a lead) is a melody over the bar with
@@ -1023,7 +1026,24 @@ def validate_hook(raw, style: str) -> tuple[dict[str, str], str]:
         pattern = check_pattern(raw.get("pattern", ""))
     except EditError as e:
         return {}, str(e)
-    problem = _part_problem(role, kinds[role], pattern)
+    # A phrase (a lead's tune) is written against the key across the
+    # progression (music/hooks.py), unless it says it follows each chord's
+    # root ("relative": "chord"); a cycle always follows the chord.
+    relative = "key" if kinds[role] == "phrase" and degrees and raw.get("relative", "key") == "key" else "chord"
+    fitted = ""
+    if relative == "key":
+        from .hooks import key_harmony_problem, refit
+
+        problem = key_harmony_problem(pattern, degrees, bars_per_chord)
+        if problem:
+            # A note or two off the chords: those moved to the nearest chord tone,
+            # if the tune stays itself (its rhythm and most of its notes).
+            candidate = refit(pattern, degrees, bars_per_chord)
+            if (candidate != pattern and key_harmony_problem(candidate, degrees, bars_per_chord) is None
+                    and hook_similarity(pattern, candidate) >= HOOK_SIMILAR):
+                pattern, problem, fitted = candidate, None, problem
+    else:
+        problem = _part_problem(role, kinds[role], pattern)
     if problem:
         return {}, problem
     # Less is more: a phrase within its part's note budget (livecode.NOTE_BUDGET),
@@ -1032,7 +1052,34 @@ def validate_hook(raw, style: str) -> tuple[dict[str, str], str]:
 
     if kinds[role] == "phrase" and NOTE_BUDGET.get(role):
         pattern = within_budget('"{hook}"', "hook", pattern, NOTE_BUDGET[role])
-    return {"role": role, "kind": kinds[role], "pattern": pattern}, ""
+    hook = {"role": role, "kind": kinds[role], "pattern": pattern}
+    if relative == "key":
+        hook["relative"] = "key"
+    if fitted:
+        hook["fitted"] = fitted[:160]              # (what was moved onto the chords)
+    return hook, ""
+
+
+def progression_degrees(piece) -> list[int]:
+    """The degrees of a piece's main progression in its key's mode."""
+    found = progression_named(piece.progression, Key.parse(piece.key).mode)
+    return list(found.degrees) if found else []
+
+
+def write_piece_hook(piece, rng: random.Random, recent: list[str] | None = None) -> bool:
+    """Give a piece a hook written for its progression (music/hooks.py) on its
+    lead (or keys), when the style has a part that sings one. False if none."""
+    from .blocks import hook_kinds
+    from .hooks import write_hook
+
+    kinds = hook_kinds(piece.style)
+    role = next((r for r in ("lead", "keys") if kinds.get(r) == "phrase"), None)
+    degrees = progression_degrees(piece)
+    if role is None or not degrees:
+        return False
+    piece.hook = {"role": role, "kind": "phrase", "relative": "key",
+                  "pattern": write_hook(rng, degrees, piece.cycles_per_chord, recent)}
+    return True
 
 
 # Tunes this alike (hook_similarity) are the same tune to a listener.
@@ -1328,9 +1375,18 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
                 notes.append(f"sound {role}={synth!r} rejected")
 
     if "hook" in data:
-        piece.hook, why = validate_hook(data.get("hook"), piece.style)
+        hook, why = validate_hook(data.get("hook"), piece.style, progression_degrees(piece), piece.cycles_per_chord)
         if why:
             notes.append(f"hook rejected ({why})")
+            if fallback.hook and fallback.progression == piece.progression:
+                piece.hook = dict(fallback.hook)          # (the hook written for these chords stays)
+            else:
+                piece.hook = {}
+                write_piece_hook(piece, random.Random(hash(piece.title) & 0xFFFF))
+        else:
+            if hook.get("fitted"):
+                notes.append(f"hook fitted to the chords ({hook.pop('fitted')})")
+            piece.hook = hook
     if "parts" in data:
         piece.parts, part_notes = validate_parts(data.get("parts"), piece.style)
         notes.extend(part_notes)

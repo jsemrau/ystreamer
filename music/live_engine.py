@@ -252,6 +252,16 @@ class LiveEngine:
         new = copy.deepcopy(program)
         new.track.degrees = list(prog["degrees"])
         new.track.start_cycle = math.floor(self.clock.cycle() + 0.25)
+        # A hook written against the key: re-fitted to these chords (the same
+        # rhythm and shape), or as written again on the main progression.
+        from .hooks import refit
+
+        for line in new.lines.values():
+            if line.key_tune and line.hook_slot and new.track.hook.get("pattern"):
+                fitted = refit(new.track.hook["pattern"], new.track.degrees, new.track.bars_per_chord)
+                if line.patterns.get(line.hook_slot) != fitted:
+                    self.log(f"🎣 The hook {'as written' if fitted == new.track.hook['pattern'] else 're-fitted to ' + prog['name']}: {fitted}")
+                line.patterns[line.hook_slot] = line.hook = fitted
         if not self._send([new.statement(r) for r in new.lines]):
             return program
         label = {"main": "back to the main progression", "breakdown": "the breakdown's own progression",

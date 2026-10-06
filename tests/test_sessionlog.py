@@ -122,10 +122,15 @@ def test_the_harmony_moves_with_the_arc(tmp_path):
     records = [json.loads(line) for line in open(log.path, encoding="utf-8")]
     changes = [r for r in records if r["type"] == "harmony"]
     parts = [c["part"] for c in changes]
-    assert "breakdown" in parts and "peak" in parts                 # its own chords for each
     start = next(r for r in records if r["type"] == "track_start")
-    names = {start["program"]["track"]["progressions"][p]["name"] for p in ("main", "breakdown", "peak")}
-    assert len(names) == 3                                          # three different progressions
+    track = start["program"]["track"]
+    # The breakdown has its own chords; the peak too, unless the hook is written
+    # against the key (it returns as written on the main progression there).
+    assert "breakdown" in parts
+    peaks = ("peak",) if track["hook"].get("relative") != "key" else ()
+    assert all(p in parts for p in peaks)
+    names = {track["progressions"][p]["name"] for p in ("main", "breakdown", *peaks)}
+    assert len(names) == 2 + len(peaks)                             # each different
     for c in changes:                                               # each begins on its first chord
         assert c["start_cycle"] == round(c["start_cycle"]) and c["start_cycle"] > 0
 

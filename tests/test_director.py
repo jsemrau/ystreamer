@@ -406,19 +406,30 @@ def _director_with_hooks(monkeypatch, reply):
 
 def test_a_hook_too_like_a_recent_one_is_written_again(monkeypatch):
     fresh = "<[7 _ _ ~ 9 7 ~ 4] [6 _ _ _ 4 ~ 2 ~]>"
-    director, piece, calls = _director_with_hooks(monkeypatch, {"hook": {"role": "lead", "pattern": fresh}})
+    # (A tune on each chord's root, as these session hooks are: "relative": "chord".)
+    director, piece, calls = _director_with_hooks(
+        monkeypatch, {"hook": {"role": "lead", "pattern": fresh, "relative": "chord"}})
     director._freshen_hook(piece, "PROMPT")
     assert [k for k, _ in calls] == ["hook"] and calls[0][1].startswith("PROMPT")
     assert piece.hook["pattern"] == fresh
 
 
 def test_the_old_hook_stays_when_the_new_one_is_no_fresher_or_breaks_the_rules(monkeypatch):
+    from music.hooks import key_harmony_problem, score
+    from music.plan import progression_degrees
+
     old = "<[0 ~ 2 ~ -1 ~ 0 ~] [4 _ 2 0 ~ -1 0 ~]>"
-    for reply in ({"hook": {"role": "lead", "pattern": "<[0 ~ 2 ~ -1 ~ 0 ~] [4 _ 2 0 ~ -1 ~ 0]>"}},
-                  {"hook": {"role": "lead", "pattern": "1 1 1 1"}}, None):
+    for reply in ({"hook": {"role": "lead", "pattern": "<[0 ~ 2 ~ -1 ~ 0 ~] [4 _ 2 0 ~ -1 ~ 0]>", "relative": "chord"}},
+                  {"hook": {"role": "lead", "pattern": "1 1 1 1", "relative": "chord"}}, None):
         director, piece, _ = _director_with_hooks(monkeypatch, reply)
         director._freshen_hook(piece, "PROMPT")
-        assert piece.hook["pattern"] == old
+        # The model's new hook isn't taken; the old one stays, or (it was weak) a written
+        # one that fits the progression and scores higher.
+        if piece.hook["pattern"] != old:
+            degrees = progression_degrees(piece)
+            assert piece.hook["relative"] == "key"
+            assert key_harmony_problem(piece.hook["pattern"], degrees, piece.cycles_per_chord) is None
+            assert score(piece.hook["pattern"], degrees, piece.cycles_per_chord) > score(old)
 
 
 def test_a_fresh_hook_is_left_alone(monkeypatch):

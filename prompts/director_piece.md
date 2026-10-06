@@ -44,31 +44,39 @@ story your cues tell.
 - `section_progressions`: four other chords for the `breakdown` and for the
   `chorus` (the peak), same rules, so the harmony moves with the track.
 - `hook`: the tune that makes this track recognisable, for one of the style's
-  `hook_parts`, as scale degrees relative to the chord's root (0 root, 2
-  third, 4 fifth, 6 seventh, 7 octave, 9, 11 above; -1, -3 below):
-  - a `cycle` part (acid, arp) plays 3-16 numbers in a loop as 16ths, so an
-    odd count (5, 7) rolls against the beat. Chord tones only: 0 2 4 6 7 9
-    11 -1 -3 -5, and `~` for a rest. E.g. "0 7 0 4 9 4 2".
-  - a `phrase` part (lead) is a melody, the line a singer would remember,
-    not an arpeggio (running up and down the chord is the arp's job).
-    Less is more: 3 to 5 new notes a bar (5 at most; a busier bar is
-    thinned), most of them held (`_`), with rests to breathe; a few notes
-    that sing beat many that run, and a tune that stays within an octave
-    is easier to remember than one that climbs the chord:
-    - 8 steps a bar (8ths), or 16 for a quick pickup; `~` a rest, `_` holds the note
-      before it. One bar, or better 2-4 bars as `<[bar 1] [bar 2] ...>`: a
-      call and its answer, the answer ending somewhere else than the call.
-    - Chord tones (0 2 4 6 7 9 ...) on the beats (steps 1, 3, 5, 7 of 8;
-      1, 5, 9, 13 of 16). Between the beats, any note of the scale that
-      steps from or to the note beside it: passing and neighbour notes
-      (1 3 5 8 10, e.g. "4 3 2", "0 1 0"), never held into the beat.
-    - Give it a shape: mostly steps, one leap to the high point, a long
-      held note to close the phrase, rests to breathe, a note or two off
-      the beat. The notation only (these are fragments, not tunes): "4 3 2"
-      steps down through a passing note, "0 _ _ ~" holds a note three steps
-      and rests. Write your own tune for this track, never one from these
-      instructions or from the melodies played recently (below).
-  The hook follows the chords, so it stays in harmony by itself.
+  `hook_parts`:
+  - a `cycle` part (acid, arp) plays 3-16 numbers in a loop as 16ths, as
+    scale degrees relative to each chord's root (0 root, 2 third, 4 fifth,
+    6 seventh, 7 octave; -1, -3 below), so an odd count (5, 7) rolls
+    against the beat. Chord tones only, and `~` for a rest. E.g. "0 7 0 4 9 4 2".
+  - a `phrase` part (lead, keys) is the melody people will hum, written
+    against the KEY across the whole progression: scale degrees of the key
+    (0 its tonic, 1 2 3 4 5 6 the scale above, 7 the tonic an octave up,
+    -1 -2 below), one `[bar]` per bar of the progression in
+    `<[bar 1] [bar 2] ...>`. {bars_per_chord_line} Write all those bars,
+    or half as many (then they repeat over the second half, so they must
+    fit those chords too), 8 steps a bar; `~` a rest, `_` holds the
+    note before it. On the beats (steps 1, 3, 5, 7) play a tone of THAT
+    bar's chord (chord on degree c: c, c+2, c+4 in the key); between them
+    a scale note that steps to or from its neighbour. A note may be held
+    across a chord change when it belongs to both chords: that is what
+    makes a hook feel inevitable. What makes it memorable, in order:
+    - one motif: a bar's rhythm and shape, stated, repeated (moved to fit
+      the next chord), varied, answered: AA'AB, or A A' A C over 8 bars;
+    - its own rhythm: a long held note (`_ _ _`), a rest, a note off the beat;
+    - one high point, reached once, about two thirds of the way through;
+    - mostly steps, one or two leaps, each turning back by a step;
+    - the call (first half) ends open, the answer ends home (the last
+      chord's root or third); within an octave and a third;
+    - less is more: 2 to 5 new notes a bar (5 at most; a busier bar is
+      thinned), most of them held.
+    The notation only (fragments, not tunes): "4 _ _ 2 _ 4 _ ~" a held note,
+    a step down, back up, a breath. Write your own tune for this track,
+    never one from these instructions or from the melodies played recently
+    (below). A hook that misses these is sent back once with what it
+    misses. It is the track's identity: it stays as written all track (the
+    performer may vary only its last bar, the answer); at the peak it comes
+    back, an octave up.
 - `parts`: the starting pattern of 3-5 OTHER parts from the style's
   `sketch_parts` (not the hook's part), written so they interlock with the
   hook rather than double it:
@@ -166,7 +174,7 @@ Reply with ONE JSON object and nothing else:
 - Previous track's shape (if you write `sections`, make it different): {previous_shape}
 - Keys played recently (don't reuse them): {recent_keys}
 - Hooks and lead melodies played recently (write something different): {recent_hooks}
-{melody_brief}- Progressions played recently (don't reuse them): {recent_progressions}
+{melody_brief}{liked_hooks}- Progressions played recently (don't reuse them): {recent_progressions}
 - Sounds played recently (choose a different set): {recent_sounds}
 - Listeners disliked: {avoid}
 
