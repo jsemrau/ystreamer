@@ -89,6 +89,7 @@ class Director:
         self.recent_sounds: deque[dict] = deque(maxlen=3)
         self.recent_titles: deque[str] = deque(maxlen=12)
         self._since_surprise = config.SURPRISE_EVERY      # the first track may have one
+        self._last_chromatic = False                       # (never two chromatic tracks running)
         self.consecutive_failures = 0
         # After this many failures in a row, stop asking the LLM for a while.
         self.failure_backoff = 3
@@ -239,6 +240,10 @@ class Director:
             avoid=", ".join(sorted(avoid["progressions"] | avoid["presets"])) or "nothing",
             suggested_key=self._suggest_key(style or fallback.style, previous).name,
             surprise_line=self._surprise_line(),
+            chromatic_line=("Not this track: the last one was chromatic. Leave `chromatic` out."
+                            if self._last_chromatic else
+                            "This track may be chromatic, if the theme and your plan want that colour (most "
+                            "tracks don't): write `chromatic`, or leave it out."),
             spark=self.rng.choice(SPARKS),
             # Above it the brief, the same for every track: Claude caches it.
             cache_break=CACHE_BREAK,
@@ -248,6 +253,10 @@ class Director:
         """The model's plan made playable: validated, with every correction
         noted (an empty list means it was right as it was)."""
         piece, notes = validate_piece(data, fallback, self.target_minutes)
+        if piece.chromatic and self._last_chromatic:
+            notes.append(f"chromatic {piece.chromatic} dropped: the last track was chromatic")
+            piece.chromatic = ""
+            write_piece_hook(piece, self.rng, [h.split(": ", 1)[-1] for h in self.recent_hooks])
         if self.style and piece.style != self.style:
             notes.append(f"style locked to {self.style}")
             piece.style = fallback.style
@@ -366,7 +375,8 @@ class Director:
         if not piece.hook or piece.hook.get("kind") != "phrase":
             return None
         key = piece.hook.get("relative") == "key"
-        a = analyze_hook(piece.hook["pattern"], progression_degrees(piece) if key else None, piece.cycles_per_chord)
+        a = analyze_hook(piece.hook["pattern"], progression_degrees(piece) if key else None, piece.cycles_per_chord,
+                         piece.melody)
         return (a["score"], a["problems"]) if a and a["score"] < HOOK_GOOD else None
 
     def _writer_instead(self, piece: Piece, weak: tuple[float, list[str]] | None) -> None:
@@ -414,10 +424,12 @@ class Director:
         else:
             self.log(f"[Director] the hook {old} isn't memorable enough (melody {weak[0]:.2f}: "
                      f"{'; '.join(p.split(':')[0] for p in weak[1])}); asking for another")
-            why_new = ("It misses what makes a hook memorable: " + "; ".join(weak[1])
+            what = "a hymn people sing along to" if piece.melody == "hymn" else "a hook memorable"
+            why_new = (f"It misses what makes {what}: " + "; ".join(weak[1])
                        + ". Write one that has these, by the same rules.")
         ask = (f"{prompt}\n\n## One change to your plan\n\nYou planned '{piece.title}' in {piece.key} on "
-               f"{piece.progression}, the hook on the {role}: {old}. {why_new} Keep the rest of the plan; write "
+               f"{piece.progression}, the hook on the {role}{' (a hymn)' if piece.melody == 'hymn' else ''}: {old}. "
+               f"{why_new} Keep the rest of the plan; write "
                f"only a new hook for the {role}. Reply with JSON "
                f'only: {{"hook": {{"role": "{role}", "pattern": "..."}}, "reason": "what is new about it"}}')
         data = self._ask("hook", self.PIECE_SYSTEM, ask, cache_ttl="1h") if self._llm_available() else None
@@ -426,7 +438,7 @@ class Director:
         hook.pop("fitted", None)
         if rejected and hook and hook["role"] == role:
             a = analyze_hook(hook["pattern"], progression_degrees(piece) if hook.get("relative") == "key" else None,
-                             piece.cycles_per_chord)
+                             piece.cycles_per_chord, piece.melody)
             if a and a["score"] >= weak[0] - 0.1:
                 self.log(f"🎣 Hook, fitted to the chords: {hook['pattern']}")
                 piece.hook = hook
@@ -475,7 +487,9 @@ class Director:
                 if notes:
                     self.log(f"[Director] corrected LLM piece plan: {'; '.join(notes)}")
                 self._think("Next piece", f"'{piece.title}', {piece.style}, {piece.key}, {piece.bpm:.0f} BPM, "
-                                          f"{piece.progression}, {piece.mood}", data)
+                                          f"{piece.progression}, {piece.mood}"
+                                          + (", a hymn" if piece.melody == "hymn" else "")
+                                          + (f", chromatic {piece.chromatic}" if piece.chromatic else ""), data)
         if not data:
             self.choose_surprise(piece, None, [])
             # The built-in titles come from a few words: not one of the last few.
@@ -487,6 +501,7 @@ class Director:
         self.recent_progressions.append(piece.progression)
         self.recent_keys.append(piece.key)
         self.recent_titles.append(piece.title)
+        self._last_chromatic = bool(piece.chromatic)
         if piece.sounds:
             self.recent_sounds.append(dict(piece.sounds))
         if piece.hook:

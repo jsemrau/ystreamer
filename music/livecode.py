@@ -430,6 +430,11 @@ class Track:
     subgenre: str = ""
     kit: dict = field(default_factory=dict)
     surprise: str = ""              # the art director's rule-break for this track (music/surprises.py)
+    melody: str = ""                # "hymn": the art director wants its tunes sung along to (music/hooks.py)
+    # Chords from outside the key (theory.parse_chromatic), per 4/4 bar:
+    # [[semitones above the tonic, the chord's own scale, beats], ...]. Every
+    # line then plays relative to the chord sounding: `degrees` are all 0.
+    chromatic: list = field(default_factory=list)
     # The acapella this track sings (music/vocals.fit: bank, n, cycles, ...);
     # it set the key and tempo, so the tempo stays.
     vocal: dict = field(default_factory=dict)
@@ -471,9 +476,25 @@ class Track:
             roots = " ".join(root_of(d) for d in order)
         root = key.root if key.root <= 5 else key.root - 12
         root_text = f" + {root}" if root > 0 else (f" - {-root}" if root < 0 else "")
+        mode = key.mode
+        if self.chromatic:
+            # Each chord in its own scale on its own root, bar by bar (a chord
+            # change inside a bar weighted by its beats), started on start_cycle.
+            turn = self.start_cycle % len(self.chromatic)
+            order = [self.chromatic[(j - turn) % len(self.chromatic)] for j in range(len(self.chromatic))]
+
+            def per_bar(value) -> str:
+                return " ".join(value(bar[0]) if len(bar) == 1 else
+                                "[" + " ".join(f"{value(c)}@{c[2]}" for c in bar) + "]" for bar in order)
+
+            # (The chords and roots change with the harmony too, so a line held
+            # over the bar strikes again when the chord changes inside it.)
+            mode = f"<{per_bar(lambda c: c[1])}>"
+            chords, roots = per_bar(lambda c: stack(0)), per_bar(lambda c: "0")
+            root_text = f' |+ "<{per_bar(lambda c: str(c[0]))}>"' + root_text
         bar = 1.0 / self.cps
         return {
-            "mode": key.mode,
+            "mode": mode,
             "root": root_text,          # e.g. " + 2", " - 3" or "" (C)
             "chords": chords,
             "roots": roots,

@@ -358,8 +358,21 @@ live trance demo, translated to Tidal:
   (`runtime/hook_ratings.jsonl`); the hooks liked most are shown to the
   Director as rules ("4 bars, its first bar's rhythm \"x _ _ x _ x _ ~\",
   the high point in bar 3, mostly steps ..."), not notes to copy.
-- Hear four written hooks over the same chords, scored:
-  `python -m eval.sound_preview --melodies` (49_ ... 52_, scores in
+- *A hymn, when the art director thinks it fits.* The Director may set
+  `"melody": "hymn"` for a track that wants a tune everyone could sing: a
+  sunrise, an anthem, a sacred or mystic theme, a peak like a crowd singing
+  (rarely: most tracks leave it out). A hymn is held to plainer, catchier
+  rules (`hooks.analyze(..., melody="hymn")`): about a note a beat on the
+  beats, within an octave, almost all steps, each two-bar line ending held,
+  and its first line coming back (AABA, or sung again a step higher). The
+  writer (`hooks._one_hymn`) writes it in that form; a weak one is sent
+  back with the hymn's rules; the Performer keeps its own lead lines plain
+  too. Without the LLM, the planner writes a hymn when the theme asks for
+  one ("choir", "anthem", "sacred" ...) and often when its moods suit one
+  (euphoric, bright, cinematic, mystic, unless also dark, eerie or hard;
+  `plan.choose_melody`).
+- Hear four written hooks and two hymns over the same chords, scored:
+  `python -m eval.sound_preview --melodies` (49_ ... 54_, scores in
   `recordings/preview/melodies.txt`).
 
 Trance comes in **subgenres** (`blocks.SUBGENRES`), each with its own tempo,
@@ -522,6 +535,32 @@ numerals into `music/data/nrg_progressions.json`; the library is the
 progressions found in at least 8 files, weighted by how often (minor:
 `i-VI-III-VII` 446 files, `i-VII-VI-VI` 247, `i-VII-v-VI` 211, ...). Only
 the progressions are used, not the dataset's rhythms or voicings.
+
+**Chromatic colour** (`theory.parse_chromatic`). Now and then a track leaves
+the key: chords from outside it sliding in parallel, the way "Everything In
+Its Right Place" does, at uneven lengths. The Director writes one in
+`chromatic` (rarely, never two tracks running), as numerals relative to the
+key's tonic with b or # and the beats each lasts: `I@4-bII@4-bIII@2-I@4-bII@4-iv@2`
+is C, Db, Eb major, then C, Db, F minor, 4 + 4 + 2 beats. The 4/4 drums keep
+going and the chords roll across them; the progression comes round on a
+barline after five bars:
+
+    bar 1: C   bar 2: Db   bar 3: Eb | C   bar 4: C | Db   bar 5: Db | Fm
+
+Each chord plays in its own scale on its root (the mode sharing most notes
+with the other chords: C mixolydian, Db lydian, Eb mixolydian, F minor), so
+`{mode}` becomes a pattern of scales and `{root}` gains a shift per chord:
+
+    n (scale "<mixolydian lydian [mixolydian@2 mixolydian@2] ...>" "<{chords}>" |+ "<0 1 [3@2 0@2] ...>" + 5)
+
+Every line, the hook too, then plays relative to the chord sounding (0 its
+root, 2 its third), so nothing can clash however far the chords go; chords
+held over a bar strike again where the chord changes inside it. A chromatic
+track keeps its colour all track (no separate breakdown or peak chords).
+Without the LLM, the planner plays one of `theory.CHROMATIC_COLOURS` when
+the theme asks ("radiohead", "drifting", "uncanny" ...) and now and then
+when its moods suit one (dreamy, melancholic, cold, cinematic;
+`plan.choose_chromatic`).
 
 With an LLM (`--llm local|claude|jevtypesafe`), the model sees the whole
 program and picks each edit itself (prompt: `prompts/performer.md`), with

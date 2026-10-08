@@ -10,6 +10,14 @@ A hook people remember has one idea, a rhythm of its own, and a shape:
 - the call ends open, the answer ends home (the root or the third)
 - within an octave and a third
 
+A hymn (the melody the Director chooses, "melody": "hymn", when the track
+wants people singing along) is catchier still, and plainer:
+
+- about one note a beat, on the beats (a dotted lilt now and then)
+- within an octave, almost all steps: a range anyone can sing
+- its lines (two bars) each come to rest on a held note
+- its first line comes back (AABA), or is sung again a step higher
+
 `analyze` checks a tune against these and says, in words, what it misses;
 `score` is the share it passes. `write_hook` writes one: a rhythmic motif
 from a few archetypes, developed over the progression (stated, varied,
@@ -37,6 +45,12 @@ _NOTE_RE = re.compile(r"^-?\d+$")
 RHYTHMS = ["x _ _ x _ x _ ~", "x _ x _ _ _ x ~", "~ x _ x _ _ x _", "x _ _ _ x x _ ~", "x x _ _ x _ _ ~",
            "~ ~ x _ x _ x _", "x _ x x _ _ _ ~", "x _ _ ~ x _ x _", "x _ x _ x _ _ ~", "~ x x _ _ _ x _"]
 CADENCES = ["x _ _ _ x _ _ ~", "x _ x _ _ _ ~ ~", "x _ _ _ _ _ ~ ~", "x _ _ x _ _ _ ~"]
+# A hymn's: a note a beat, a dotted lilt, a half note; its lines end held.
+HYMN = "hymn"
+HYMN_TRAITS = ("on the beat", "lines rest", "returns")       # what makes it a hymn at all
+HYMN_RHYTHMS = ["x _ x _ x _ x _", "x _ _ x x _ x _", "x _ x _ x _ _ _", "x _ _ _ x _ x _", "x _ x x x _ x _",
+                "x _ x _ x x x _"]
+HYMN_CADENCES = ["x _ _ _ _ _ ~ ~", "x _ x _ _ _ ~ ~", "x _ _ _ _ _ _ ~", "x _ _ _ x _ _ ~", "x _ x _ x _ _ ~"]
 
 
 # ------------------------------------------------------------- reading
@@ -77,13 +91,16 @@ def _onsets(bar: list[str]) -> frozenset:
 
 # ------------------------------------------------------------- judging
 
-def analyze(pattern: str, degrees: list[int] | None = None, bars_per_chord: int = 1) -> dict | None:
+def analyze(pattern: str, degrees: list[int] | None = None, bars_per_chord: int = 1,
+            melody: str = "") -> dict | None:
     """Which of the memorable-hook rules a tune passes: {"checks": {name:
     bool}, "problems": [what it misses, in words], "score": 0-1}; None if the
     tune can't be read. Given the progression (`degrees`, a tune written
     against the key), "home" is the root or third of the chord under the last
     note and "open" anything but the root of the chord under the call's end;
-    without it (a tune that follows each chord's root), 0 and 2."""
+    without it (a tune that follows each chord's root), 0 and 2. A hymn
+    (`melody` "hymn") is held to the hymn's rules instead where they differ."""
+    hymn = melody == HYMN
     progression = degrees
     bars = parse(pattern)
     if bars is None:
@@ -111,7 +128,10 @@ def analyze(pattern: str, degrees: list[int] | None = None, bars_per_chord: int 
           "no single high point: reach the top note once, about two thirds of the way through")
     moves = [b - a for a, b in zip(degrees, degrees[1:])]
     steps = sum(abs(m) <= 2 for m in moves) / max(1, len(moves))
-    check("steps", steps >= 0.6, "it leaps around: move mostly by step (a 2nd or a 3rd)")
+    if hymn:
+        check("steps", steps >= 0.75, "it leaps around for a hymn: move almost always by step (a 2nd or a 3rd)")
+    else:
+        check("steps", steps >= 0.6, "it leaps around: move mostly by step (a 2nd or a 3rd)")
     same = sum(m == 0 for m in moves) / max(1, len(moves))
     check("moves", same <= 0.25, "it sits on one note: let it move (a repeated note now and then, not most of the time)")
     leaps = [i for i, m in enumerate(moves) if abs(m) >= 3]
@@ -120,7 +140,19 @@ def analyze(pattern: str, degrees: list[int] | None = None, bars_per_chord: int 
           "a leap should turn back by a step (up a 5th, then down a step)")
     check("held note", any(n["length"] >= 3 for n in notes), "no long note: hold one (_ _ _) to sing out")
     check("rest", any("~" in bar for bar in bars), "no rest: leave a breath (~)")
-    check("off the beat", any(round(n["step"]) % 2 for n in notes), "no note off the beat: give it a lilt")
+    if hymn:
+        on = sum(round(n["step"]) % 2 == 0 for n in notes) / len(notes)
+        check("on the beat", on >= 0.75 and len(notes) / len(bars) <= 4.5,
+              "too busy or syncopated for a hymn: about one note a beat, on the beats (a dotted lilt now and then)")
+        line = 2 if len(bars) >= 4 and len(bars) % 2 == 0 else len(bars)
+        ends = [max((n for n in notes if n["bar"] < b + line), key=lambda n: n["time"], default=None)
+                for b in range(0, len(bars), line)]
+        check("lines rest", all(n is not None and n["length"] >= 3 for n in ends),
+              f"a line doesn't come to rest: end each {line}-bar line on a held note (_ _ _)")
+        check("returns", _returns(bars, notes),
+              "its first line doesn't come back: sing it again (AABA), or again a step higher, so it's sung along")
+    else:
+        check("off the beat", any(round(n["step"]) % 2 for n in notes), "no note off the beat: give it a lilt")
     def chord_root(bar: int) -> int:
         return chord_at(bar, progression, bars_per_chord) % 7 if progression else 0
 
@@ -132,18 +164,51 @@ def analyze(pattern: str, degrees: list[int] | None = None, bars_per_chord: int 
         half = [n for n in notes if n["time"] < total / 2]
         check("call ends open", bool(half) and half[-1]["degree"] % 7 != chord_root(half[-1]["bar"]),
               "the call (first half) ends on the chord's root: end it open (the 3rd or 5th) so the answer resolves it")
-    check("range", top - min(degrees) <= 9, "too wide: keep it within an octave and a third")
-    return {"checks": checks, "problems": problems, "score": sum(checks.values()) / len(checks)}
+    if hymn:
+        check("range", top - min(degrees) <= 7, "too wide for a hymn: keep it within an octave, anyone can sing it")
+    else:
+        check("range", top - min(degrees) <= 9, "too wide: keep it within an octave and a third")
+    share = sum(checks.values()) / len(checks)
+    if hymn and not all(checks.get(k, True) for k in HYMN_TRAITS):
+        share = min(share, GOOD - 0.05)          # (a hymn that isn't one is weak, however good a hook)
+    return {"checks": checks, "problems": problems, "score": share}
 
 
-def score(pattern: str, degrees: list[int] | None = None, bars_per_chord: int = 1) -> float | None:
-    a = analyze(pattern, degrees, bars_per_chord)
+def _returns(bars: list[list[str]], notes: list[dict]) -> bool:
+    """The first line (two bars in eight, else one) comes back later: its
+    opening rhythm, and mostly the same notes, or the same shape moved (a
+    sequence)."""
+    import difflib
+
+    span = 2 if len(bars) >= 8 else 1
+    if len(bars) < 2 * span:
+        return False
+
+    def window(b: int) -> list[int]:
+        return [n["degree"] for n in notes if b <= n["bar"] < b + span]
+
+    def alike(x: list[int], y: list[int]) -> float:
+        return difflib.SequenceMatcher(None, x, y, autojunk=False).ratio() if x and y else 0.0
+
+    first = window(0)
+    moves = [b - a for a, b in zip(first, first[1:])]
+    for b in range(span, len(bars) - span + 1, span):
+        if _onsets(bars[0]) != _onsets(bars[b]):     # (its line may end another way)
+            continue
+        other = window(b)
+        if alike(first, other) >= 0.7 or alike(moves, [y - x for x, y in zip(other, other[1:])]) >= 0.7:
+            return True
+    return False
+
+
+def score(pattern: str, degrees: list[int] | None = None, bars_per_chord: int = 1, melody: str = "") -> float | None:
+    a = analyze(pattern, degrees, bars_per_chord, melody)
     return a["score"] if a else None
 
 
-def summary(pattern: str, degrees: list[int] | None = None, bars_per_chord: int = 1) -> str:
+def summary(pattern: str, degrees: list[int] | None = None, bars_per_chord: int = 1, melody: str = "") -> str:
     """"melody 0.82 (no rest; ...)" for a judge or a log."""
-    a = analyze(pattern, degrees, bars_per_chord)
+    a = analyze(pattern, degrees, bars_per_chord, melody)
     if not a:
         return ""
     return f"melody {a['score']:.2f}" + (f" ({'; '.join(p.split(':')[0] for p in a['problems'])})"
@@ -365,9 +430,11 @@ def _one(rng: random.Random, degrees: list[int], bars_per_chord: int) -> str:
     return "<" + " ".join("[" + " ".join(t) + "]" for t in out) + ">"
 
 
-def _one_peak(bars: list[list[str]], degrees: list[int], bars_per_chord: int, total: int) -> None:
+def _one_peak(bars: list[list[str]], degrees: list[int], bars_per_chord: int, total: int,
+              moving: bool = False) -> None:
     """The highest note once: keep the one nearest two thirds of the way, the
-    others step down to their chord's next lower tone."""
+    others step down to their chord's next lower tone (`moving`: one that
+    isn't the note before or after it, if there is one)."""
     places = [(b, i) for b, bar in enumerate(bars) for i, t in enumerate(bar) if _NOTE_RE.match(t)]
     if not places:
         return
@@ -378,23 +445,27 @@ def _one_peak(bars: list[list[str]], degrees: list[int], bars_per_chord: int, to
         if (b, i) == keep:
             continue
         chord = tones(chord_at(b, degrees, bars_per_chord))
-        lower = next((d for d in range(top - 1, top - 6, -1) if d % 7 in chord), top - 1)
-        bars[b][i] = str(lower)
+        lower = [d for d in range(top - 1, top - 6, -1) if d % 7 in chord] or [top - 1]
+        if moving:
+            near = {int(t) for t in bars[b][max(0, i - 2):i + 3] if _NOTE_RE.match(t) and int(t) != top}
+            lower = [d for d in lower if d not in near] or lower
+        bars[b][i] = str(lower[0])
 
 
 def write_hook(rng: random.Random, degrees: list[int], bars_per_chord: int = 1, recent: list[str] | None = None,
-               tries: int = 48) -> str:
+               tries: int = 48, melody: str = "") -> str:
     """A memorable hook for this progression, written against the key: the
     best-scoring of `tries` that fit the chords and aren't close to a recent
-    tune (plan.hook_similarity)."""
+    tune (plan.hook_similarity). A hymn (`melody` "hymn") by the hymn's rules."""
     from .plan import HOOK_SIMILAR, hook_similarity
 
+    one = _one_hymn if melody == HYMN else _one
     fresh, stale = [], []          # (score, tune) / (closeness to a recent tune, -score, tune)
     for _ in range(tries):
-        tune = _one(rng, degrees, bars_per_chord)
+        tune = one(rng, degrees, bars_per_chord)
         if key_harmony_problem(tune, degrees, bars_per_chord):
             continue
-        s = score(tune, degrees, bars_per_chord) or 0.0
+        s = score(tune, degrees, bars_per_chord, melody) or 0.0
         close = max((hook_similarity(tune, r) for r in recent or []), default=0.0)
         if close < HOOK_SIMILAR:
             fresh.append((s, tune))
@@ -405,6 +476,73 @@ def write_hook(rng: random.Random, degrees: list[int], bars_per_chord: int = 1, 
     if stale:
         return min(stale)[2]           # (none fresh enough: the least like a recent one)
     return _one(rng, degrees, bars_per_chord)
+
+
+def _hymn_form(bars: int, rng: random.Random) -> list[tuple[list[str], str]]:
+    """A hymn's bars as (rhythm, what its notes do): "A" the first line's
+    opening on the arch, "copy:k" bar k sung again, "seq" bar 0 a step or
+    two higher, "B" the line that climbs to the high point, "rest" a line
+    ending on the arch, "end" the answer, home. Eight bars are AABA."""
+    a, b = _rhythm(rng.choice(HYMN_RHYTHMS)), _rhythm(rng.choice(HYMN_RHYTHMS))
+    rest, end = _rhythm(rng.choice(HYMN_CADENCES)), _rhythm(rng.choice(HYMN_CADENCES))
+    if bars <= 2:
+        return [(a, "A"), (end, "end")][-bars:]
+    if bars == 3:
+        return [(a, "A"), (a, "seq"), (end, "end")]
+    if bars == 4:
+        return [(a, "A"), (rest, "rest"), (a, "seq"), (end, "end")]
+    form = [(a, "A"), (rest, "rest"), (a, "copy:0"), (rest, "copy:1"), (b, "B"), (rest, "rest"), (a, "copy:0")]
+    return form[:bars - 1] + [(end, "end")]
+
+
+def _one_hymn(rng: random.Random, degrees: list[int], bars_per_chord: int) -> str:
+    """One hymn tune: a note a beat on the chord's tones, its first line sung
+    again (or a step higher), the high point in the line that follows, every
+    line ending held, a passing note between two a third apart."""
+    length = len(degrees) * max(1, bars_per_chord)
+    bars = length if length <= 8 else 8
+    while length % bars:
+        bars -= 1
+    form = _hymn_form(bars, rng)
+    low, high = rng.choice([(0, 5), (0, 7), (-1, 4), (2, 7), (-3, 4), (0, 6), (-2, 5)])
+    peak = rng.choice([0.55, 0.6, 0.65]) if bars >= 5 else rng.choice([0.55, 0.65])
+    start = rng.choice([low, low + 1, low + 2])
+    ending = rng.choice([0, 2, low])
+    shift = rng.choice([1, 2, 2, 3])
+    total = bars * 8
+    out, sung, prev = [], [], None             # sung: each bar's notes
+    for b, (rhythm, role) in enumerate(form):
+        chord = tones(chord_at(b, degrees, bars_per_chord))
+        root = chord_at(b, degrees, bars_per_chord) % 7
+        onsets = [i for i, t in enumerate(rhythm) if t == "x"]
+        model = (sung[int(role[5:])] if role.startswith("copy:") else [d + shift for d in sung[0]]
+                 if role == "seq" else None)
+        if model is not None and len(model) != len(onsets):
+            model = None
+        notes = []
+        for k, i in enumerate(onsets):
+            allowed = chord
+            if k == len(onsets) - 1:
+                if b == bars - 1:
+                    allowed = {root, (root + 2) % 7}             # home
+                elif role != "A" and role != "B":
+                    allowed = chord - {root}                     # a line's end: open
+            if model is not None:
+                prev = _nearest(model[k], allowed, None, lo=-4, hi=9)
+            else:
+                prev = _nearest(_contour((b * 8 + i) / total, low, high, ending, peak, start), allowed, prev,
+                                lo=-4, hi=9)
+            notes.append(prev)
+        # A passing note between two a third apart (an eighth off the beat).
+        for k, i in enumerate(onsets[1:-1], 1):
+            if i % 2 and rhythm[i + 1] == "x" and abs(notes[k + 1] - notes[k - 1]) == 2:
+                notes[k] = (notes[k - 1] + notes[k + 1]) // 2
+        sung.append(notes)
+        it = iter(notes)
+        tokens = [str(next(it)) if t == "x" else t for t in rhythm]
+        out.append(tokens)
+    _one_peak(out, degrees, bars_per_chord, total, moving=True)
+    return "<" + " ".join("[" + " ".join(t) + "]" for t in out) + ">"
 
 
 def describe(pattern: str) -> str:

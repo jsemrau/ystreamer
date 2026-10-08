@@ -10,7 +10,7 @@ Listen to a sound before it goes on air: render short trance demos offline.
     python -m eval.sound_preview --choir         # the angel choir, the first one against the sung soprano (40_, 41_, 42_)
     python -m eval.sound_preview --balearic      # the 90s Balearic leads: the Cafe del Mar pluck, the nylon guitar (43_, 44_)
     python -m eval.sound_preview --instruments   # the real instruments (music/instruments.py): piano, sax, harp, kalimba (45_ ... 48_)
-    python -m eval.sound_preview --melodies      # four hooks from music/hooks.py over the same chords, scored (49_ ... 52_)
+    python -m eval.sound_preview --melodies      # four hooks and two hymns from music/hooks.py over the same chords, scored (49_ ... 54_)
 
 Eight bars at 138 BPM in A minor (i-VI-III-VII, two bars a chord): the 909
 kick, the rolling offbeat bass, chords on Switch Angel's trance gate and,
@@ -268,7 +268,7 @@ INSTRUMENT_DEMOS = {
     "48_kalimba_arp": {**_BALEARIC, "arp": [e for e in arp8("ys_kalimba") if round(e[0] / (BAR / 8)) % 2 == 0]},
 }
 
-# --melodies: four hooks written by music/hooks.py for these chords (A minor,
+# --melodies: four hooks and two hymns written by music/hooks.py for these chords (A minor,
 # i-VI-III-VII, two bars each), against the key, on the Cafe del Mar pluck
 # in its echo, over the kick, an offbeat bass and the soft pad; their scores
 # go to recordings/preview/melodies.txt.
@@ -294,15 +294,16 @@ def melody_demos() -> dict:
     from music.hooks import summary, write_hook
 
     rng, out, notes = random.Random(int(os.getenv("YS_PREVIEW_SEED", "7"))), {}, []
-    for k in range(4):
-        hook = write_hook(rng, [0, 5, 2, 6], 2, recent=notes)
+    kinds = ["", "", "", "", "hymn", "hymn"]          # (the last two hymns)
+    for k, kind in enumerate(kinds):
+        hook = write_hook(rng, [0, 5, 2, 6], 2, recent=notes, melody=kind)
         notes.append(hook)
-        out[f"{49 + k}_melody_{k + 1}"] = {"kick": kick(), "bass": offbeat_bass(), "pad": pad("ys_softpad"),
+        out[f"{49 + k}_{kind or 'melody'}_{k + 1}"] = {"kick": kick(), "bass": offbeat_bass(), "pad": pad("ys_softpad"),
                                            "echolead": key_tune_events(hook, "ys_cafepluck")}
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(os.path.join(OUT_DIR, "melodies.txt"), "w", encoding="utf-8") as f:
-        for k, hook in enumerate(notes):
-            f.write(f"{49 + k}_melody_{k + 1}: {hook}\n    {summary(hook, [0, 5, 2, 6], 2)}\n")
+        for k, (hook, kind) in enumerate(zip(notes, kinds)):
+            f.write(f"{49 + k}_{kind or 'melody'}_{k + 1}: {hook}\n    {summary(hook, [0, 5, 2, 6], 2, kind)}\n")
     return out
 
 

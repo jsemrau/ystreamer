@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import itertools
 import json
+import math
 import os
+import re
 from dataclasses import dataclass
 
 NOTE_NAMES = ["c", "cs", "d", "ef", "e", "f", "fs", "g", "af", "a", "bf", "b"]
@@ -334,6 +336,107 @@ def progressions_for(mode: str, energy: float | None = None) -> list[Progression
         fitting = [p for p in out if p.energy[0] <= energy <= p.energy[1]]
         return fitting or out
     return out
+
+
+# ------------------------------------------------------------- chromatic colour
+#
+# Chords from outside the key, sliding in parallel ("Everything In Its Right
+# Place": C, Db, Eb as major triads, 4 + 4 + 2 beats): written as numerals
+# relative to the key's tonic, a flat or sharp before them, the beats each
+# lasts after @, "I@4-bII@4-bIII@2". Each chord plays in its own scale (a
+# mode on its root, the one sharing most notes with the rest of the
+# progression), so every line's degrees are relative to the chord sounding
+# and nothing clashes, however far the chords are from the key.
+
+_MAJOR_STEPS = [0, 2, 4, 5, 7, 9, 11]
+_CHORD_SCALES = {"maj": ("major", "mixolydian", "lydian"), "min": ("minor", "dorian", "phrygian")}
+_CHROMATIC_RE = re.compile(r"^(b|#)?([ivIV]+)(?:@(\d+))?$")
+CHROMATIC_MAX_BARS = 16         # a cycle the ear can follow (and an edit can name)
+
+
+@dataclass(frozen=True)
+class ChromaticChord:
+    numeral: str        # as written, e.g. "bII"
+    shift: int          # semitones above the key's tonic, -6..6 (chords kept near it)
+    quality: str        # maj | min
+    scale: str          # the chord's own scale on its root (a name in MODES, as Tidal knows it)
+    beats: int
+
+
+@dataclass(frozen=True)
+class ChromaticProgression:
+    name: str
+    chords: tuple[ChromaticChord, ...]
+
+    @property
+    def beats(self) -> int:
+        return sum(c.beats for c in self.chords)
+
+    def bars(self) -> list[list[tuple[ChromaticChord, int]]]:
+        """The 4/4 bars it fills, each [(chord, beats in this bar)]: the
+        progression repeats until it ends on a barline (4 + 4 + 2 beats: five
+        bars, the chords rolling across them)."""
+        total = self.beats
+        passes = 4 // math.gcd(total, 4)
+        beats = [c for _ in range(passes) for c in self.chords for _ in range(c.beats)]
+        out = []
+        for b in range(0, len(beats), 4):
+            bar: list[tuple[ChromaticChord, int]] = []
+            for c in beats[b:b + 4]:
+                if bar and bar[-1][0] is c:
+                    bar[-1] = (c, bar[-1][1] + 1)
+                else:
+                    bar.append((c, 1))
+            out.append(bar)
+        return out
+
+
+def parse_chromatic(text: str, mode: str) -> ChromaticProgression:
+    """A chromatic progression ("I@4-bII@4-bIII@2-iv@2") in a key of this
+    mode; raises ValueError saying what is wrong. Upper case is a major
+    chord, lower case minor; a chord without @ lasts a bar (4 beats)."""
+    tokens = [t.strip() for t in str(text).strip().split("-") if t.strip()]
+    if not 2 <= len(tokens) <= 8:
+        raise ValueError(f"{text!r}: write 2 to 8 chords joined by '-', e.g. I@4-bVI@2-bVII@2")
+    key_pcs = {i for i in MODES[parse_mode(mode)]}
+    parsed = []
+    for token in tokens:
+        m = _CHROMATIC_RE.match(token)
+        if not m or m.group(2).lower() not in ROMAN or not (m.group(2).isupper() or m.group(2).islower()):
+            raise ValueError(f"{token!r}: a numeral I-VII (upper case major, lower minor), a b or # before "
+                             "it if it's off the key, @beats after it")
+        accidental, numeral, beats = m.group(1) or "", m.group(2), int(m.group(3) or 4)
+        if not 1 <= beats <= 8:
+            raise ValueError(f"{token!r}: a chord lasts 1 to 8 beats")
+        pc = (_MAJOR_STEPS[ROMAN.index(numeral.lower())] + {"b": -1, "#": 1}.get(accidental, 0)) % 12
+        parsed.append((accidental + numeral, pc, "maj" if numeral.isupper() else "min", beats))
+    if len({(pc, q) for _, pc, q, _ in parsed}) < 2:
+        raise ValueError(f"{text!r} is one chord the whole time: use at least two different chords")
+    # The tones the progression sounds: each chord's scale is the mode on its
+    # root that shares most of them (then most of the key's).
+    sounding = {(pc + i) % 12 for _, pc, q, _ in parsed for i in ((0, 4, 7) if q == "maj" else (0, 3, 7))}
+
+    def fit(pc: int, quality: str) -> str:
+        return max(_CHORD_SCALES[quality], key=lambda s: (len({(pc + i) % 12 for i in MODES[s]} & sounding),
+                                                          len({(pc + i) % 12 for i in MODES[s]} & key_pcs)))
+
+    chords = tuple(ChromaticChord(numeral, pc if pc <= 6 else pc - 12, q, fit(pc, q), beats)
+                   for numeral, pc, q, beats in parsed)
+    name = "-".join(f"{c.numeral}@{c.beats}" for c in chords)
+    progression = ChromaticProgression(name, chords)
+    if len(progression.bars()) > CHROMATIC_MAX_BARS:
+        raise ValueError(f"{name}: its {progression.beats} beats take {len(progression.bars())} bars to come round "
+                         f"on a barline; make them add up to an even number (at most {CHROMATIC_MAX_BARS} bars)")
+    return progression
+
+
+# The built-in planner's chromatic colours (the Director writes its own).
+CHROMATIC_COLOURS = {
+    "I@4-bII@4-bIII@2-I@4-bII@4-iv@2": "parallel major triads sliding up, never quite home (the right place)",
+    "I@4-bVI@4-I@4-III@4": "chromatic mediants: a film score's sudden light",
+    "i@4-bII@2-bIII@2-bII@4-i@4": "a dark lean: the minor home, major chords a half step and a third above",
+    "I@4-bVII@2-IV@2-bVI@4-bVII@4": "borrowed chords, the major key's shadow side",
+}
 
 
 CHORD_COLORS = ("sevenths", "ninths")

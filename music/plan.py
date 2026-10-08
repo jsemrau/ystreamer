@@ -252,6 +252,14 @@ class Piece:
     voicing: str = ""   # a name in livecode.TRANCE_VOICINGS (club styles); "" = the style's default
     subgenre: str = ""  # a name in blocks.SUBGENRES[style] (its tempo, kit, sounds, voicings)
     surprise: str = ""  # one rule-break from music/surprises.py, or "" (most tracks)
+    # The kind of tune the hook is (music/hooks.py): "" a hook, "hymn" a
+    # plainer, catchier one to sing along to, where the Director thinks it fits.
+    melody: str = ""
+    # Chords from outside the key (theory.parse_chromatic, e.g.
+    # "I@4-bII@4-bIII@2"), played instead of the progressions when set: the
+    # Director's chromatic colour. Every line then plays relative to the
+    # chord sounding, the hook too.
+    chromatic: str = ""
     # The Director's instructions to the Performer, per part of the live arc
     # (build, groove, breakdown, rebuild, groove2, outro): short and plain,
     # "Now start the bass", "Change the melody"; the Performer turns each
@@ -408,6 +416,8 @@ def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | N
     )
     piece.sections = _default_sections(piece, target_minutes,
                                        avoid=[s.name for s in previous.sections] if previous else None)
+    piece.melody = choose_melody(theme, random.Random(piece.seed))
+    piece.chromatic = choose_chromatic(theme, random.Random(piece.seed + 1), previous)
     _add_variety(piece, rng, avoid | disliked, previous, theme=theme, recent_sounds=recent_sounds)
     return piece
 
@@ -517,6 +527,45 @@ THEME_MOODS = {
               "phantom", "specter", "spectre", "banshee", "werewolf", "samhain", "hex", "curse", "cursed",
               "wicked", "occult", "ritual", "trick", "treat"),
 }
+
+# Themes that ask for a hymn outright, and the moods a hymn often suits: the
+# built-in planner's art direction (the Director chooses for itself).
+HYMN_WORDS = {"hymn", "hymns", "choir", "church", "gospel", "prayer", "sacred", "chant", "chorale", "psalm",
+              "cathedral", "monk", "singalong", "anthem", "carol", "carols", "christmas", "amen"}
+HYMN_MOODS = {"euphoric", "bright", "cinematic", "mystic"}
+UNHYMNLIKE_MOODS = {"dark", "eerie", "hard"}
+HYMN_CHANCE = 0.4
+
+
+def choose_melody(theme: str | None, rng: random.Random) -> str:
+    """"hymn" when the theme asks for one, often when its moods suit one (and
+    none goes against it: a Halloween party isn't sung in rounds), else ""."""
+    words = set(re.findall(r"[a-z0-9]+", (theme or "").lower()))
+    if words & HYMN_WORDS:
+        return "hymn"
+    moods = theme_moods(theme)
+    return "hymn" if moods & HYMN_MOODS and not moods & UNHYMNLIKE_MOODS and rng.random() < HYMN_CHANCE else ""
+
+
+# Moods a chromatic colour (theory.CHROMATIC_COLOURS) suits, how often the
+# built-in planner plays one there, and theme words that ask for one.
+CHROMATIC_MOODS = {"dreamy", "melancholic", "cold", "cinematic"}
+CHROMATIC_CHANCE = 0.12
+CHROMATIC_WORDS = {"radiohead", "chromatic", "kid", "uncanny", "dissolve", "dissolving", "drift", "drifting"}
+
+
+def choose_chromatic(theme: str | None, rng: random.Random, previous: "Piece | None" = None) -> str:
+    """One of the built-in chromatic colours now and then where the theme's
+    moods suit it (always when the theme asks), never two tracks running."""
+    from .theory import CHROMATIC_COLOURS
+
+    if previous is not None and previous.chromatic:
+        return ""
+    words = set(re.findall(r"[a-z0-9]+", (theme or "").lower()))
+    if words & CHROMATIC_WORDS or (theme_moods(theme) & CHROMATIC_MOODS and rng.random() < CHROMATIC_CHANCE):
+        return rng.choice(sorted(CHROMATIC_COLOURS))
+    return ""
+
 
 # The modes each mood leans to (when the style allows them), brightest first
 # among them; the built-in planner prefers them for the key.
@@ -1061,7 +1110,11 @@ def validate_hook(raw, style: str, degrees: list[int] | None = None,
 
 
 def progression_degrees(piece) -> list[int]:
-    """The degrees of a piece's main progression in its key's mode."""
+    """The degrees of a piece's main progression in its key's mode. A
+    chromatic piece's are all 0 (each chord its own tonic, eight bars of
+    them): its tunes are written relative to the chord sounding."""
+    if getattr(piece, "chromatic", ""):
+        return [0] * max(1, 8 // max(1, piece.cycles_per_chord))
     found = progression_named(piece.progression, Key.parse(piece.key).mode)
     return list(found.degrees) if found else []
 
@@ -1078,9 +1131,22 @@ def write_piece_hook(piece, rng: random.Random, recent: list[str] | None = None)
     if role is None or not degrees:
         return False
     piece.hook = {"role": role, "kind": "phrase", "relative": "key",
-                  "pattern": write_hook(rng, degrees, piece.cycles_per_chord, recent)}
+                  "pattern": write_hook(rng, degrees, piece.cycles_per_chord, recent, melody=piece.melody)}
     return True
 
+
+# What the Director is told about chromatic colours (its own to write).
+CHROMATIC_COLOURS_FOR_DIRECTOR = {
+    "numerals": "relative to the key's tonic as in a major scale (I II III IV V VI VII = 0 2 4 5 7 9 11 "
+                "semitones up), b or # before one for a chord off the key (bII bIII bVI bVII), upper case major, "
+                "lower case minor",
+    "beats": "@n after a chord: how many beats it lasts (1-8, 4 = a bar); uneven lengths roll the chords "
+             "across the 4/4 bars",
+}
+
+# The kinds of tune a hook can be (beside a plain hook, the default).
+MELODIES = {"hymn": "plainer and catchier, to sing along to: about a note a beat, within an octave, almost all "
+                    "steps, each two-bar line ending held, its first line sung again (AABA) or a step higher"}
 
 # Tunes this alike (hook_similarity) are the same tune to a listener.
 HOOK_SIMILAR = 0.6
@@ -1374,11 +1440,27 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
             else:
                 notes.append(f"sound {role}={synth!r} rejected")
 
+    # The kind of tune the Director asked for: a hymn, or (left out) a hook.
+    melody = str(data.get("melody") or "").strip().lower()
+    piece.melody = melody if melody in MELODIES else ""
+    if melody and melody not in MELODIES and melody not in ("none", "hook", "default"):
+        notes.append(f"unknown melody {melody!r}")
+    # Chords from outside the key, when the Director asks for them.
+    chromatic = str(data.get("chromatic") or "").strip()
+    piece.chromatic = ""
+    if chromatic and chromatic.lower() not in ("none", "no", "false"):
+        from .theory import parse_chromatic
+
+        try:
+            piece.chromatic = parse_chromatic(chromatic, key.mode).name
+        except ValueError as e:
+            notes.append(f"chromatic {chromatic!r} rejected ({e})")
     if "hook" in data:
         hook, why = validate_hook(data.get("hook"), piece.style, progression_degrees(piece), piece.cycles_per_chord)
         if why:
             notes.append(f"hook rejected ({why})")
-            if fallback.hook and fallback.progression == piece.progression:
+            if (fallback.hook and fallback.progression == piece.progression and fallback.melody == piece.melody
+                    and fallback.chromatic == piece.chromatic):
                 piece.hook = dict(fallback.hook)          # (the hook written for these chords stays)
             else:
                 piece.hook = {}
@@ -1387,6 +1469,8 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
             if hook.get("fitted"):
                 notes.append(f"hook fitted to the chords ({hook.pop('fitted')})")
             piece.hook = hook
+    elif (piece.melody, piece.chromatic) != (fallback.melody, fallback.chromatic) and piece.hook.get("relative") == "key":
+        write_piece_hook(piece, random.Random(hash(piece.title) & 0xFFFF))   # (the fallback's is the other kind)
     if "parts" in data:
         piece.parts, part_notes = validate_parts(data.get("parts"), piece.style)
         notes.extend(part_notes)
@@ -1521,6 +1605,8 @@ def director_vocabulary(style: str | None) -> dict:
         "voicings": ({name: f"scale steps above the chord root: {shape}" for name, shape in TRANCE_VOICINGS.items()}
                      if any(s in VOICED_STYLES for s in styles) else {}),
         "knobs": knobs,
+        "melodies": MELODIES,
+        "chromatic_colours": CHROMATIC_COLOURS_FOR_DIRECTOR,
     }
 
 

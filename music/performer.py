@@ -313,18 +313,31 @@ class Performer:
         # The harmony moves with the arc: the main progression, its own for
         # the breakdown, another for the peak (from the Director's plan).
         progressions = {"main": {"name": main.name, "degrees": degrees}}
+        # A chromatic colour (theory.parse_chromatic) plays all track instead:
+        # every line relative to the chord sounding, its degrees all 0.
+        chromatic = []
+        if getattr(piece, "chromatic", ""):
+            from .plan import progression_degrees
+            from .theory import parse_chromatic
+
+            colour = parse_chromatic(piece.chromatic, mode)
+            chromatic = [[[c.shift, c.scale, beats] for c, beats in bar] for bar in colour.bars()]
+            degrees = progression_degrees(piece)
+            progressions = {"main": {"name": colour.name, "degrees": degrees}}
+            self.log(f"🎼 Chromatic: {colour.name} ({len(chromatic)} bars round)")
         key_hook = (piece.hook or {}).get("relative") == "key"
         if key_hook:
             from .hooks import key_harmony_problem, write_hook
 
             # (The mode may have moved, e.g. for an acapella: the hook fits the chords that play.)
             if key_harmony_problem(piece.hook["pattern"], degrees, piece.cycles_per_chord):
-                piece.hook = {**piece.hook, "pattern": write_hook(self.rng, degrees, piece.cycles_per_chord)}
+                piece.hook = {**piece.hook, "pattern": write_hook(self.rng, degrees, piece.cycles_per_chord,
+                                                                  melody=piece.melody)}
         # A hook written against the key across the main progression: the
         # breakdown may take its own chords (the engine re-fits the hook to
         # them, hooks.refit); the peak is the main progression, so the hook
         # returns there exactly as written.
-        for part, section in ((("breakdown", "breakdown"),) if key_hook
+        for part, section in (() if chromatic else (("breakdown", "breakdown"),) if key_hook
                               else (("breakdown", "breakdown"), ("peak", "chorus"))):
             name = piece.section_progressions.get(section)
             other = progression_named(name, mode) if name and name != main.name else None
@@ -388,7 +401,8 @@ class Performer:
                                 sounds=dict(piece.sounds), hook=dict(piece.hook), idea=piece.idea,
                                 parts=dict(piece.parts), motion=dict(piece.motion), subgenre=piece.subgenre,
                                 kit=dict(subgenre(self.style, piece.subgenre).get("kit", {})),
-                                surprise=piece.surprise, vocal=vocal or {})
+                                surprise=piece.surprise, melody=piece.melody, chromatic=chromatic,
+                                vocal=vocal or {})
         self._hook_last = None
         return self._track_now
 

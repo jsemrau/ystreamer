@@ -58,6 +58,14 @@ The Director plans the track and conducts it: its instructions ("Start the
 bass now", "Change the lead melody") come to you one at a time, and you turn
 each into code. The track's `hook` (in Track) is the tune its part starts
 with: keep it recognisable when you change that line, develop it (take half
-of it, move it up, change its rhythm) rather than replacing it.
+of it, move it up, change its rhythm) rather than replacing it. When the
+Track's `melody` is "hymn", its tunes are sung along to: the lead and keys
+lines you write stay plain and catchy too (about a note a beat, on the beats,
+mostly steps, within an octave, each line ending on a held note).
+When the Track has `chromatic` chords (from outside the key, each bar
+[[semitones above the tonic, its scale, beats], ...]), every pattern,
+the lead's too, is relative to the chord sounding: 0 its root, 2 its third,
+4 its fifth; the chords carry the colour, so keep the lines simple and let
+them slide with the harmony.
 
 {reply}

@@ -43,6 +43,19 @@ story your cues tell.
   examples are only examples. Chords may repeat ("i-i-VI-VII").
 - `section_progressions`: four other chords for the `breakdown` and for the
   `chorus` (the peak), same rules, so the harmony moves with the track.
+- `chromatic` (optional, rare; see "Chromatic colour" below): chords from
+  outside the key that play all track instead of `progression`, sliding in
+  parallel the way Radiohead's "Everything In Its Right Place" does: major
+  (or minor) triads a step apart, lasting uneven lengths so they roll
+  across the 4/4 bars and never quite land home. Write 2-8 chords as in
+  `chromatic_colours`: numerals relative to the key's tonic, b or # for one
+  off the key, @beats each. The notation only: "bVI@2" an A flat major
+  chord in C for two beats, "iv@4" F minor for a bar. Use it when the
+  theme wants something uncanny, drifting, cinematic or bittersweet, and
+  write your own. Then the hook (and every part) is written relative to
+  the chord sounding, not the key: 0 that chord's root, 2 its third, 4 its
+  fifth, the same rules otherwise (on the beats 0 2 4 or 6), 8 bars or
+  fewer.
 - `hook`: the tune that makes this track recognisable, for one of the style's
   `hook_parts`:
   - a `cycle` part (acid, arp) plays 3-16 numbers in a loop as 16ths, as
@@ -77,6 +90,22 @@ story your cues tell.
     misses. It is the track's identity: it stays as written all track (the
     performer may vary only its last bar, the answer); at the peak it comes
     back, an octave up.
+- `melody` (optional): "hymn" when you, as the track's art director, think
+  the track wants a tune everyone could sing along to: a sunrise, an
+  anthem, a sacred or mystic theme, a peak that should feel like a crowd
+  singing, a warm closing. Then the hook is a hymn, plainer and catchier
+  than a hook, and these rules replace the rhythm rules above:
+    - about one note a beat, on the beats: quarters and halves, a dotted
+      lilt ("x _ _ x") now and then, never busy or syncopated;
+    - within an octave, almost all steps: a range anyone can sing;
+    - lines of two bars, each ending on a held note (the call's open, the
+      last one home);
+    - its first line comes back: AABA (line, the line again, a higher line
+      with the high point, the first line home), or the line sung again a
+      step or two higher (a sequence).
+  The notation only: "0 _ _ 2 4 _ 2 _" a dotted lilt, "4 _ _ _ _ _ ~ ~" a
+  line coming to rest. Leave `melody` out for most tracks: a hymn is
+  special because it is rare.
 - `parts`: the starting pattern of 3-5 OTHER parts from the style's
   `sketch_parts` (not the hook's part), written so they interlock with the
   hook rather than double it:
@@ -157,7 +186,8 @@ story your cues tell.
 Reply with ONE JSON object and nothing else:
 
 ```json
-{{"title": "...", "subgenre": "...", "surprise": "...", "key": "...", "bpm": 0, "progression": "...",
+{{"title": "...", "subgenre": "...", "surprise": "...", "melody": "...", "chromatic": "...", "key": "...", "bpm": 0,
+  "progression": "...",
   "section_progressions": {{"breakdown": "...", "chorus": "..."}},
   "hook": {{"role": "...", "pattern": "..."}},
   "parts": {{"<part>": "<pattern>", "...": "..."}},
@@ -182,6 +212,10 @@ Reply with ONE JSON object and nothing else:
 
 Suggested key: **{suggested_key}** (drawn at random: take it unless your plan
 needs another key). Something to try: {spark}
+
+## Chromatic colour
+
+{chromatic_line}
 
 ## This track's surprise
 
