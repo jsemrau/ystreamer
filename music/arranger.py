@@ -9,6 +9,9 @@ the lines; the arranger adds the transitions on the arc's turning points:
   bass (the breath), then everything lands together with an impact;
 - build -> groove: an impact on the downbeat;
 - groove and peak: a snare fill in the last bar of every 16-bar phrase;
+- a lift (pre-chorus): the riser alone, into the peak;
+- a break: everything stops; what comes after lands with an impact;
+- tag, bridge and interlude: the phrase fills, as in the groove;
 - breakdown and outro: none of this.
 
 Club styles only; calm styles keep their own shape. The devices run on
@@ -59,12 +62,25 @@ def plan_for(style: str, before: str | None, after: str) -> dict:
     if style not in CLUB_STYLES:
         return {"statements": [silence(RISER), silence(FILL)], "breath": False, "impact": False,
                 "note": "", "playing": {}}
+    if after == "lift":
+        playing = {RISER: riser()}
+        return {"statements": [riser(), silence(FILL)], "breath": False, "impact": False, "playing": playing,
+                "note": "the lift: a riser sweeping up into the peak"}
+    if after == "break":
+        return {"statements": [silence(RISER), silence(FILL)], "breath": False, "impact": False, "playing": {},
+                "note": "the break: the kick and bass drop out"}
+    if after in ("tag", "bridge", "interlude"):
+        playing = {FILL: phrase_fill(style)}
+        return {"statements": [silence(RISER), phrase_fill(style)], "breath": False, "impact": before == "break",
+                "playing": playing, "note": {"tag": "the tag: the hook alone over the beat",
+                                             "bridge": "the bridge: new chords, the hook rests",
+                                             "interlude": "the interlude: another line takes the lead"}[after]}
     if after == "rebuild":
         playing = {RISER: riser(), FILL: roll(style)}
         return {"statements": list(playing.values()), "breath": False, "impact": False, "playing": playing,
                 "note": "tension for the peak: a riser sweeping up and a snare roll speeding up"}
     if after in ("groove", "groove2"):
-        drop = before == "rebuild" or after == "groove2"
+        drop = before in ("rebuild", "lift") or after == "groove2"
         playing = {FILL: phrase_fill(style)}
         note = ("the drop: riser and roll stop, one bar without kick and bass, then it all lands with an impact"
                 if drop else "the groove lands with an impact; a snare fill ends every 16-bar phrase")

@@ -147,7 +147,8 @@ def test_the_engine_re_fits_the_hook_for_the_breakdown_and_restores_it():
     from music.live_engine import LiveEngine
 
     logs, clock = [], _SimClock()
-    performer = Performer(random.Random(2), style="deephouse", log=logs.append)
+    # Trance: its forms always have a breakdown (music/forms.py), whose chords the hook is re-fitted to.
+    performer = Performer(random.Random(2), style="trance", log=logs.append)
     LiveEngine(lambda lines: None, performer, log=logs.append, now=clock.now, sleep=clock.sleep, max_tracks=1).run()
     refits = [l for l in logs if "🎣 The hook" in l]
     assert any("re-fitted" in l for l in refits) and any("as written" in l for l in refits)

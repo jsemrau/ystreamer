@@ -259,6 +259,43 @@ given, one per move; what a cue leaves open ("new lead pattern: busier,
 Performer's answer. Once a part's instructions are done, the Performer
 plays on by itself until the next part.
 
+**She reasons, then develops the track live.** As a track begins she
+reasons first (`reasoning`, shown on screen): from her journal
+(`music/journal.py`, `runtime/director_journal.jsonl`: every track's plan,
+kit and live decisions, and the host's thumbs and requests while it played,
+kept across restarts), from the style, subgenre and theme, and from her
+skills: what the track will be and how it will grow. Then at every section
+change she hears what is actually playing (the live code, the performer's
+last moves, the host's reactions this track) and develops the next section
+(`Director.develop_section`, `prompts/director_develop.md`): she keeps her
+plan or writes new instructions for it, one section ahead, in the
+background, so the music never waits; her decision is shown and spoken as
+the section begins. `YS_DIRECTOR_DEVELOP=0` plays the plan as written.
+
+The art director has **skills** (`prompts/skills/`, in her system prompt
+after the persona): `song_design_basic.md`, the craft every track gets right
+(one idea, the hook stated early and sung, verse/chorus contrast, the energy
+arc, arrangement and groove, transitions, a checklist), and
+`song_design_advanced.md`, eighteen numbered techniques (A1 tease then give,
+A5 the sung refrain, A11 polymeter, A14 accumulation, A18 intimate then
+communal ...), each with the fields of her reply that carry it out. She names
+the ones a track uses in `recommendation.techniques` (one when exploiting,
+two new ones when exploring), and the next tracks are told to choose others.
+`YS_DIRECTOR_SKILLS` points at another folder of skills.
+
+Each track the art director takes a stance, **explore or exploit**
+(`music/explore.py`). Her suggestions are arms of a bandit: a touchstone from
+the host's favourite songs (`music/data/touchstones.json`, what to borrow
+from each, never its tune), a spark, a mode and a tempo band. The thumbs that
+fall while a track plays are its reward (older thumbs count less). Exploring,
+she gets the least-tried arms and is told to take the bold option at every
+choice; exploiting, a Thompson draw leans to what earned 👍 and the brief
+names it. `YS_EXPLORE` (default 0.5) is the base chance of exploring; it
+rises after a 👎 and falls after a 👍. What she says on air explains her
+decisions: the track's concept and what to listen for, and at each section
+what she changes and why, from her own cues (nothing to explain, nothing
+said).
+
 The Director also acts as art director with a **surprise menu**
 (`music/surprises.py`): rule-breaks built only from safe moves, at most one
 every `YS_SURPRISE_EVERY` tracks (default 2), never one of the last four, and
@@ -470,6 +507,45 @@ line's echo is moved onto the beat at the track's tempo (`livecode.beat_delay`).
 | `ys_harp` | concert harp (new) | Balearic, ambient, downtempo arps |
 | `ys_kalimba` | kalimba (new) | Balearic, ambient, lofi arps |
 
+Eighteen more come from the Versilian libraries, also CC0:
+[VSCO-2 CE](https://github.com/sgossner/VSCO-2-CE) (the orchestra) and
+[VCSL](https://github.com/sgossner/VCSL) (mallets, reeds, instruments from
+further away). Their recordings are named by note rather than mapped by SFZ,
+and each one's octave and tuning are measured from its spectrum (the
+libraries number octaves differently, and some notes are a few cents out):
+`ys_grandpiano` (Kawai grand), `ys_violins`, `ys_cellos` and `ys_pizz`
+(sections), `ys_violin` (solo), `ys_concertflute`, `ys_oboe`, `ys_clarinet`,
+`ys_horn`, `ys_dantranh` (Vietnamese zither), `ys_harmonica`, `ys_ocarina`,
+`ys_mbira`, `ys_glockenspiel`, `ys_chimes` (tubular bells); and the muted
+trumpet, vibraphone and marimba, which take over from their models. Their
+levels come from `python -m eval.instrument_levels`; the Director sees each
+described as "real" and prefers one for a track's signature voice.
+
+Three voices come from [Freesound](https://freesound.org), CC0 sounds only,
+fetched with `FREESOUND_API_KEY` (`.env`): `ys_femalevox` (owstu's sung
+single notes, a woman's voice for a lead), `ys_voxchop` (the same singer's
+short notes, vocal chops for arps and keys) and `ys_crowdchoir` (a crowd
+singing "ahh", for chords and beds). A singer drifts within a note, so each
+take's pitch is tracked (autocorrelation) and the drift taken out, its
+vibrato kept at 40% of its depth (`hold_pitch`); of each note's takes the
+steadiest is kept, and one still wavering more than a vibrato is left out.
+
+**The refrain.** Where those voices are installed, every style's vocal part
+(`d12`) can sing the track's own hook: `sung_hook` (the voice, a phrase hook
+in held notes) or `chopped_hook` (vocal chops, a riff hook). It comes in for
+the breakdown, the voice alone over the pads, and sings through the peak:
+the tune heard on an instrument all track comes back sung.
+
+**Drums and bass per track.** `python -m eval.drum_kits` builds drum kits
+from Dirt-Samples' machines and kits and the project's banks (808, house,
+electro, techno, DrumTraks, Oberheim DX, Linn, Blood Sport, Gretsch, jazz
+...): each hit chosen by its file name, else by its spectrum, levelled to
+the stock hit it replaces, copied to `samples/kit_<name>/`. Each track plays
+one kit (not one of the last three) and one bass sound for its style (the
+sub, the TB, the picked electric bass, the real upright; not the last two),
+`music/kits.py`. The patterns keep the stock names; the kit's hits replace
+them as the line plays. `YS_DRUM_KITS=0` plays the stock drums and bass.
+
 `./venv/bin/python -m music.instruments` (also in `install.sh`; or name
 some: `... piano sax`) downloads them to `instruments/` and keeps one
 recording per note from the SFZ map (the velocity layer chosen per
@@ -602,14 +678,33 @@ Three agents take part in the live engine:
 - **The arc** is decided before the track starts, from the Director's
   sections in its order (`🧭 Arc plan: build ≤16 · groove 64 · peak 32 ·
   breakdown 32 · rebuild ≤16 · peak 64 · outro 16 bars`): intro -> build,
-  verse and bridge -> groove, chorus -> peak, breakdown -> breakdown, a build
-  after a breakdown -> rebuild, outro -> outro. So a track can peak early,
-  break down twice, or never. Every breakdown is followed by a rebuild, and
-  the Director is shown the previous track's shape and told not to repeat
-  it (the built-in planner also picks between several shapes). Each step
-  lasts its bars, however often the Performer edits; build and rebuild end
-  early once their lines are in. When the outro's bars are over, whatever
-  still plays fades out and the next track starts.
+  verse -> groove, chorus -> peak, breakdown -> breakdown, a build (or a
+  lift) after a breakdown -> rebuild, outro -> outro. So a track can peak
+  early, break down twice, or never. Every breakdown is followed by a
+  rebuild. Each step lasts its bars, however often the Performer edits;
+  build and rebuild end early once their lines are in. When the outro's
+  bars are over, whatever still plays fades out and the next track starts.
+- **Song forms from real songs.** `eval/song_forms.py` learns which sections
+  each genre uses, in what order and how long, from the Harmonix Set (912
+  songs with section labels and downbeats, MIT licence; tabs' section
+  markers can be added) into `music/data/song_forms.json`. Each track takes
+  a real song's form for its genre family (dance for the club styles, rock
+  for darkwave, hip-hop and R&B for lofi and downtempo, pop for the rest),
+  scaled to the track (`music/forms.py`): the built-in planner plays it, and
+  the Director is offered it as a suggested form, never one of the last
+  tracks' shapes. The style keeps its frame: trance, techno and hardcore
+  always break down before their last peak. Besides intro, verse, chorus,
+  breakdown and outro, real songs bring five sections the engine plays
+  their own way: a **lift** (pre-chorus: a riser, filters opening, no new
+  parts), a **tag** (post-chorus: the hook alone over the beat and bass), a
+  **bridge** (its own chords, the hook rests, another line sings), an
+  **interlude** (instrumental: the hook rests, the arp or acid featured) and
+  a **break** (the kick and bass out, back with an impact). The engine
+  rests the section's parts as it begins and brings them back as it ends
+  (`🧱 Section: the tag rests the keys, chords, texture`); nothing brings a
+  resting part back early. A form ending on its chorus gets a short fade.
+  Over 90 simulated tracks the built-in planner now plays 66 different
+  forms (before: 7, the six commonest 97% of tracks).
 - **Narrator:** at each turn of the arc (`🧭 Arc: groove → breakdown`),
   writes one warm spoken line about the moment, in the background so the
   music never waits.
@@ -780,6 +875,52 @@ Each exported line is a learning example: the code before, the move, and the
 reason (`music/sessionlog.py` has `iter_records()` / `iter_edits()` for
 retrieval in code). A 15-minute track takes about 75 KB.
 
+## Ambient house (after Orbital's "Halcyon + On + On")
+
+A trance subgenre for the bright, slow side of early-90s rave: what makes
+those records work, not their notes. A wistful major or lydian key at
+124-128 BPM; few layers that come in one at a time and then stay (the 909
+with light hats, an offbeat sub, held chords); the hook a riff on the arp
+(`music/hooks.write_riff`: a cycle of chord tones and rests, repeated until
+it's hypnotic) rather than a sung melody; no acid line. It takes its time:
+an edit every 32 bars, about 8.5 minutes a track (as far as the set's time
+allows), gentle moves with medium ones at the peaks, a lower density
+target (`pace` in `blocks.SUBGENRES`). A theme that names it ("ambient
+house", "Orbital", "The Orb", "FSOL") plays it on every track; otherwise the
+Director may choose it, the built-in planner doesn't draw it at random.
+
+Its texture is a wordless **reversed voice** (`ys_revvox`): a sung vowel
+that swells out of its own reverb, opens from "ooh" to "aah" and stops dead,
+as a sample played backwards does. It goes on air once you've heard it:
+
+```bash
+./venv/bin/python -m eval.sound_preview --ambienthouse
+# recordings/preview/55_reversed_voice.wav   the voice alone
+# recordings/preview/56_ambient_house.wav    in the groove (126 BPM, D major, our own riff and chords)
+# recordings/preview/57_ambient_house_vox.wav the same groove with today's ys_vox
+```
+
+then `YS_REVVOX=1` in `.env` (until then the angel choir or the soft pad
+takes its place).
+
+## The art director's persona
+
+The Director plans every track as a character, not a function: its system
+prompt is `prompts/director_persona.md`, a persona (Vesna Kade, a fictional
+art director from the late-90s club scene) with a character, an ambition
+(a stream people come back to for the music, every track its own identity)
+and a goal for every set (each track recognisable within a minute, the
+host's thumbs going up, one memorable moment per track, an arc across the
+tracks). Each track's brief shows its progress toward that goal: the track
+number in the set, the host's 👍 and 👎 since the set began (the part and
+sound each was on) and their latest requests. Its recommendation starts
+with the track's `concept`, one sentence every choice serves (`🎨
+Recommendation` in the log and on the page).
+
+Write another persona into a file and point `YS_DIRECTOR_PERSONA` at it in
+`.env` to change who directs; without the file the Director is the plain
+"concise music director" it was.
+
 ## Watching the Director think
 
 Every decision prints in the terminal with the model's reason:
@@ -867,6 +1008,19 @@ stream/live.sh --style darkwave     # extra flags go to orchestrator.py and win 
 stream/live.sh --judge none         # e.g. without the judge
 stream/live.sh --hours 3            # stop after 3 hours (any number, e.g. 2.5), once the song playing then ends
 ```
+
+With `--hours`, the Director knows when the set ends (`YS_SESSION_START`
+and `YS_SESSION_END`, which a restarted engine keeps) and plans its length
+around it: before every track it assumes a length for each track still to
+come, shaped like a club night (a shorter opener, longer tracks at peak
+time, a closer a little shorter; the style's usual length in between, e.g.
+6.5 minutes for trance, 4.5 for darkwave) and adding up to the time left
+(`🗓 Set plan: 9 tracks in the 60 min left of 60: 5.2, 6.5, 6.5, 7.4, ...`).
+With a model, the Director decides this track's `minutes` and its
+assumption for the rest (`set_plan`) itself; each track is then built to
+its length. It re-plans from the time actually left, so a track that runs
+long shortens the ones after it. Without `--hours`, tracks are 5 minutes
+(`--piece-minutes` to change it).
 
 It runs in that terminal until Ctrl-C. Watch the stream in YouTube Studio
 (Go live → Stream), or on your channel once it shows LIVE. If the stream
@@ -1009,7 +1163,7 @@ Tunables such as the layer cap, timeouts and paths live in `.env` (see
 |---|---|
 | `music/livecode.py` | the live program: lines, edits, validation, rendering |
 | `music/blocks.py` | per-style building blocks the performer adds |
-| `music/instruments.py`, `instruments/` | real instruments (FreePats, CC0): guitar, piano, sax, electric guitar and bass, harp, kalimba |
+| `music/instruments.py`, `instruments/` | real instruments (FreePats, VSCO-2 CE, VCSL; all CC0): guitar, pianos, sax, bass, harp, kalimba, strings, woodwinds, brass, mallets, mbira, zither |
 | `music/vocals.py`, `acapellas/` | licensed acapellas: manifest, key and tempo fit, preparing their banks |
 | `music/performer.py`, `prompts/performer.md` | the performer (built-in and LLM) and its phases |
 | `music/live_engine.py` | plays the program and applies one edit every few bars |

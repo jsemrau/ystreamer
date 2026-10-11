@@ -119,8 +119,14 @@ def test_the_real_instruments_load_at_boot_and_replace_their_models():
         assert defs.index(f"SynthDef(\\{synth},") < defs.index(f"~ysSampled.(\\{synth},"), synth
     from music.instruments import INSTRUMENTS
 
-    assert {i.synth for i in INSTRUMENTS.values()} <= set(re.findall(r"~ysSampled\.\(\\(\w+)", defs))
-    assert all(i.page.startswith("https://freepats.zenvoid.org/") for i in INSTRUMENTS.values())
+    sampled = set(re.findall(r"~ysSampled\.\(\\(\w+)", defs)) | set(re.findall(r"\[\\\w+, \\(ys_\w+), \(gain:", defs))
+    assert {i.synth for i in INSTRUMENTS.values()} <= sampled
+    # The trumpet, vibes and marimba recordings come after their models too.
+    for synth in ("ys_trumpet", "ys_vibes", "ys_marimba"):
+        assert defs.index(f"SynthDef(\\{synth},") < defs.index(f", \\{synth}, (gain:"), synth
+    assert all(i.page.startswith(("https://freepats.zenvoid.org/", "https://github.com/sgossner/",
+                                  "https://freesound.org/people/"))
+               for i in INSTRUMENTS.values())
 
 
 def test_harp_and_kalimba_are_offered_only_where_installed():
@@ -155,3 +161,58 @@ def test_the_sax_holds_its_notes_instead_of_running_16ths():
         assert notes_per_bar(line.body, "melody", line.patterns["melody"]) <= 5
         assert harmony_problem("lead", line.patterns["melody"]) is None
         assert dict(line.fx)["legato"] == "1.0" and "- 12)" in line.body     # an octave down
+
+
+def test_the_versilian_recordings_are_named_by_note_and_one_layer_is_kept():
+    from music.instruments import file_note, pick_files
+
+    assert file_note("VlnEns_susVib_A2_v1.wav") == 45 and file_note("GPiano_sus_A#-1_v2_rr1_Player.wav") == 10
+    assert file_note("b2_mf_1.wav") == 47 and file_note("FX_01.wav") is None
+    picked = pick_files(["Pizz/A_Pizz_A2_v1_rr1.wav", "Pizz/A_Pizz_A2_v2_rr2.wav", "Pizz/A_Pizz_A2_v2_rr1.wav",
+                         "glock_loud_C5_01.wav", "glock_medium_C5_01.wav", "glock_soft_C5_02.wav"], 0.5)
+    assert picked == {45: "Pizz/A_Pizz_A2_v2_rr1.wav", 72: "glock_medium_C5_01.wav"}
+    assert pick_files(["x_C5_p.wav", "x_C5_f.wav"], 0.0) == {72: "x_C5_p.wav"}
+
+
+def test_a_recordings_octave_and_tuning_are_measured():
+    import numpy as np
+
+    from music.instruments import SR, measure_note
+
+    t = np.arange(int(0.8 * SR)) / SR
+    f0 = 233.08 * 2 ** (10 / 1200)                     # B-flat 3, 10 cents sharp
+    tone = sum(a * np.sin(2 * np.pi * f0 * h * t) for h, a in ((1, 1.0), (2, 0.6), (3, 0.4), (4, 0.2)))
+    x = np.concatenate([np.zeros(SR // 10), tone]).astype(np.float32)
+    k, cents = measure_note(x, 46)                     # named an octave low ("A#2")
+    assert k == 1 and abs(cents - 10) < 3
+    # A weak fundamental (a harmon mute) is still the pitch, not its octave.
+    muted = sum(a * np.sin(2 * np.pi * 233.08 * h * t) for h, a in ((1, 0.05), (2, 1.0), (3, 0.5), (4, 0.4)))
+    assert measure_note(np.concatenate([np.zeros(SR // 10), muted]).astype(np.float32), 58)[0] == 0
+
+
+def test_every_real_sound_has_a_recording_a_synthdef_a_level_and_a_character():
+    from music.blocks import REAL_SOUNDS, SOUND_CHARACTER
+    from music.instruments import INSTRUMENTS
+    from music.mix import SYNTH_LUFS
+
+    with open(os.path.join(REPO, "tidal", "synthdefs.scd")) as f:
+        defs = f.read()
+    for synth, (name, roles) in REAL_SOUNDS.items():
+        assert INSTRUMENTS[name].synth == synth and f"[\\{name}, \\{synth}," in defs, synth
+        assert synth in SYNTH_LUFS and synth in SOUND_CHARACTER and roles, synth
+        assert all(about.split(": ", 1)[1].startswith("real") for about in roles.values()), synth
+
+
+def test_a_voice_is_tuned_by_its_held_middle_not_its_scoop():
+    import numpy as np
+
+    from music.instruments import _PITCH_CLASS_RE, SR, steady_cents
+
+    assert _PITCH_CLASS_RE.search("Female Vocal SIngle Note G# (0).wav").group(1) == "G#"
+    assert _PITCH_CLASS_RE.search("CRWDSing_Ahh Vowel Sung Near F 02").group(1) == "F"
+    t = np.arange(int(2.0 * SR)) / SR
+    # A singer 30 cents flat on A4, scooping up from a semitone below, with a vibrato.
+    cents = np.where(t < 0.3, -130 + 100 * t / 0.3, -30) + 20 * np.sin(2 * np.pi * 5.5 * t)
+    phase = 2 * np.pi * np.cumsum(440 * 2 ** (cents / 1200)) / SR
+    voice = (np.sin(phase) + 0.5 * np.sin(2 * phase) + 0.3 * np.sin(3 * phase)).astype(np.float32)
+    assert abs(steady_cents(voice, 69) + 30) < 6

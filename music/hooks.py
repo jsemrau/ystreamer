@@ -452,6 +452,41 @@ def _one_peak(bars: list[list[str]], degrees: list[int], bars_per_chord: int, to
         bars[b][i] = str(lower[0])
 
 
+# A riff's notes: the chord's root, third, fifth, octave and the third above
+# (scale steps from each chord's root, as an arp cycle plays them).
+RIFF_TONES = [0, 2, 4, 7, 9]
+
+
+def write_riff(rng: random.Random, recent: list[str] | None = None, tries: int = 40) -> str:
+    """A riff for the arp (ambient house's hook): a cycle on each chord in
+    8ths, 6-12 steps (an odd length rolls against the bar), chord tones moving
+    mostly to a neighbouring one, a rest now and then but never two running,
+    at least three different notes, not a recent riff."""
+    for _ in range(tries):
+        length = rng.choice([6, 7, 8, 8, 9, 10, 12])
+        notes, tone = [], rng.choice([0, 0, 4, 7])
+        for i in range(length):
+            if i and notes[-1] != "~" and rng.random() < 0.25:
+                notes.append("~")
+                continue
+            if notes:
+                idx = RIFF_TONES.index(tone) + rng.choice([-1, 1, 1, 0, 2, -2])
+                tone = RIFF_TONES[max(0, min(len(RIFF_TONES) - 1, idx))]
+            notes.append(str(tone))
+        played = [n for n in notes if n != "~"]
+        tune = " ".join(notes)
+        if len(played) >= 0.6 * length and len(set(played)) >= 3 and tune not in (recent or []):
+            return tune
+    return "0 ~ 4 7 ~ 4 9 ~"
+
+
+def opening_rhythm(pattern: str) -> str:
+    """A phrase's first two bars as rhythm only (x a note, _ held, ~ a rest):
+    the motif people recognise a hook by."""
+    bars = re.findall(r"\[([^\[\]]*)\]", pattern)[:2]
+    return "|".join(" ".join("x" if _NOTE_RE.match(t) else t for t in b.split()) for b in bars)
+
+
 def write_hook(rng: random.Random, degrees: list[int], bars_per_chord: int = 1, recent: list[str] | None = None,
                tries: int = 48, melody: str = "") -> str:
     """A memorable hook for this progression, written against the key: the
@@ -460,19 +495,29 @@ def write_hook(rng: random.Random, degrees: list[int], bars_per_chord: int = 1, 
     from .plan import HOOK_SIMILAR, hook_similarity
 
     one = _one_hymn if melody == HYMN else _one
-    fresh, stale = [], []          # (score, tune) / (closeness to a recent tune, -score, tune)
+    fresh, stale = [], []          # (score, tune, no problems?) / (closeness to a recent tune, -score, tune)
     for _ in range(tries):
         tune = one(rng, degrees, bars_per_chord)
         if key_harmony_problem(tune, degrees, bars_per_chord):
             continue
-        s = score(tune, degrees, bars_per_chord, melody) or 0.0
+        a = analyze(tune, degrees, bars_per_chord, melody)
+        s = a["score"] if a else 0.0
         close = max((hook_similarity(tune, r) for r in recent or []), default=0.0)
         if close < HOOK_SIMILAR:
-            fresh.append((s, tune))
+            fresh.append((s, tune, not (a and a["problems"])))
         else:
             stale.append((close, -s, tune))
     if fresh:
-        return max(fresh)[1]
+        # Not the top scorer every time (the scoring favours one rhythm, so
+        # every hook opened alike): any good one, none opening on the rhythm
+        # of a recent tune.
+        taken = {opening_rhythm(r) for r in recent or []}
+        fresh = [f for f in fresh if opening_rhythm(f[1]) not in taken] or fresh
+        flawless = [t for _, t, ok in fresh if ok]
+        if flawless:
+            return rng.choice(flawless)
+        best = max(s for s, _, _ in fresh)
+        return rng.choice([t for s, t, _ in fresh if s >= best - 0.05])
     if stale:
         return min(stale)[2]           # (none fresh enough: the least like a recent one)
     return _one(rng, degrees, bars_per_chord)

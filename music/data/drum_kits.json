@@ -1,0 +1,225 @@
+{
+ "_about": "eval/drum_kits.py: each kit's bank (0 kick, 1 snare, 2 clap, 3 hat, 4 open hat), levelled to the stream's own hits",
+ "kits": [
+  {
+   "name": "house",
+   "bank": "kit_house",
+   "styles": [
+    "trance",
+    "techno",
+    "deephouse",
+    "darkwave"
+   ],
+   "sources": {
+    "kick": "house:0 (000_BD.wav)",
+    "snare": "house:7 (007_SN.wav)",
+    "clap": "cp:0 (HANDCLP0.wav)",
+    "hat": "house:3 (003_HH.wav)",
+    "openhat": "house:4 (004_OH.wav)"
+   }
+  },
+  {
+   "name": "electro",
+   "bank": "kit_electro",
+   "styles": [
+    "trance",
+    "techno",
+    "deephouse",
+    "darkwave"
+   ],
+   "sources": {
+    "kick": "electro1:6 (006_et1kick2.wav)",
+    "snare": "electro1:12 (012_et1snare2.wav)",
+    "clap": "realclaps:1 (2.wav)",
+    "hat": "electro1:0 (000_et1closedhh.wav)",
+    "openhat": "electro1:10 (010_et1ride.wav)"
+   }
+  },
+  {
+   "name": "tech",
+   "bank": "kit_tech",
+   "styles": [
+    "trance",
+    "techno",
+    "deephouse",
+    "darkwave"
+   ],
+   "sources": {
+    "kick": "tech:6 (tn1kick2.wav)",
+    "snare": "tech:12 (tn1snare2.wav)",
+    "clap": "cp:1 (HANDCLPA.wav)",
+    "hat": "tech:0 (tn1closedhh.wav)",
+    "openhat": "tech:10 (tn1ride.wav)"
+   }
+  },
+  {
+   "name": "techno",
+   "bank": "kit_techno",
+   "styles": [
+    "trance",
+    "techno",
+    "deephouse",
+    "darkwave"
+   ],
+   "sources": {
+    "kick": "techno:0 (000_0.wav)",
+    "snare": "techno:3 (003_4.wav)",
+    "clap": "cp:0 (HANDCLP0.wav)",
+    "hat": "techno:6 (006_7.wav)",
+    "openhat": "808oh:1 (OH10.WAV)"
+   }
+  },
+  {
+   "name": "drumtraks",
+   "bank": "kit_drumtraks",
+   "styles": [
+    "trance",
+    "techno",
+    "deephouse",
+    "darkwave"
+   ],
+   "sources": {
+    "kick": "drumtraks:6 (006_DT Kick.wav)",
+    "snare": "drumtraks:9 (009_DT Snare.wav)",
+    "clap": "drumtraks:1 (001_DT Claps.wav)",
+    "hat": "drumtraks:4 (004_DT Hat Closed.wav)",
+    "openhat": "drumtraks:5 (005_DT Hat Open.wav)"
+   }
+  },
+  {
+   "name": "oberheim",
+   "bank": "kit_oberheim",
+   "styles": [
+    "trance",
+    "techno",
+    "deephouse",
+    "darkwave"
+   ],
+   "sources": {
+    "kick": "odx:0 (000_Kick_1.wav)",
+    "snare": "odx:1 (001_DX_Snare_1.wav)",
+    "clap": "odx:13 (013_DXClap.wav)",
+    "hat": "odx:12 (012_DX_Cl_Hat.wav)",
+    "openhat": "odx:5 (005_DX_Open_Hat.wav)"
+   }
+  },
+  {
+   "name": "drummachine",
+   "bank": "kit_drummachine",
+   "styles": [
+    "trance",
+    "techno",
+    "deephouse",
+    "darkwave"
+   ],
+   "sources": {
+    "kick": "dr:37 (037_046.WAV)",
+    "snare": "dr:31 (031_040.WAV)",
+    "clap": "dr:31 (031_040.WAV)",
+    "hat": "dr:0 (000_002.WAV)",
+    "openhat": "dr:19 (019_028.WAV)"
+   }
+  },
+  {
+   "name": "808",
+   "bank": "kit_808",
+   "styles": [
+    "trance",
+    "techno",
+    "deephouse",
+    "darkwave"
+   ],
+   "sources": {
+    "kick": "808bd:3 (BD0050.WAV)",
+    "snare": "808sd:18 (SD5050.WAV)",
+    "clap": "cp:0 (HANDCLP0.wav)",
+    "hat": "hh:0 (000_hh3closedhh.wav)",
+    "openhat": "808oh:3 (OH50.WAV)"
+   }
+  },
+  {
+   "name": "linn",
+   "bank": "kit_linn",
+   "styles": [
+    "trance",
+    "deephouse",
+    "darkwave",
+    "lofi",
+    "downtempo"
+   ],
+   "sources": {
+    "kick": "kicklinn:0 (Linn Kick 1.wav)",
+    "snare": "realclaps:2 (3.wav)",
+    "clap": "realclaps:2 (3.wav)",
+    "hat": "linnhats:4 (5.wav)",
+    "openhat": "linnhats:3 (4.wav)"
+   }
+  },
+  {
+   "name": "studio",
+   "bank": "kit_studio",
+   "styles": [
+    "trance",
+    "techno",
+    "deephouse",
+    "darkwave"
+   ],
+   "sources": {
+    "kick": "kick:18 (KICK39.wav)",
+    "snare": "snare:2 (SNARE000.wav)",
+    "clap": "clap:5 (CLAP34.wav)",
+    "hat": "hh27:0 (000_hh27closedhh.wav)",
+    "openhat": "808oh:1 (OH10.WAV)"
+   }
+  },
+  {
+   "name": "bloodsport",
+   "bank": "kit_bloodsport",
+   "styles": [
+    "darkwave",
+    "techno"
+   ],
+   "sources": {
+    "kick": "bskick:0 (1 Harsh Realm Kick Low.wav)",
+    "snare": "bssnare:3 (4 Floating In Credit Snare.wav)",
+    "clap": "realclaps:2 (3.wav)",
+    "hat": "bshihat:1 (2 Boiling In Dust Hats 2.wav)",
+    "openhat": "808oh:1 (OH10.WAV)"
+   }
+  },
+  {
+   "name": "gretsch",
+   "bank": "kit_gretsch",
+   "styles": [
+    "lofi",
+    "downtempo",
+    "ambient",
+    "piano"
+   ],
+   "sources": {
+    "kick": "gretsch:13 (013_kick.wav)",
+    "snare": "gretsch:22 (022_snarehard.wav)",
+    "clap": "gretsch:22 (022_snarehard.wav)",
+    "hat": "gretsch:5 (005_closedhathard.wav)",
+    "openhat": "gretsch:16 (016_openclosedhat.wav)"
+   }
+  },
+  {
+   "name": "jazz",
+   "bank": "kit_jazz",
+   "styles": [
+    "lofi",
+    "downtempo",
+    "ambient",
+    "piano"
+   ],
+   "sources": {
+    "kick": "jazz:0 (000_BD.wav)",
+    "snare": "jazz:7 (007_SN.wav)",
+    "clap": "jazz:7 (007_SN.wav)",
+    "hat": "jazz:3 (003_HH.wav)",
+    "openhat": "jazz:4 (004_OH.wav)"
+   }
+  }
+ ]
+}

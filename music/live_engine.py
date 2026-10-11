@@ -64,6 +64,9 @@ class LiveEngine:
         self._rolls_pending = None
         # Narration lines are written in the background so the music never waits.
         self._voice_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="narrator")
+        # The art director developing the track live, a section ahead (Director.develop_section).
+        self._develop_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="develop")
+        self._decisions: dict[str, str] = {}      # next phase -> her decision for it, for the narration
         self._last_reason = ""
         performer.on_arc = self._on_arc
         performer.on_surprise = lambda name: self.program and self._record(
@@ -147,6 +150,51 @@ class LiveEngine:
         self._publish(new, None, "")
         return new
 
+    def _section_rests(self, program: Program, phase: str) -> list[str]:
+        """The parts a real song's section rests (music/forms.py): the hook in a
+        bridge or an interlude (the vocal too in an interlude), everything but
+        the drums, bass and hook in a tag, the kick and bass in a break. Only
+        when enough is left playing to carry it."""
+        active = program.active_roles()
+        hook = (program.track.hook or {}).get("role")
+        if phase in ("bridge", "interlude"):
+            rest = [r for r in (hook, "vocal" if phase == "interlude" else None) if r and r in active]
+        elif phase == "tag":
+            rest = [r for r in active if r not in ("beat", "bass", "perc", hook)] if hook in active else []
+        elif phase == "break":
+            rest = [r for r in ("beat", "bass") if r in active]
+        else:
+            return []
+        return rest if len(active) - len(rest) >= 2 else []
+
+    def _section_turn(self, program: Program) -> Program:
+        """As a section begins, what it rests goes quiet; as it ends, what the
+        last one rested comes back (and nothing else brings it back before)."""
+        perf, phase = self.performer, self.performer.state.phase
+        if phase == self._arranged_phase:
+            return program
+        st = perf.state
+        want = self._section_rests(program, phase)
+        back = [r for r in st.held_for_section if r not in want and r in program.lines and program.lines[r].muted]
+        rest = [r for r in want if r not in st.held_for_section]
+        if not back and not rest:
+            st.held_for_section = [r for r in st.held_for_section if r in want]
+            return program
+        new = copy.deepcopy(program)
+        for r in back:
+            new.lines[r].muted = False
+        for r in rest:
+            new.lines[r].muted = True
+        if not self._send([new.statement(r) for r in dict.fromkeys(back + rest)]):
+            return program
+        st.held_for_section = [r for r in want if r in rest or r in st.held_for_section]
+        said = "; ".join(x for x in (f"the {phase} rests the {', '.join(rest)}" if rest else "",
+                                     f"back: {', '.join(back)}" if back else "") if x)
+        self.log(f"🧱 Section: {said}")
+        runtime.append_thought(f"🧱 {said}")
+        self._publish(new, None, "")
+        return new
+
     def _fill_for_the_drop(self, program: Program) -> tuple[Program, list[str]]:
         """When the groove lands (club styles), the stack lands with it:
         parts still missing (the Director's sketched parts first) come in and
@@ -186,7 +234,10 @@ class LiveEngine:
                 break
             new.lines[role] = new.track.make(self.performer._block_for(role, new.track), self.performer.rng)
             landing.append(role)
-        if not landing or not self._type_ok([new.statement(r) for r in landing]):
+        # (A part held back that was already out, the kick still muted from the breakdown,
+        # is held all the same: the surprise is that it stays out.)
+        held = {r for r in held if r in new.lines}
+        if not landing and not held or landing and not self._type_ok([new.statement(r) for r in landing]):
             return program, []
         if held:
             name = "kickless_drop" if held == {"beat"} else "stripped_peak"
@@ -473,12 +524,57 @@ class LiveEngine:
         say something about the moment, written in the background."""
         if self.program is not None:
             self._record("arc", **self._track_info(self.program), before=before, after=after, why=why)
+            self._develop_next()
         if self.narrator is None or not self.narrator.wants("section"):
             return
         program = self.program
-        self._voice_pool.submit(self._narrate_moment, after, why, program, self._last_reason)
+        # The Director's own instructions for this section: what the line explains.
+        cues = [str(c.get("say") or "") for c in self.performer.state.cue_queue if c.get("say")]
+        decision = self._decisions.pop(after, "")
+        if decision:
+            cues = [decision] + cues
+        self._voice_pool.submit(self._narrate_moment, after, why, program, self._last_reason, cues)
 
-    def _narrate_moment(self, phase: str, why: str, program: Program | None, reason: str) -> None:
+    def _develop_next(self) -> None:
+        """Live coding: at each section change the art director hears what is
+        playing and develops the next section, in the background (she answers
+        within a section; the music never waits for her)."""
+        director = getattr(self.performer, "director", None)
+        piece = getattr(self.performer, "_last_piece", None)
+        st = self.performer.state
+        if director is None or piece is None or self.program is None or st.step + 1 >= len(st.plan):
+            return
+        step, plan = st.step, list(st.plan)
+        code = [line.strip() for line in self.program.code_lines()[2:]]
+        edits = [f"{e[1]} ({e[2]})" for e in self._recent_edits][-8:]
+        planned = list(st.cues.get(plan[step + 1][0], []))
+        title = self.program.track.title
+
+        def work():
+            try:
+                result = director.develop_section(piece, plan, step, code, edits, planned)
+            except Exception as e:                      # never let a model call stop the music
+                self.log(f"[Director] couldn't develop the next section ({e})")
+                return
+            if not result or self.program is None or self.program.track.title != title:
+                return
+            phase, cues = result["phase"], result.get("cues")
+            if result.get("decision"):
+                self._decisions[phase] = result["decision"]
+            if not cues:
+                return
+            if st.step == step:                         # still before it: its instructions now
+                st.cues[phase] = cues
+            elif st.step == step + 1 and st.phase == phase:
+                st.cue_queue = list(cues)               # it began while she thought: from now on
+
+        self._develop_pool.submit(work)
+
+    def _narrate_moment(self, phase: str, why: str, program: Program | None, reason: str,
+                        cues: list[str] | None = None) -> None:
+        """The art director explains the section that begins: what changes in
+        it and why, from her cues for it, the track's idea and the last change.
+        Nothing to explain, nothing said."""
         from . import llm
         from .narrator import clean_narration
 
@@ -486,23 +582,29 @@ class LiveEngine:
         model_id = self.performer.model_id
         text_model = model_id and not (llm.resolve(model_id)[0] == "jevtypesafe" and llm.jev_style() == "decide")
         if text_model and program is not None:
+            idea = getattr(program.track, "idea", "") or ""
             prompt = (
-                "You are the warm, intimate late-night voice of a 24/7 live-coded music stream. "
-                f"The track '{program.track.title}' ({program.track.style}, mood: {self.performer.track_mood or 'calm'}) "
-                f"is moving into its {phase.replace('groove2', 'second peak')} ({why}). "
-                + (f"The last change: {reason}. " if reason else "")
-                + "Say ONE sentence (under 20 words) to the listeners about this moment. No numbers, no technical "
-                  "words, no quotes. Reply with the sentence only."
+                "You are Vesna Kade, the art director of a 24/7 live-coded music stream, speaking to the listeners. "
+                f"The track '{program.track.title}' ({program.track.style}) is moving into its "
+                f"{phase.replace('groove2', 'second peak')}.\n"
+                + (f"Your idea for the track: {idea}\n" if idea else "")
+                + (f"Your instructions for this section: {' | '.join(cues)}\n" if cues else "")
+                + (f"The last change made: {reason}\n" if reason else "")
+                + "In ONE sentence (under 25 words), first person, tell the listeners what you are changing now and "
+                  "why, using only what's above: the change they will really hear and what it is for. No numbers, "
+                  "no technical words, no quotes, no mood filler. If there is nothing real to explain, reply NONE."
             )
             try:
                 reply = llm.converse("Narrator", model_id, "You write one spoken sentence. No JSON.", prompt,
                                      log=self.log, asks=f"a line for the {phase}", max_tokens=80, timeout=20)
                 line = clean_narration(reply.strip().splitlines()[0] if reply.strip() else "")
+                if line.strip(" .").upper() == "NONE":
+                    return
             except llm.LLMError:
                 line = ""
-        if not line:
-            options = _ARC_LINES.get(phase, [])
-            line = options[hash((program.track.title if program else "", phase)) % len(options)] if options else ""
+        if not line and cues:
+            # No text model: the Director's own instruction, as it was written.
+            line = next((ok for c in cues if (ok := clean_narration(c))), "")
         if line:
             self.narrator.say(line, kind="section")
 
@@ -647,6 +749,7 @@ class LiveEngine:
             self.performer.advance_phase(program)
             program = self.program = self._follow_harmony(program)
             program = self.program = self._surprise_turn(program)
+            program = self.program = self._section_turn(program)
             program, landing = self._fill_for_the_drop(program)
             self.program = program
             self._arrange(program, landing)
@@ -655,18 +758,6 @@ class LiveEngine:
         self._pool.shutdown(wait=False, cancel_futures=True)
         self._roll_pool.shutdown(wait=False, cancel_futures=True)
         self._voice_pool.shutdown(wait=False, cancel_futures=True)
+        self._develop_pool.shutdown(wait=False, cancel_futures=True)
 
 
-# Spoken at the arc's turning points when no text model writes the line.
-_ARC_LINES = {
-    "groove": ["Everything's in now. Let it settle and carry you.",
-               "There it is. Stay with the groove for a while."],
-    "breakdown": ["The floor drops away for a moment. Just breathe.",
-                  "Let's take the weight off and float for a bit."],
-    "rebuild": ["Here it comes back, piece by piece.",
-                "Feel it gathering again. Almost there."],
-    "groove2": ["And we're back, a little brighter this time.",
-                "All together again. This is the peak of it."],
-    "outro": ["The track starts to let go now, slowly.",
-              "Let it fade out gently. Something new is coming."],
-}

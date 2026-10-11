@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass, field
 import config
 
 from . import presets as P
-from .blocks import LIVE_SOUNDS, RETIRED_SOUNDS
+from .blocks import LIVE_SOUNDS, RETIRED_SOUNDS, sound_fits_style
 from .theory import (CHORD_COLORS, MODES, PROGRESSIONS_BY_NAME, Key, mode_chords, parse_progression,
                      progression_named, progressions_for)
 
@@ -114,6 +114,9 @@ for _name, _bpm in (("techno", (138, 150)), ("hardcore", (160, 185))):
                      "energy_order": ["drums", "bass", "arp", "pad", "texture", "melody", "keys"]}
 # Happy hardcore is in major keys (its subgenre's modes keep gabber dark).
 STYLES["hardcore"]["modes"] = ["minor", "phrygian", "dorian", "major", "mixolydian"]
+# Ambient house is trance's bright, slower side: major and lydian, from 124
+# BPM (blocks.SUBGENRES: the other trance subgenres keep the dark modes).
+STYLES["trance"] = {**STYLES["trance"], "bpm": (124, 146), "modes": ["minor", "phrygian", "dorian", "major", "lydian"]}
 
 # Sounds that aren't wanted: presets built on detuned saws (supersaw, gated
 # saw, the saw pad, saw strings, the saw-fed choir), the organ and the
@@ -167,7 +170,9 @@ def style_from_theme(theme: str | None) -> str | None:
 # track of a stream with that theme is one, by either planner.
 THEME_SUBGENRE_KEYWORDS = {
     "trance": [("balearic", ("saltwater", "chicane", "balearic", "ibiza", "sunset", "cafe del mar", "café del mar")),
-               ("psy", ("psytrance", "psy trance", "goa"))],
+               ("psy", ("psytrance", "psy trance", "goa")),
+               ("ambient house", ("ambient house", "orbital", "the orb", "future sound of london", "fsol",
+                                  "brown album"))],
     "hardcore": [("happy", ("happy hardcore", "wonderful days")), ("gabber", ("gabber", "gabba", "rotterdam"))],
 }
 
@@ -185,8 +190,49 @@ def subgenre_from_theme(style: str | None, theme: str | None) -> str:
 # A live track's target length: long enough to build and drop, short enough
 # that the next track's key, chords, hook and sound come before it wears thin.
 LIVE_PIECE_MINUTES = 5.0
+# A track's usual length per style, for planning a set of a given length
+# (Director.plan_set): extended trance and techno mixes run long, hardcore
+# and post-punk short, lofi beats shorter still.
+TYPICAL_MINUTES = {"trance": 6.5, "techno": 6.0, "deephouse": 6.0, "hardcore": 4.5, "darkwave": 4.5, "lofi": 3.5,
+                   "downtempo": 4.5, "ambient": 6.0, "piano": 4.0}
+TRACK_MINUTES = (2.5, 10.0)
 
-SECTION_TYPES = ["intro", "verse", "build", "chorus", "breakdown", "bridge", "outro"]
+
+def set_plan(remaining: float, elapsed: float, typical: float, assumed: list[float] | None = None) -> list[float]:
+    """Track lengths (minutes) for the rest of a set: `remaining` minutes
+    left after `elapsed`. A set breathes like a club night: a shorter track to
+    open, longer ones at peak time (the middle of the set), a closer a little
+    shorter; together they end on time. An earlier assumption (the
+    Director's) is kept and fitted to the time actually left, a track added
+    or dropped when it no longer fits."""
+    lo, hi = TRACK_MINUTES
+    if remaining <= lo:
+        return [lo]
+    total = elapsed + remaining
+    if assumed:
+        plan = [min(hi, max(lo, float(m))) for m in assumed]
+        while len(plan) > 1 and sum(plan) > remaining * 1.33:
+            plan.pop(-2 if len(plan) > 2 else -1)
+        while sum(plan) < remaining * 0.75:
+            plan.insert(-1, typical)
+    else:
+        count = max(1, round(remaining / typical))
+        plan, at = [], elapsed
+        for i in range(count):
+            p = (at + typical / 2) / total            # where in the set this track falls
+            shape = 0.8 if p < 0.15 else 1.15 if 0.35 <= p <= 0.8 else 0.9 if i == count - 1 else 1.0
+            plan.append(typical * shape)
+            at += typical
+    scale = remaining / sum(plan)
+    plan = [min(hi, max(lo, m * scale)) for m in plan]
+    plan[-1] = min(hi, max(lo, remaining - sum(plan[:-1])))
+    return [round(m, 1) for m in plan]
+
+# The section types of real songs (eval/song_forms.py folds their labels into
+# these): lift a pre-chorus, tag a post-chorus, interlude an instrumental or
+# solo, break a few bars with the kick and bass out.
+SECTION_TYPES = ["intro", "verse", "lift", "build", "chorus", "tag", "bridge", "interlude", "break", "breakdown",
+                 "outro"]
 
 # Default arc: (section, energy, bars multiplier in progression periods)
 DEFAULT_ARC = [
@@ -250,6 +296,7 @@ class Piece:
     parts: dict[str, dict] = field(default_factory=dict)
     motion: dict[str, dict] = field(default_factory=dict)
     voicing: str = ""   # a name in livecode.TRANCE_VOICINGS (club styles); "" = the style's default
+    minutes: float = 0.0  # the length the Director planned for it (its set plan); 0 = the default
     subgenre: str = ""  # a name in blocks.SUBGENRES[style] (its tempo, kit, sounds, voicings)
     surprise: str = ""  # one rule-break from music/surprises.py, or "" (most tracks)
     # The kind of tune the hook is (music/hooks.py): "" a hook, "hymn" a
@@ -353,9 +400,10 @@ def _title(rng: random.Random, moods: set[str]) -> str:
 def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | None = None,
                avoid_progressions: set[str] | None = None, target_minutes: float = 12.0,
                disliked: set[str] | None = None, theme: str | None = None,
-               recent_sounds: list[dict] | None = None) -> Piece:
+               recent_sounds: list[dict] | None = None, disliked_sounds: set[str] | None = None) -> Piece:
     """avoid_progressions: soft preference (e.g. recently used);
-    disliked: excluded whenever any alternative exists."""
+    disliked: excluded whenever any alternative exists (progressions; the
+    host's disliked sounds likewise)."""
     disliked = set(disliked or ())
     rotation = [name for name, cfg in STYLES.items() if cfg.get("rotate", True)]
     style = style if style in STYLES else (previous.style if previous and rng.random() < 0.6 else rng.choice(rotation))
@@ -379,8 +427,8 @@ def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | N
     from .blocks import SUBGENRES
 
     # A subgenre (not the previous track's) brings its own tempo range.
-    variants = [v for v in SUBGENRES.get(style, {}) if not previous or v != previous.subgenre] or list(
-        SUBGENRES.get(style, {}))
+    rotation = [v for v, cfg_ in SUBGENRES.get(style, {}).items() if cfg_.get("rotate", True)]
+    variants = [v for v in rotation if not previous or v != previous.subgenre] or rotation
     variant = rng.choice(variants) if variants else ""
     if subgenre_from_theme(style, theme) in SUBGENRES.get(style, {}):
         variant = subgenre_from_theme(style, theme)        # the theme asks for it, every track
@@ -418,7 +466,8 @@ def plan_piece(rng: random.Random, previous: Piece | None = None, style: str | N
                                        avoid=[s.name for s in previous.sections] if previous else None)
     piece.melody = choose_melody(theme, random.Random(piece.seed))
     piece.chromatic = choose_chromatic(theme, random.Random(piece.seed + 1), previous)
-    _add_variety(piece, rng, avoid | disliked, previous, theme=theme, recent_sounds=recent_sounds)
+    _add_variety(piece, rng, avoid | disliked, previous, theme=theme, recent_sounds=recent_sounds,
+                 disliked_sounds=disliked_sounds)
     return piece
 
 
@@ -430,7 +479,7 @@ _NINTH_CHANCE = {"lofi": 0.6, "deephouse": 0.7, "downtempo": 0.5, "ambient": 0.5
 
 def _add_variety(piece: Piece, rng: random.Random, avoid: set[str] | None = None,
                  previous: Piece | None = None, theme: str | None = None,
-                 recent_sounds: list[dict] | None = None) -> None:
+                 recent_sounds: list[dict] | None = None, disliked_sounds: set[str] | None = None) -> None:
     """Give choruses and breakdowns their own progressions, pick a chord
     colour, and sometimes lift the final chorus a whole step."""
     mode = Key.parse(piece.key).mode
@@ -444,9 +493,17 @@ def _add_variety(piece: Piece, rng: random.Random, avoid: set[str] | None = None
         piece.section_progressions["bridge"] = piece.section_progressions["breakdown"]
     piece.color = "ninths" if rng.random() < _NINTH_CHANCE.get(piece.style, 0.5) else "sevenths"
     choose_instruments(piece, rng, previous)
-    choose_sounds(piece, rng, previous, theme=theme, recent=recent_sounds)
+    choose_sounds(piece, rng, previous, theme=theme, recent=recent_sounds, disliked=disliked_sounds)
     # A hook written for the progression (music/hooks.py), not one the last track had.
     write_piece_hook(piece, rng, [previous.hook["pattern"]] if previous is not None and previous.hook else None)
+    # A subgenre whose hook is a riff (ambient house): a cycle on the arp instead of a sung phrase.
+    from .blocks import subgenre as _subgenre
+
+    if _subgenre(piece.style, piece.subgenre).get("hook") == "riff":
+        from .hooks import write_riff
+
+        recent = [previous.hook.get("pattern", "")] if previous is not None and previous.hook else None
+        piece.hook = {"role": "arp", "kind": "cycle", "pattern": write_riff(rng, recent)}
     if piece.style in _LIFT_STYLES and rng.random() < 0.5:
         apply_key_lift(piece)
 
@@ -479,6 +536,32 @@ STYLE_SOUNDS = {
                 "arp": ["ys_glass", "ys_vibes", "ys_nylon", "ys_harp", "ys_kalimba"]},
 }
 
+
+# The real instruments (blocks.REAL_SOUNDS) each style's built-in planner may
+# pick, where they're installed (the frame below drops the others).
+_REAL_FOR_STYLE = {
+    "trance": {"chords": ["ys_grandpiano", "ys_violins"], "keys": ["ys_grandpiano", "ys_glockenspiel"],
+               "lead": ["ys_grandpiano", "ys_violins", "ys_concertflute", "ys_oboe", "ys_violin", "ys_femalevox"],
+               "arp": ["ys_pizz", "ys_glockenspiel", "ys_dantranh", "ys_voxchop"]},
+    "hardcore": {"chords": ["ys_grandpiano"], "lead": ["ys_grandpiano", "ys_violins", "ys_femalevox"],
+                 "arp": ["ys_voxchop"]},
+    "darkwave": {"chords": ["ys_cellos", "ys_violins"], "lead": ["ys_cellos", "ys_violin", "ys_horn"],
+                 "keys": ["ys_chimes", "ys_glockenspiel"], "arp": ["ys_glockenspiel"]},
+    "deephouse": {"chords": ["ys_grandpiano"], "keys": ["ys_grandpiano", "ys_mbira", "ys_pizz"],
+                  "lead": ["ys_grandpiano", "ys_clarinet", "ys_violins", "ys_femalevox"],
+                  "arp": ["ys_mbira", "ys_pizz", "ys_voxchop"]},
+    "lofi": {"lead": ["ys_clarinet", "ys_harmonica", "ys_grandpiano", "ys_violin"],
+             "keys": ["ys_grandpiano", "ys_glockenspiel"], "arp": ["ys_pizz", "ys_mbira"]},
+    "downtempo": {"lead": ["ys_oboe", "ys_clarinet", "ys_cellos", "ys_dantranh", "ys_ocarina", "ys_harmonica",
+                           "ys_femalevox"],
+                  "keys": ["ys_grandpiano", "ys_mbira"], "arp": ["ys_dantranh", "ys_mbira", "ys_pizz"]},
+    "ambient": {"lead": ["ys_concertflute", "ys_ocarina", "ys_violin", "ys_horn", "ys_grandpiano", "ys_femalevox"],
+                "keys": ["ys_grandpiano", "ys_chimes", "ys_glockenspiel"], "arp": ["ys_glockenspiel", "ys_dantranh"]},
+}
+for _style, _roles in _REAL_FOR_STYLE.items():
+    STYLE_SOUNDS[_style] = {r: list(o) for r, o in STYLE_SOUNDS.get(_style, {}).items()}
+    for _role, _options in _roles.items():
+        STYLE_SOUNDS[_style][_role] = [*STYLE_SOUNDS[_style].get(_role, []), *_options]
 
 if config.HYPERSAW:
     # Hardcore's lead: the saw lead (done properly) and the hoover as often as the square.
@@ -602,13 +685,14 @@ def theme_moods(theme: str | None) -> set[str]:
 
 
 def choose_sounds(piece: Piece, rng: random.Random, previous: Piece | None = None, theme: str | None = None,
-                  recent: list[dict] | None = None) -> None:
+                  recent: list[dict] | None = None, disliked: set[str] | None = None) -> None:
     """Pick the live engine's sound per part for this piece. The style and
     subgenre give the frame (the sounds on offer, the subgenre's first); the
     theme picks among them by the sounds' character, and reaches for another
     of the part's sounds only when the frame has none in its mood. No part
     repeats the previous track's sound, and the whole set is never one of
-    the last tracks' sets, where there's a choice."""
+    the last tracks' sets, where there's a choice. A sound the host
+    disliked (taste.disliked_sounds) plays only when the part has no other."""
     from .blocks import SOUND_CHARACTER, subgenre, subgenre_sounds
 
     piece.sounds = {}
@@ -618,6 +702,7 @@ def choose_sounds(piece: Piece, rng: random.Random, previous: Piece | None = Non
         piece.voicing = rng.choice(voicings)
     moods = theme_moods(theme)
     style_sounds = STYLE_SOUNDS.get(piece.style, {})
+    avoid = set(disliked or ())
 
     def fits(synth: str) -> bool:
         return bool(moods & set(SOUND_CHARACTER.get(synth, ())))
@@ -628,19 +713,21 @@ def choose_sounds(piece: Piece, rng: random.Random, previous: Piece | None = Non
     # guitar) on most tracks, even two in a row.
     signature = bool(preferred) and subgenre_from_theme(piece.style, theme) == piece.subgenre
     for role in dict.fromkeys([*style_sounds, *preferred]):
-        if signature and preferred.get(role) and rng.random() < 0.65:
+        if signature and preferred.get(role) and preferred[role][0] not in avoid and rng.random() < 0.65:
             choices[role] = preferred[role][:1]
             piece.sounds[role] = preferred[role][0]
             continue
         frame = [o for o in dict.fromkeys([*(preferred.get(role) or []), *style_sounds.get(role, [])])
                  if o in LIVE_SOUNDS.get(role, {})] or preferred.get(role) or style_sounds.get(role, [])
+        frame = [o for o in frame if o not in avoid] or frame
         if previous is not None and previous.sounds.get(role) and len(frame) > 1:
             frame = [o for o in frame if o != previous.sounds[role]] or frame
         themed = [o for o in frame if fits(o)]
         if moods and not themed and role in ("lead", "arp"):
             # Nothing in the theme's mood here: any lead or arp sound that is
             # (a melodic line works with any voice; chord stabs don't).
-            themed = [o for o in LIVE_SOUNDS.get(role, {}) if fits(o)
+            themed = [o for o in LIVE_SOUNDS.get(role, {}) if fits(o) and sound_fits_style(piece.style, o)
+                      and o not in avoid
                       and (previous is None or o != previous.sounds.get(role))]
         if themed and rng.random() < 0.85:
             choices[role] = themed
@@ -657,7 +744,7 @@ def choose_sounds(piece: Piece, rng: random.Random, previous: Piece | None = Non
                    for alt in (choices[role] if pool == "theme" else
                                [o for o in LIVE_SOUNDS.get(role, {}) if o in style_sounds.get(role, [])
                                 or o in (preferred.get(role) or [])])
-                   if alt != piece.sounds[role]]
+                   if alt != piece.sounds[role] and alt not in avoid]
         for role, alt in options:
             if not any({**piece.sounds, role: alt} == r for r in recent_sets):
                 piece.sounds[role] = alt
@@ -694,7 +781,8 @@ def apply_key_lift(piece: Piece, semitones: int = 2) -> bool:
 
 
 # The live engine's arc (music/performer.py), in the order it plays.
-LIVE_PHASES = ("build", "groove", "breakdown", "rebuild", "groove2", "outro")
+LIVE_PHASES = ("build", "groove", "lift", "breakdown", "rebuild", "groove2", "tag", "bridge", "interlude", "break",
+               "outro")
 # Build and rebuild end once their lines are in; their bars are only a limit,
 # and never shorter than this (the performer needs a few edits for them).
 MIN_BUILD_BARS = 16
@@ -726,8 +814,10 @@ def arc_summary(plan) -> str:
 
 
 # How the Director's sections become live phases (music/performer.py).
-_SECTION_PHASE = {"intro": "build", "verse": "groove", "bridge": "groove", "build": "groove",
-                  "chorus": "groove2", "breakdown": "breakdown", "outro": "outro"}
+_SECTION_PHASE = {"intro": "build", "verse": "groove", "build": "groove", "chorus": "groove2",
+                  "breakdown": "breakdown", "outro": "outro",
+                  # Real songs' other sections (music/forms.py), each played its own way (performer.PHASE_HELP).
+                  "lift": "lift", "tag": "tag", "bridge": "bridge", "interlude": "interlude", "break": "break"}
 
 
 def live_plan(piece: Piece) -> list[list]:
@@ -746,8 +836,8 @@ def live_plan(piece: Piece) -> list[list]:
             phase = "build"
         elif phase == "build":
             phase = "groove"
-        if section.name == "build" and steps and steps[-1][0] == "breakdown":
-            phase = "rebuild"
+        if section.name in ("build", "lift") and steps and steps[-1][0] == "breakdown":
+            phase = "rebuild"                # (a lift after a breakdown is its rebuild)
         if steps and steps[-1][0] == phase and phase != "build":
             steps[-1][1] += section.bars
         else:
@@ -759,7 +849,8 @@ def live_plan(piece: Piece) -> list[list]:
         if phase == "breakdown" and after not in ("rebuild", "outro", None):
             out.append(["rebuild", MIN_BUILD_BARS])
     if out[-1][0] != "outro":
-        out.append(["outro", 16])
+        # A song that ends on its chorus: a short outro, the engine's fade (a cold end).
+        out.append(["outro", 8])
     for step in out:
         step[1] = max(MIN_BUILD_BARS if step[0] in ("build", "rebuild") else 8, int(step[1]))
     return out
@@ -782,10 +873,17 @@ ARC_SHAPES = [
 
 
 def _default_sections(piece: Piece, target_minutes: float, avoid: list[str] | None = None) -> list[Section]:
-    """The built-in planner's shape: the style's own arc or one of
-    ARC_SHAPES, chosen per piece and never the shape in `avoid` (the
-    previous piece's section names), stretched to about target_minutes."""
+    """The built-in planner's shape: a real song's form for the style's
+    genre (music/forms.py), else the style's own arc or one of ARC_SHAPES,
+    never the shape in `avoid` (the previous piece's section names),
+    stretched to about target_minutes."""
     period = piece.period
+    from . import forms
+
+    real = forms.suggest(piece.style, random.Random(piece.seed), target_minutes * 60 * piece.cps, period,
+                         avoid=[" ".join(avoid)] if avoid else None)
+    if real:
+        return [Section(name, bars=bars, energy=energy) for name, bars, energy in real]
     shapes = [STYLES.get(piece.style, {}).get("arc", DEFAULT_ARC)] + ARC_SHAPES
     fresh = [a for a in shapes if [name for name, _, _ in a] != list(avoid or [])] or shapes
     arc = random.Random(piece.seed).choice(fresh)
@@ -860,7 +958,10 @@ def _part_problem(role: str, kind: str, pattern: str) -> str | None:
 # Names the Director may use for the parts of the live arc.
 _CUE_PHASES = {"build": "build", "intro": "build", "groove": "groove", "verse": "groove", "breakdown": "breakdown",
                "rebuild": "rebuild", "build up": "rebuild", "buildup": "rebuild", "peak": "groove2",
-               "groove2": "groove2", "drop": "groove2", "chorus": "groove2", "outro": "outro"}
+               "groove2": "groove2", "drop": "groove2", "chorus": "groove2", "outro": "outro",
+               "lift": "lift", "pre-chorus": "lift", "prechorus": "lift", "tag": "tag", "post-chorus": "tag",
+               "postchorus": "tag", "bridge": "bridge", "interlude": "interlude", "instrumental": "interlude",
+               "solo": "interlude", "break": "break"}
 MAX_CUES_PER_PHASE = 5
 
 
@@ -916,7 +1017,8 @@ def validate_cue(raw, style: str) -> tuple[dict | None, str]:
     sounds, knobs and wrappers. A detail that doesn't fit is dropped (noted)
     and the cue keeps its words for the Performer to interpret."""
     from .blocks import BLOCKS, LIVE_SOUNDS, sketch_kinds
-    from .livecode import ALL_WRAPPERS, FX_RANGES, PF_RANGES, RETIRED_WRAPPERS, ROLE_FX, EditError, _check_number
+    from .livecode import (ALL_WRAPPERS, FX_RANGES, PF_RANGES, RETIRED_WRAPPERS, ROLE_FX, EditError, _check_number,
+                           fx_range)
 
     if isinstance(raw, str):
         say = " ".join(raw.split())[:90]
@@ -949,7 +1051,7 @@ def validate_cue(raw, style: str) -> tuple[dict | None, str]:
         else:
             problems.append(f"no {part} block {raw['block']!r}")
     if raw.get("sound") and do in ("start", "sound"):
-        if raw["sound"] in LIVE_SOUNDS.get(part, {}):
+        if raw["sound"] in LIVE_SOUNDS.get(part, {}) and sound_fits_style(style, raw["sound"]):
             cue["sound"] = raw["sound"]
         else:
             problems.append(f"{raw['sound']!r} isn't a {part} sound")
@@ -981,7 +1083,8 @@ def validate_cue(raw, style: str) -> tuple[dict | None, str]:
                 cue["slot"] = str(raw["slot"])
     if do == "knob":
         knob, to = str(raw.get("knob", "")).strip().lower(), raw.get("to")
-        limits = FX_RANGES.get(knob) if knob in ROLE_FX.get(part, ()) else PF_RANGES.get(knob)
+        limits = (fx_range(part, knob) if knob in FX_RANGES else None) if knob in ROLE_FX.get(part, ()) \
+            else PF_RANGES.get(knob)
         try:
             if not limits or knob == "gain":
                 raise EditError(f"{knob!r} isn't a {part} knob")
@@ -1435,7 +1538,7 @@ def validate_piece(data: dict, fallback: Piece, target_minutes: float = 12.0) ->
     raw_sounds = data.get("sounds")
     if isinstance(raw_sounds, dict):
         for role, synth in raw_sounds.items():
-            if role in LIVE_SOUNDS and synth in LIVE_SOUNDS[role]:
+            if role in LIVE_SOUNDS and synth in LIVE_SOUNDS[role] and sound_fits_style(piece.style, synth):
                 piece.sounds[role] = synth
             else:
                 notes.append(f"sound {role}={synth!r} rejected")

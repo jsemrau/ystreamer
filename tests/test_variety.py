@@ -58,7 +58,7 @@ def test_engine_uses_section_progression_and_lifted_key():
     chorus = [i for i, s in enumerate(piece.sections) if s.name == "chorus"]
     first = engine.harmony_for(piece, chorus[0])
     last = engine.harmony_for(piece, chorus[-1])
-    verse = engine.harmony_for(piece, 1)
+    verse = engine.harmony_for(piece, next(i for i, s in enumerate(piece.sections) if s.name == "verse"))
     assert [c.degree for c in first.chords] == list(PROGRESSIONS_BY_NAME[piece.progression_for("chorus")].degrees)
     assert [c.degree for c in verse.chords] == list(PROGRESSIONS_BY_NAME[piece.progression].degrees)
     assert last.key.root == (Key.parse(piece.key).root + 2) % 12

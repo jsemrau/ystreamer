@@ -14,6 +14,8 @@ logs/
 
 # Engine runtime files (state, overlays, feedback)
 runtime/
+# Tabs and scores for eval/tab_corpus.py: other people's songs, never committed
+tabs/
 .pytest_cache/
 
 # Downloaded Piper voices

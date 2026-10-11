@@ -129,8 +129,11 @@ def test_live_blocks_enter_at_their_roles_level():
                 assert abs(level - target) < 0.5, (style, block.name, synth, level, target)
 
 
-def test_beds_make_room_when_the_front_is_busy():
+def test_beds_make_room_when_the_front_is_busy(monkeypatch):
+    import config
     from music.blocks import find_block
+
+    monkeypatch.setattr(config, "HUMANIZE", False)       # (the mix's gain only, not the human feel)
     from music.livecode import Edit, Program, Track, apply_edit, changed_statements
 
     program = Program(Track("t", "piano", "C major", 70, [0, 5, 3, 4], 2))
@@ -268,3 +271,35 @@ def test_every_oscillator_sits_on_a_harmonic_of_its_note():
             r = float(ratio)
             harmonic = max(round(r * 2) / 2, 0.5)
             assert abs(1200 * math.log2(r / harmonic)) < 30, (name, r)
+
+
+def test_hands_not_a_grid(monkeypatch):
+    """Hats vary most, chords a little, the kick and bass stay on the grid
+    (livecode.HUMANIZE); YS_HUMANIZE=0 plays it exactly."""
+    import sys
+
+    import config
+    sys.path.insert(0, "tests")
+    from test_livecode import _program_with
+
+    program = _program_with("trance", "trance_beat", "trance_hats", "rolling_bass", "piano_stabs")
+    assert program.statement("perc").endswith("|* gain (range 0.9 1 rand) # nudge (range 0 0.006 rand)")
+    assert "rand" in program.statement("chords")
+    assert "rand" not in program.statement("beat") and "rand" not in program.statement("bass")
+    monkeypatch.setattr(config, "HUMANIZE", False)
+    assert "rand" not in program.statement("perc")
+
+
+def test_voices_are_wide_but_the_low_end_mono():
+    """Chords, pads, keys and leads go through the stereo ensemble (~ysWide),
+    the kick, bass and acid don't."""
+    import re
+
+    import config
+    defs = open(config.SYNTHDEFS_FILE).read()
+    blocks = dict(re.findall(r"SynthDef\(\\(\w+), \{(.*?)\n\}\)\.add;", defs, flags=re.S))
+    for wide in ("ys_softpad", "ys_housepiano", "ys_epiano", "ys_glass", "ys_vox", "ys_angelchoir"):
+        assert "~ysWide.(sig" in blocks[wide], wide
+    for mono in ("ys_kick909", "ys_sub", "ys_tbass", "ys_acid"):
+        assert "~ysWide" not in blocks[mono], mono
+    assert '"YS_WIDTH".getenv' in defs and "HPF.ar(sig, 220)" in defs

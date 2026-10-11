@@ -1,6 +1,7 @@
 """Trance harmony after Switch Angel's strudel-scripts, and the NRG-CP progressions."""
 
 import random
+import re
 
 import pytest
 
@@ -24,7 +25,10 @@ def test_a_trance_voicing_shapes_every_chord_and_the_arps_play_only_its_notes():
     assert track.voicing in TRANCE_VOICINGS.values()
     track.voicing = TRANCE_VOICINGS["open triad"]
     chords = track.harmony()["chords"]
-    assert "[0,4,7,9]" in chords and ",6]" not in chords                      # no added sevenths
+    # Every chord the open-triad shape on its root (no added sevenths).
+    shapes = {tuple(n - int(c.split(",")[0]) for n in map(int, c.split(",")))
+              for c in re.findall(r"\[([-\d,]+)\]", chords)}
+    assert shapes == {(0, 4, 7, 9)}
     arp = track.make(find_block("trance", "pluck_16"), random.Random(0))
     assert arp.patterns["arp"] in arp_sequences(track.voicing).values()
     assert harmony_problem("arp", arp.patterns["arp"]) is None

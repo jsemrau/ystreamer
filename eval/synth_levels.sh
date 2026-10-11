@@ -34,7 +34,7 @@ cat > "$OUT/render.scd" <<SC
   [\ys_coldstrings, [50, 57, 62, 65], 4], [\ys_gatesnare, [60], 0.3],
   [\ys_wavelead, [69], 1], [\ys_wavesynth, [69], 0.5], [\ys_pulselead, [69], 1],
   [\ys_sawlead, [69], 1], [\ys_sawpad, [62], 4], [\ys_sawpad, [50, 57, 62, 65], 4], [\ys_softpad, [50, 57, 62, 65], 4],
-  [\ys_flute, [74], 1], [\ys_marimba, [74], 1], [\ys_sitar, [69], 1], [\ys_vox, [69], 1], [\ys_fmlead, [69], 1],
+  [\ys_flute, [74], 1], [\ys_marimba, [74], 1], [\ys_sitar, [69], 1], [\ys_vox, [69], 1], [\ys_revvox, [69], 3], [\ys_fmlead, [69], 1],
   [\ys_hoover, [57], 0.5], [\ys_m1organ, [57, 60, 64, 67], 0.3], [\ys_nylon, [64], 1], [\ys_melodica, [69], 1],
   [\ys_vibes, [72], 1], [\ys_trumpet, [67], 1], [\ys_harpsichord, [69], 1],
   [\ys_sax, [67], 1], [\ys_angelchoir, [69], 2], [\ys_angelchoir, [57, 64, 69], 3], [\ys_chipvox, [76], 0.3],

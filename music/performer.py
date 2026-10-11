@@ -29,7 +29,7 @@ from .livecode import (ALL_WRAPPERS, BASS_WRAPPERS, CHOICE_SLOTS, CLUB_DRUM_WRAP
                        EDIT_OPS, FX_RANGES,
                        FX_NOTES, LEAD_WRAPPERS, LOCKED_SLOTS, MELODIC_WRAPPERS, PF_RANGES, ROLE_CHANNELS, ROLE_FX,
                        NOTE_BUDGET, VOCAL_WRAPPERS, WRAPPER_NOTES, notes_per_bar, Edit, EditError,
-                       Program, Track, allowed_wrappers, apply_edit, complexity, line_controls)
+                       Program, Track, allowed_wrappers, apply_edit, complexity, fx_range, line_controls)
 from .narrator import clean_narration
 from .plan import (DEFAULT_LIVE_PLAN, LIVE_PIECE_MINUTES, arc_summary, fit_live_plan, live_plan, plan_piece,
                    sounds_summary)
@@ -47,7 +47,7 @@ ROLE_ORDER = {
     "hardcore": ["beat", "perc", "bass", "acid", "lead", "arp", "chords", "texture"],
 }
 
-PHASES = ("build", "groove", "breakdown", "rebuild", "groove2", "outro")
+PHASES = ("build", "groove", "lift", "breakdown", "rebuild", "groove2", "tag", "bridge", "interlude", "break", "outro")
 
 
 @dataclass
@@ -74,6 +74,10 @@ class SetState:
     # fake drop the plan step where it falls back.
     surprise_done: list = field(default_factory=list)
     fake_step: int = -1
+    # The parts the current section rests (the hook in a bridge, the kick and
+    # bass in a break): the engine muted them as it began and brings them back
+    # when it ends (live_engine._section_turn); nothing else brings them back.
+    held_for_section: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -90,6 +94,8 @@ class SetState:
 
 
 PHASE_LABELS = {"groove2": "peak"}
+# The phases for real songs' other sections (plan._SECTION_PHASE).
+SECTION_PHASES = ("lift", "tag", "bridge", "interlude", "break")
 
 # The vocal (chops or an acapella) is the payoff: it comes in for the
 # breakdown, a voice in the space the kick leaves, and sings through the peak.
@@ -145,6 +151,12 @@ def builtin_cues(piece) -> dict[str, list[str]]:
         "rebuild": [{"do": "bring back", "part": "bass", "say": "Bring the bass back"},
                     {"do": "bring back", "part": "beat", "say": "Bring the kick back"}],
         "groove2": peak,
+        # Real songs' other sections, when the form has them (music/forms.py).
+        "lift": [{"do": "knob", "part": "chords", "knob": "lpf", "to": [1500, 6000, 8],
+                  "say": "Lift: open the chords into the peak"}],
+        "tag": [{"say": f"Tag: the {hook} hook's answer, repeated, bare"}],
+        "bridge": [{"say": "The bridge: another line carries a new tune over the new chords"}],
+        "interlude": [{"say": "Instrumental: feature the arp or acid, its pattern longer"}],
         "outro": [{"do": "stop", "part": hook, "say": f"Take out the {hook}"},
                   {"do": "stop", "part": "bass", "say": "Drop the bass"}],
     }
@@ -172,6 +184,8 @@ class Performer:
         self._last_piece = None
         self._recent_vocals: deque[str] = deque(maxlen=3)   # the last acapellas sung
         self.track_narration = ""   # the Director's spoken line for the current track
+        self._recent_kits: deque[str] = deque(maxlen=3)   # the drum kits of the last tracks (music/kits.py)
+        self._recent_basses: deque[str] = deque(maxlen=2)   # and their bass sounds
         self.track_mood = ""
         # Called as on_surprise(name) when one of the track's surprises fires
         # (the engine records it).
@@ -337,8 +351,8 @@ class Performer:
         # breakdown may take its own chords (the engine re-fits the hook to
         # them, hooks.refit); the peak is the main progression, so the hook
         # returns there exactly as written.
-        for part, section in (() if chromatic else (("breakdown", "breakdown"),) if key_hook
-                              else (("breakdown", "breakdown"), ("peak", "chorus"))):
+        for part, section in (() if chromatic else (("breakdown", "breakdown"), ("bridge", "bridge")) if key_hook
+                              else (("breakdown", "breakdown"), ("bridge", "bridge"), ("peak", "chorus"))):
             name = piece.section_progressions.get(section)
             other = progression_named(name, mode) if name and name != main.name else None
             if other is not None:
@@ -349,7 +363,9 @@ class Performer:
         cues = {p: cs for p, cs in cues.items() if cs} or builtin_cues(piece)
         if vocal or any(b.role == "vocal" for b in blocks_for(self.style)):
             cues = with_vocal_cue(cues)
-        plan = fit_live_plan(live_plan(piece), piece.cps, getattr(self.director, "target_minutes", LIVE_PIECE_MINUTES))
+        # Fitted to the length planned for this track (the set plan), else the usual one.
+        plan = fit_live_plan(live_plan(piece), piece.cps,
+                             piece.minutes or getattr(self.director, "target_minutes", LIVE_PIECE_MINUTES))
         fake_step = -1
         if piece.surprise == "fake_drop":
             # 8 bars of peak, back into a short breakdown, then the real drop.
@@ -360,6 +376,7 @@ class Performer:
         if piece.surprise == "tempo_lift":
             cues["rebuild"] = [{"do": "tempo", "to": piece.bpm + 2, "say": "Faster: +2 BPM"},
                                {"do": "tempo", "to": piece.bpm + 4, "say": "Faster still: +4 BPM"}] + cues.get("rebuild", [])
+        self._pace = dict(subgenre(self.style, piece.subgenre).get("pace", {}))
         self.state = SetState(tracks_played=self.state.tracks_played + (1 if previous else 0),
                               target_lines=self.rng.randint(max(3, self.settings["max_lines"] - 1),
                                                             self.settings["max_lines"]),
@@ -375,8 +392,9 @@ class Performer:
 
             rel = piece.hook.get("relative") == "key"
             self.log(f"🎣 Hook ({piece.hook['role']}{', against the key' if rel else ''}): {piece.hook['pattern']}"
-                     + (f" · {m}" if (m := _melody(piece.hook["pattern"], degrees if rel else None,
-                                                    piece.cycles_per_chord)) else ""))
+                     + (f" · {m}" if piece.hook.get("kind") != "cycle"      # (a riff isn't scored as a melody)
+                        and (m := _melody(piece.hook["pattern"], degrees if rel else None,
+                                          piece.cycles_per_chord)) else ""))
         if piece.cues:
             self.log("🎬 Cues: " + " | ".join(f"{PHASE_LABELS.get(p, p)}: " + "; ".join(
                 c.get("say", "") if isinstance(c, dict) else str(c) for c in cues) for p, cues in piece.cues.items()))
@@ -400,11 +418,33 @@ class Performer:
                                 degrees=degrees, bars_per_chord=piece.cycles_per_chord, progressions=progressions,
                                 sounds=dict(piece.sounds), hook=dict(piece.hook), idea=piece.idea,
                                 parts=dict(piece.parts), motion=dict(piece.motion), subgenre=piece.subgenre,
-                                kit=dict(subgenre(self.style, piece.subgenre).get("kit", {})),
+                                kit=self._kit(piece),
                                 surprise=piece.surprise, melody=piece.melody, chromatic=chromatic,
                                 vocal=vocal or {})
         self._hook_last = None
         return self._track_now
+
+    def _kit(self, piece) -> dict:
+        """The subgenre's patterns (hats, claps, bass rhythms) and this track's
+        drum kit (music/kits.py): none of the last three tracks'."""
+        from . import kits
+
+        kit = dict(subgenre(self.style, piece.subgenre).get("kit", {}))
+        chosen = kits.pick(self.style, self.rng, avoid=list(self._recent_kits))
+        if chosen:
+            kit["drums"] = chosen["bank"]
+            self._recent_kits.append(chosen["name"])
+        bass = kits.pick_bass(self.style, self.rng, avoid=list(self._recent_basses))
+        if bass:
+            kit["bass"] = bass
+            self._recent_basses.append(bass)
+        if chosen or bass:
+            from . import journal
+
+            journal.write("kit", piece.title, drums=kit.get("drums", ""), bass=bass or "")
+            self.log(f"🥁 Drum kit: {chosen['name'] if chosen else 'the style default'} · bass: "
+                     f"{bass or 'the style default'}")
+        return kit
 
     def _choose_acapella(self, piece) -> dict | None:
         """Now and then a licensed acapella (music/vocals.py) for the track:
@@ -432,18 +472,21 @@ class Performer:
 
     # Which progression plays in each phase of the arc.
     HARMONY_PARTS = {"build": "main", "groove": "main", "breakdown": "breakdown", "rebuild": "breakdown",
-                     "groove2": "peak", "outro": "main"}
+                     "groove2": "peak", "outro": "main", "lift": "main", "tag": "peak", "bridge": "bridge",
+                     "interlude": "main", "break": "main"}
 
     # Share of the style's peak complexity each phase aims for.
-    COMPLEXITY_SHARE = {"build": 0.5, "groove": 0.75, "breakdown": 0.4, "rebuild": 0.6, "groove2": 1.0, "outro": 0.3}
+    COMPLEXITY_SHARE = {"build": 0.5, "groove": 0.75, "breakdown": 0.4, "rebuild": 0.6, "groove2": 1.0, "outro": 0.3,
+                        "lift": 0.7, "tag": 0.6, "bridge": 0.65, "interlude": 0.75, "break": 0.35}
 
     def complexity_target(self) -> float:
-        return self.settings.get("peak_complexity", 16) * self.COMPLEXITY_SHARE.get(self.state.phase, 0.75)
+        return (self.settings.get("peak_complexity", 16) * self.COMPLEXITY_SHARE.get(self.state.phase, 0.75)
+                * float(self.pace.get("complexity", 1.0)))
 
     def complexity_note(self, program: Program) -> str:
         """Where the music is against the target for this phase, and what to do about it."""
         now, target = complexity(program), self.complexity_target()
-        if self.state.phase in ("breakdown", "outro"):
+        if self.state.phase in ("breakdown", "outro", "break"):
             advice = "strip back: fewer lines and variations" if now > target + 1 else "hold it sparse and moving"
         elif now < target - 2:
             advice = ("too plain for this phase: add variation to what plays - a wrapper, a knob that moves on "
@@ -871,15 +914,17 @@ class Performer:
         if hook_role in order:
             order.remove(hook_role)
             order.insert(0, hook_role)
-        return [r for r in order if r not in program.lines and not self.melodic_problem(program, r)]
+        out = set(subgenre(self.style, program.track.subgenre).get("without", []))
+        return [r for r in order if r not in program.lines and r not in out and not self.melodic_problem(program, r)]
 
     def _builtin_edit(self, program: Program) -> Edit:
         st, rng = self.state, self.rng
         active = program.active_roles()
         if st.phase == "build":
             if not program.lines:
-                opener = rng.choice(self.settings["openers"])
-                return self._add(program, opener[0])
+                out = set(subgenre(self.style, program.track.subgenre).get("without", []))
+                openers = [o for o in self.settings["openers"] if o[0] not in out] or [["beat"]]
+                return self._add(program, rng.choice(openers)[0])
             missing = self._missing_roles(program)
             # Build up briskly: the track should reach its full, layered
             # groove within a few edits, not after ten minutes of tweaks.
@@ -905,6 +950,9 @@ class Performer:
                 role = removable[-1] if rng.random() < 0.5 else rng.choice(removable)
                 return Edit("remove", role=role, reason=f"take out the {role}")
             return self._tweak(program, calm=True)
+        if st.phase in SECTION_PHASES:
+            # Real songs' other sections: the engine made their change; colour what plays.
+            return self._tweak(program, calm=st.phase in ("tag", "break"))
         # groove / groove2
         missing = self._missing_roles(program)
         if missing and len(active) < self.settings["max_lines"] and rng.random() < 0.35:
@@ -1216,11 +1264,30 @@ class Performer:
             # Far from the density this phase wants: edit twice as often, as
             # a live coder does while building a section up, but never faster
             # than the model can answer.
-            bars = max(1, self.settings["edit_bars"] // 2)
+            bars = max(1, self.edit_interval() // 2)
             if self.model_id and self.latency and self._bar_seconds:
                 bars = max(bars, math.ceil((self.latency / 0.85 + 0.5) / self._bar_seconds))
-            return min(self.settings["edit_bars"], bars)
-        return self.settings["edit_bars"]
+            return min(self.edit_interval(), bars)
+        return self.edit_interval()
+
+    def edit_interval(self) -> int:
+        """Bars between edits: the style's, or the subgenre's own pace
+        (ambient house: 32, it takes its time)."""
+        return int(self.pace.get("edit_bars") or self.settings["edit_bars"])
+
+    @property
+    def pace(self) -> dict:
+        """The track's subgenre pace (blocks.SUBGENRES[..]["pace"]): edit_bars,
+        minutes, calm (gentle moves, the peaks medium), complexity (a share
+        of the density target)."""
+        return getattr(self, "_pace", {}) or {}
+
+    def boldness(self) -> str:
+        """How bold a move this phase wants (BOLDNESS); a calm subgenre's
+        moves are gentle, its peaks medium."""
+        if self.pace.get("calm"):
+            return "medium" if self.state.phase in ("groove2", "bridge", "interlude") else "gentle"
+        return BOLDNESS.get(self.state.phase, "medium")
 
     def _wait_seconds(self, program: Program) -> float:
         """How long to wait for the model: the edit window at the current
@@ -1289,7 +1356,8 @@ class Performer:
         def offer(edit: Edit | None) -> None:
             if edit is None or len(out) >= limit or edit.describe() in seen:
                 return
-            if edit.op in ("add", "unmute") and self.melodic_problem(program, edit.role):
+            if edit.op in ("add", "unmute") and (self.melodic_problem(program, edit.role)
+                                                 or edit.role in st.held_for_section):
                 return
             if edit.op in self.KNOB_OPS and self.must_change_music():
                 return
@@ -1321,7 +1389,7 @@ class Performer:
                 if role != "texture" and len(active) > 1:
                     offer(Edit("remove", role=role, reason=f"take out the {role}"))
         offer(self._builtin_edit(program) if program.lines else None)
-        calm = st.phase in ("breakdown", "outro")
+        calm = st.phase in ("breakdown", "outro", "tag", "break")
         for _ in range(40):
             if len(out) >= limit or not program.lines:
                 break
@@ -1359,7 +1427,7 @@ class Performer:
             "Recent edits (oldest first):", *(self.recent or ["(none yet)"]),
         ])
         questions = {
-            "edit": {"type": "choice", "instructions": JUDGE_CRITERIA[BOLDNESS.get(self.state.phase, "medium")],
+            "edit": {"type": "choice", "instructions": JUDGE_CRITERIA[self.boldness()],
                      "criteria": options},
         }
         asks = (f"choose the next edit for '{program.track.title}' ({self.state.phase}) "
@@ -1390,7 +1458,7 @@ class Performer:
             return None
         if len(candidates) == 1:
             return candidates[0]
-        window = self.settings["edit_bars"] / program.track.cps
+        window = self.edit_interval() / program.track.cps
         try:
             index, why = self._judge(program, candidates, max(4.0, window * 0.85))
         except llm.LLMError as e:
@@ -1497,7 +1565,7 @@ class Performer:
         bold_offered = any(e.boldness == "bold" for e in proposals)
         chosen.judgement = {"options": options, "chosen": pool.index(chosen), "compared": compared,
                             "confidence": info.get("confidence"), "why": why, "boldness": kind,
-                            "phase_boldness": BOLDNESS.get(self.state.phase, "medium"), "bold_offered": bold_offered}
+                            "phase_boldness": self.boldness(), "bold_offered": bold_offered}
         detail.append(f"a {kind} move" if from_llm else "built-in")
         self.log(f"⚖️  Judge chose {'the LLM' if from_llm else 'a built-in'} idea "
                  f"({', '.join(detail + [f'from {len(proposals)} LLM + {len(builtin)} built-in'])}"
@@ -1600,7 +1668,7 @@ class Performer:
             op = "set_pf"            # a synth control sent as an effect (e.g. acidres)
         if op in self.KNOB_OPS and self.must_change_music():
             raise EditError(f"{self._knob_streak} knob turns in a row: change notes, rhythm or lines now")
-        value = _clamp_value(op, name, str(data.get("value", "")).strip(), program)
+        value = _clamp_value(op, name, str(data.get("value", "")).strip(), program, role)
         edit = Edit(op, role=role, name=name, value=value,
                     reason=" ".join(str(data.get("reason", "")).split())[:200],
                     narration=clean_narration(data.get("narration")),
@@ -1614,6 +1682,8 @@ class Performer:
             lo, hi = gain_range(program.lines[role])
             if _NUM_RE.match(edit.value):
                 edit.value = f"{max(lo, min(hi, float(edit.value))):g}"
+        if op in ("unmute", "add") and role in self.state.held_for_section:
+            raise EditError(f"the {role} rests for the {self.state.phase}; it comes back when the section ends")
         if op == "unmute" and self.melodic_problem(program, role):
             raise EditError(self.melodic_problem(program, role))
         if op == "add":
@@ -1621,6 +1691,8 @@ class Performer:
             if block is None:
                 raise EditError(f"unknown block {data.get('block')!r}")
             edit.role = block.role
+            if block.role in subgenre(self.style, program.track.subgenre).get("without", []):
+                raise EditError(f"{program.track.subgenre} {self.style} has no {block.role}")
             edit.line = program.track.make(block, self.rng)
             problem = self.melodic_problem(program, edit.role)
             if problem:
@@ -1681,7 +1753,7 @@ class Performer:
             # first: Claude caches them up to here.
             track=json.dumps(program.track.to_dict()), cache_break=CACHE_BREAK, phase=self.state.phase,
             phase_help=PHASE_HELP[self.state.phase] + (
-                f" This phase wants {BOLDNESS.get(self.state.phase, 'medium')} moves." if proposals else ""),
+                f" This phase wants {self.boldness()} moves." if proposals else ""),
             edits_in_phase=self.state.edits_in_phase,
             complexity=self.complexity_note(program),
             bars_left=round(self.phase_bars_left()), phase_bars=self.step_bars(),
@@ -1760,7 +1832,7 @@ _NUM_RE = re.compile(r"^-?\d+(\.\d+)?$")
 _RANGE_RE = re.compile(r"^\(slow (\d+) \$ range (-?[\d.]+) (-?[\d.]+) (sine|saw|tri)\)$")
 
 
-def _clamp_value(op: str, name: str, value: str, program: Program) -> str:
+def _clamp_value(op: str, name: str, value: str, program: Program, role: str = "") -> str:
     """Pull a slightly-out-of-range number back into range instead of
     throwing the whole edit away (e.g. lpf 12000 -> 9000, a tempo jump of
     +20 -> +12). Anything that isn't a number is left for the validator."""
@@ -1770,7 +1842,7 @@ def _clamp_value(op: str, name: str, value: str, program: Program) -> str:
     ranges = FX_RANGES if op == "set_fx" else PF_RANGES if op == "set_pf" else None
     if not ranges or name not in ranges:
         return value
-    lo, hi = ranges[name]
+    lo, hi = fx_range(role, name) if op == "set_fx" and role else ranges[name]
     if _NUM_RE.match(value):
         return f"{max(lo, min(hi, float(value))):g}"
     m = _RANGE_RE.match(value)
@@ -1784,7 +1856,8 @@ def _clamp_value(op: str, name: str, value: str, program: Program) -> str:
 # criterion. The peaks get the moves people remember; the build, breakdown and
 # outro the ones that keep their shape.
 BOLDNESS = {"build": "gentle", "groove": "bold", "breakdown": "gentle", "rebuild": "medium", "groove2": "bold",
-            "outro": "gentle"}
+            "outro": "gentle", "lift": "medium", "tag": "gentle", "bridge": "bold", "interlude": "bold",
+            "break": "gentle"}
 JUDGE_CRITERIA = {
     "bold": "Which edit should the live coder make next? Choose the most musically interesting one that "
             "still serves the track and its theme: a move a listener would remember (a new answer phrase, "
@@ -1812,6 +1885,19 @@ PHASE_HELP = {
     "groove2": "Second peak: the richest part of the track. Bring in what was missing, intensify, "
                "then start easing off.",
     "outro": "Outro: remove or mute lines one by one; the track is ending.",
+    # Real songs' other sections (music/forms.py). The engine already made the
+    # section's big change as it began (the hook resting, the kick out ...)
+    # and undoes it when the section ends; these moves colour it.
+    "lift": "Lift (pre-chorus): a few bars leading into the peak. Raise the tension without adding parts: "
+            "open a filter steadily, busier hats, a line climbing; save new parts for the peak.",
+    "tag": "Tag (post-chorus): the hook alone over the beat and bass, everything else out. Keep it bare: "
+           "vary the hook's answer or its rhythm, nothing new.",
+    "bridge": "Bridge: new ground. New chords play and the hook rests; let another line carry a tune (keys, "
+              "arp or a counter-line), or a new colour on what plays. Something the track hasn't done yet.",
+    "interlude": "Interlude (instrumental): the hook rests and another line takes the spotlight: the arp or "
+                 "acid featured, its pattern developed, its knobs ridden. No vocal, no hook.",
+    "break": "Break: the kick and bass are out for a few bars. Hold what's left nearly still; they slam "
+             "back when the break ends.",
 }
 
 
@@ -1852,8 +1938,10 @@ ONE JSON object with, in this order:
 - `"reason"`: why this move, and what the listener should hear change
   (one sentence).
 - the operation fields.
-- optionally `"narration"`: one warm sentence for listeners, no numbers or
-  jargon, only for bigger moments.
+- optionally `"narration"`, only for bigger moments: one sentence to the
+  listeners in the first person, saying what you change and why ("I'm
+  pulling the drums out so you can hear the strings breathe"). True to this
+  move; no numbers, no jargon, no mood filler.
 
 ```json
 {"listening": "The acid line has sat at the same brightness for 16 bars and the groove feels static.",
@@ -1928,6 +2016,27 @@ PHASE_EXAMPLES = {
     "outro": [
         "Remove the busiest lines first; keep the texture and one melodic line to the end.",
         "Darken what's left with a lower lpf as it fades out.",
+    ],
+    "lift": [
+        "Open the chords' filter over the lift: (slow 8 $ range 1200 6000 saw).",
+        "Busier hats for the last bars before the peak (\"hh*8\" -> \"hh*16\").",
+        "The arp climbing: its cycle a step higher each bar (<0 1 2 3>).",
+    ],
+    "tag": [
+        "The hook's last bar, repeated: the answer becomes the tag.",
+        "Thin the hook to its first notes and a rest.",
+    ],
+    "bridge": [
+        "A counter-line on the keys or arp in the hook's register, a new tune for the new chords.",
+        "The lead in another of its sounds, playing long held notes.",
+        "Half-time feel: the beat sparser for the bridge.",
+    ],
+    "interlude": [
+        "Feature the arp: a new, longer cycle (5 or 7 notes) with more delay.",
+        "Ride the acid filter wide open for the interlude.",
+    ],
+    "break": [
+        "More room on what's left, a slower filter: the space is the point.",
     ],
 }
 

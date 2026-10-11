@@ -146,3 +146,16 @@ def test_ducker():
     duck(True)
     duck(False)
     assert sent == [["all (|* gain 0.85)"], ["all id"]]
+
+
+def test_a_track_without_a_spoken_line_says_its_concept():
+    import random
+
+    from music.director import Director
+    from music.plan import plan_piece
+
+    d = Director(None, random.Random(0), style="trance", log=lambda *_: None, target_minutes=5)
+    fallback = plan_piece(random.Random(1), style="trance", target_minutes=5)
+    data = {"recommendation": {"concept": "A bare piano riff alone first, the beat arriving under it like dawn"}}
+    piece, _ = d.review_piece(data, fallback, {"progressions": set(), "presets": set(), "sounds": set()})
+    assert piece.narration == "A bare piano riff alone first, the beat arriving under it like dawn"

@@ -8,9 +8,11 @@
 
 const STAGE_W = 1920, STAGE_H = 1080, POLL_MS = 500;
 const PHASE_NAMES = { build: "build", groove: "groove", breakdown: "breakdown", rebuild: "rebuild",
-                      groove2: "peak", outro: "outro" };
+                      groove2: "peak", outro: "outro", lift: "lift", tag: "tag", bridge: "bridge",
+                      interlude: "interlude", break: "break" };
 // What each turning point says on screen.
-const MOMENTS = { breakdown: "BREAKDOWN", rebuild: "BUILD UP", groove2: "DROP", outro: "OUTRO" };
+const MOMENTS = { breakdown: "BREAKDOWN", rebuild: "BUILD UP", groove2: "DROP", outro: "OUTRO",
+                  bridge: "BRIDGE", break: "BREAK" };
 const STYLES = {
   lofi:      { accent: "#ffb870", accent2: "#ff7eb6" },
   downtempo: { accent: "#f5a97f", accent2: "#c6a0f6" },

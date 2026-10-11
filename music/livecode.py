@@ -23,6 +23,8 @@ import copy
 import re
 from dataclasses import asdict, dataclass, field
 
+import config
+
 from .theory import Key
 
 # Channel per role (d1..d8): fixed so the code reads the same way every time.
@@ -172,7 +174,7 @@ def line_controls(line: "LineSpec") -> list[str]:
 ROLE_FX = {
     "beat": ["lpf", "room", "crush", "shape", "gain"], "perc": ["room", "pan", "gain", "lpf", "hpf"],
     "bass": ["lpf", "gain", "legato"], "texture": ["room", "lpf", "gain"],
-    "chords": ["lpf", "room", "size", "gain"], "keys": ["lpf", "room", "delay", "legato", "gain"],
+    "chords": ["lpf", "room", "size", "legato", "gain"], "keys": ["lpf", "room", "delay", "legato", "gain"],
     "lead": ["lpf", "room", "delay", "delayfeedback", "legato", "gain"],
     "acid": ["lpf", "room", "delay", "legato", "gain", "resonance"],
     "arp": ["lpf", "room", "delay", "delayfeedback", "legato", "gain", "pan"],
@@ -180,11 +182,22 @@ ROLE_FX = {
 }
 
 
+# Where a part's range for an effect is narrower than FX_RANGES: the chords
+# may hold their notes into each other (up to 1.5, the held, overlapping feel),
+# but not so long that a trance gate's stabs smear into one wash.
+ROLE_FX_RANGES = {("chords", "legato"): (0.3, 1.5)}
+
+
+def fx_range(role: str, name: str) -> tuple[float, float]:
+    return ROLE_FX_RANGES.get((role, name), FX_RANGES[name])
+
+
 def allowed_wrappers(line: "LineSpec", style: str | None = None) -> list[str]:
     if line.role == "texture":
         return []
     if line.role == "vocal":
-        return ACAPELLA_WRAPPERS if "loop" in line.patterns else VOCAL_WRAPPERS
+        # Reversing (speed -1) suits a spoken chop, not a sung note: a singing line gets the acapella's.
+        return VOCAL_WRAPPERS if "vox" in line.patterns else ACAPELLA_WRAPPERS
     if line.drums:
         return CLUB_DRUM_WRAPPERS if style in CLUB_STYLES else DRUM_WRAPPERS
     if line.role == "bass":
@@ -524,8 +537,17 @@ class Program:
         from .mix import mix_factor
 
         expr = self.lines[role].render(self.track.harmony())
+        if self.lines[role].drums and (self.track.kit or {}).get("drums"):
+            from .kits import apply
+
+            expr = apply(expr, self.track.kit["drums"])           # this track's drum kit (music/kits.py)
         factor = mix_factor(role, self.active_roles())
-        return f"({expr}) |* gain {factor:g}" if factor < 1 else expr
+        expr = f"({expr}) |* gain {factor:g}" if factor < 1 else expr
+        feel = HUMANIZE.get(role) if config.HUMANIZE else None
+        if feel:
+            low, late = feel
+            expr = f"({expr}) |* gain (range {low:g} 1 rand) # nudge (range 0 {late:g} rand)"
+        return expr
 
     def statement(self, role: str) -> str:
         line = self.lines[role]
@@ -703,6 +725,11 @@ def complexity(program: "Program") -> float:
 
 
 _RHYTHM_RE = re.compile(r"^[t~_\s\[\]<>*!\d.]+$")
+# Human feel per part: (lowest gain of a hit, latest a note may come in
+# seconds). Hats and claps vary most, as a drummer's do; the kick and the bass
+# stay on the grid. (SuperDirt's gain is amplitude ~ gain^4: 0.9 is -3.7 dB.)
+HUMANIZE = {"perc": (0.9, 0.006), "chords": (0.965, 0.004), "keys": (0.96, 0.004), "arp": (0.965, 0.003),
+            "lead": (0.97, 0.004), "texture": (0.98, 0.0)}
 # How far each part's degrees may go (7 = an octave above its own register),
 # so lines stay in their lane: no lead or arp climbing into the shrill zone,
 # no bass rising into the chords.
@@ -716,6 +743,27 @@ def range_problem(role: str, value: str) -> str | None:
     out = sorted({d for d in degrees if not lo <= d <= hi})
     if out:
         return f"degrees {out} are outside the {role}'s range ({lo} to {hi}): keep it in its register"
+    return None
+
+
+def octave_lift(wrappers: list[str]) -> int:
+    """Degrees the line's wrappers lift its tune by (7 per octave up)."""
+    return 7 * sum("|+ n 12" in w for w in wrappers)
+
+
+def register_problem(line: "LineSpec", wrappers: list[str], patterns: dict[str, str]) -> str | None:
+    """The top of a tune once its octave-up wrappers lift it: a hook that
+    peaks on degree 8, an octave up, is a shriek (the chipmunk lead at E7)."""
+    lift = octave_lift(wrappers)
+    if not lift or line.drums or line.role not in ROLE_DEGREES:
+        return None
+    hi = ROLE_DEGREES[line.role][1]
+    top = max((int(d) for name, v in patterns.items() if f'struct "{{{name}}}"' not in line.body
+               and name not in LOCKED_SLOTS and name not in CHOICE_SLOTS
+               for d in _DEGREE_RE.findall(v)), default=None)
+    if top is not None and top + lift > hi:
+        return (f"the {line.role} already reaches degree {top}; an octave up puts it at {top + lift}, "
+                f"above its range (to {hi}): too high and shrill")
     return None
 
 
@@ -894,7 +942,7 @@ def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
             raise EditError(f"effect {edit.name!r} not allowed on the {role}")
         line.fx = [pair for pair in line.fx if pair[0] != edit.name]
         if op == "set_fx":
-            lo, hi = gain_range(line) if edit.name == "gain" else FX_RANGES[edit.name]
+            lo, hi = gain_range(line) if edit.name == "gain" else fx_range(role, edit.name)
             line.fx.append([edit.name, _check_number(edit.value, lo, hi)])
         elif edit.name == "gain":
             raise EditError("gain can be adjusted but not removed")
@@ -943,6 +991,9 @@ def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
                 problem = hook_kept_problem(line.hook, value)
                 if problem:
                     raise EditError(problem)
+            problem = register_problem(line, line.wrappers, {**line.patterns, edit.name: value})
+            if problem:
+                raise EditError(problem)
         if line.drums:
             # Drum lines keep their kit: only the sounds the block defines for
             # this slot (any other sample could be pitched, out of key, or
@@ -961,12 +1012,14 @@ def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
     elif op == "set_sound":
         # Another sound from the part's palette (blocks.LIVE_SOUNDS), on a line
         # that plays one of them: the drums and special sounds keep theirs.
-        from .blocks import LIVE_SOUNDS
+        from .blocks import LIVE_SOUNDS, sound_fits_style
 
         palette = LIVE_SOUNDS.get(role, {})
         current = line_synth(line)
         if edit.value not in palette:
             raise EditError(f"{edit.value!r} isn't a {role} sound ({', '.join(palette) or 'none'})")
+        if not sound_fits_style(program.track.style, edit.value):
+            raise EditError(f"{edit.value!r} belongs to another style's sound, not {program.track.style}'s")
         if current not in palette:
             raise EditError(f"the {role} plays {current or 'its own sound'}, which doesn't change")
         if "synth" in line.patterns:
@@ -981,6 +1034,9 @@ def apply_edit(program: Program, edit: Edit, max_lines: int = 7) -> Program:
             raise EditError("already wrapped")
         if len(line.wrappers) >= 3:
             raise EditError("at most 3 wrappers per line")
+        problem = register_problem(line, [*line.wrappers, edit.name], line.patterns)
+        if problem:
+            raise EditError(problem)
         line.wrappers.append(edit.name)
     elif op == "unwrap":
         if edit.name not in line.wrappers:

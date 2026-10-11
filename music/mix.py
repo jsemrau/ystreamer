@@ -25,12 +25,18 @@ SYNTH_LUFS = {
     "ys_chorusbass": -18.6, "ys_coldguitar": -21.5, "ys_coldstrings": -22.0,
     "ys_wavelead": -20.1, "ys_wavesynth": -23.4,
     "ys_sawlead": -20.4, "ys_sawpad": -21.2,
-    "ys_flute": -20.8, "ys_marimba": -24.2, "ys_sitar": -22.9, "ys_vox": -24.3, "ys_fmlead": -19.2,
+    "ys_flute": -20.8, "ys_marimba": -24.2, "ys_sitar": -22.9, "ys_vox": -24.3, "ys_revvox": -24.5, "ys_fmlead": -19.2,
     "ys_hoover": -22.3, "ys_m1organ": -23.6, "ys_nylon": -20.0, "ys_melodica": -22.2, "ys_vibes": -22.6,
     "ys_trumpet": -22.2, "ys_harpsichord": -23.8,
     "ys_sax": -19.1, "ys_angelchoir": -21.6, "ys_chipvox": -21.6, "ys_cafepluck": -21.9,
     # The real harp and kalimba (music/instruments.py), set at -21 by their SynthDefs' gain.
     "ys_harp": -21.0, "ys_kalimba": -20.9,
+    # The Versilian recordings (music/instruments.py), set by their gain
+    # (eval/instrument_levels.py); the trumpet, vibes and marimba at their models' level.
+    "ys_grandpiano": -21.0, "ys_violins": -21.0, "ys_cellos": -21.0, "ys_pizz": -21.0, "ys_violin": -21.0,
+    "ys_concertflute": -21.0, "ys_oboe": -21.0, "ys_clarinet": -21.0, "ys_horn": -21.0, "ys_dantranh": -21.0,
+    "ys_harmonica": -21.0, "ys_ocarina": -21.0, "ys_mbira": -21.0, "ys_glockenspiel": -21.0, "ys_chimes": -21.0,
+    "ys_femalevox": -21.0, "ys_voxchop": -21.0, "ys_crowdchoir": -21.0, "ys_uprightbass": -18.6,
 }
 # Chords measured as chords (3 voices), for synths that are only used that way.
 CHORD_LUFS = {"ys_gatesaw": -18.0, "ys_supersaw": -15.7, "ys_hypersaw": -12.7, "ys_m1organ": -18.0}
@@ -39,7 +45,8 @@ CHORD_DB = 5.6
 
 # Where each role should sit in the mix (LUFS): melody in front, then bass,
 # keys, and beds (pads, strings) and textures well behind.
-ROLE_TARGET_LUFS = {"lead": -21.0, "bass": -19.0, "keys": -25.0, "chords": -29.0, "texture": -34.0}
+# The voice singing the hook sits just above the lead.
+ROLE_TARGET_LUFS = {"lead": -21.0, "vocal": -20.0, "bass": -19.0, "keys": -25.0, "chords": -29.0, "texture": -34.0}
 
 # Synths whose single-note measurement doesn't tell how loud a fast
 # 16th-note stream is; their blocks keep hand-tuned gains.

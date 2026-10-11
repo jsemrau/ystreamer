@@ -11,6 +11,7 @@ Listen to a sound before it goes on air: render short trance demos offline.
     python -m eval.sound_preview --balearic      # the 90s Balearic leads: the Cafe del Mar pluck, the nylon guitar (43_, 44_)
     python -m eval.sound_preview --instruments   # the real instruments (music/instruments.py): piano, sax, harp, kalimba (45_ ... 48_)
     python -m eval.sound_preview --melodies      # four hooks and two hymns from music/hooks.py over the same chords, scored (49_ ... 54_)
+    python -m eval.sound_preview --ambienthouse  # the reversed voice (ys_revvox) alone, in an ambient-house groove, against ys_vox (55_ ... 57_)
 
 Eight bars at 138 BPM in A minor (i-VI-III-VII, two bars a chord): the 909
 kick, the rolling offbeat bass, chords on Switch Angel's trance gate and,
@@ -380,6 +381,64 @@ DARK_DEMOS = {
 }
 
 
+# --ambienthouse: the early-90s ambient house sound (Orbital's Brown Album,
+# The Orb), our own material: 126 BPM in D major, I-iii-vi-IV two bars each,
+# the 909 on the beat, an offbeat sub, held chords, a pluck riff in a dotted
+# echo, and the reversed voice swelling in over each chord and stopping dead
+# at the change (55 the voice alone, 56 in the groove, 57 the same groove
+# with today's ys_vox for comparison).
+AH_BPM = 126
+AH_BAR = 240 / AH_BPM
+_MAJOR = [0, 2, 4, 5, 7, 9, 11]
+AH_CHORDS = [[62, 66, 69, 74], [61, 66, 69, 73], [59, 62, 66, 71], [59, 62, 67, 71]]   # D, F#m, Bm, G
+AH_ROOTS = [38, 42, 35, 43]
+AH_DEGREES = [0, 2, 5, 3]                       # the chords' roots as degrees of D major
+AH_RIFF = [0, None, 4, 7, None, 4, 9, None]     # scale steps from the chord's root, in eighths
+
+
+def ah_pitch(degree: int, base: int = 74) -> int:
+    return base + 12 * (degree // 7) + _MAJOR[degree % 7]
+
+
+def ah_kick() -> list:
+    return [[b * AH_BAR + k * AH_BAR / 4, "ys_kick909", 36, 0.4, {}] for b in range(BARS) for k in range(4)]
+
+
+def ah_sub() -> list:
+    return [[b * AH_BAR + (k * 2 + 1) * AH_BAR / 8, "ys_sub", AH_ROOTS[chord_at(b)], AH_BAR / 8 * 0.8, {}]
+            for b in range(BARS) for k in range(4)]
+
+
+def ah_pad(synth: str = "ys_softpad") -> list:
+    return [[b * AH_BAR, synth, note, AH_BAR * 2 * 1.02, {}] for b in range(0, BARS, 2)
+            for note in AH_CHORDS[chord_at(b)]]
+
+
+def ah_riff(synth: str = "ys_pluck") -> list:
+    events = []
+    for b in range(BARS):
+        root = AH_DEGREES[chord_at(b)]
+        for i, step in enumerate(AH_RIFF):
+            if step is not None:
+                events.append([b * AH_BAR + i * AH_BAR / 8, synth, ah_pitch(root + step) - 12, AH_BAR / 8 * 0.9, {}])
+    return events
+
+
+def ah_voice(synth: str) -> list:
+    """Two notes of each chord, swelling over its two bars and stopping at the change."""
+    return [[b * AH_BAR, synth, note + 12, AH_BAR * 2 - 0.06, {}] for b in range(0, BARS, 2)
+            for note in AH_CHORDS[chord_at(b)][1:3]]
+
+
+AMBIENT_DEMOS = {
+    "55_reversed_voice": {"choir": ah_voice("ys_revvox")},
+    "56_ambient_house": {"kick": ah_kick(), "bass": ah_sub(), "pad": ah_pad(), "echolead": ah_riff(),
+                         "choir": ah_voice("ys_revvox")},
+    "57_ambient_house_vox": {"kick": ah_kick(), "bass": ah_sub(), "pad": ah_pad(), "echolead": ah_riff(),
+                             "choir": ah_voice("ys_vox")},
+}
+
+
 def score(events: list) -> str:
     rows = []
     for i, (t, synth, note, sus, extra) in enumerate(events):
@@ -391,7 +450,7 @@ def score(events: list) -> str:
 
 def main() -> None:
     dark = "--darkwave" in sys.argv[1:]
-    demos, bar = ((DARK_DEMOS, DARK_BAR) if dark else (SAW_DEMOS, BAR) if "--saws" in sys.argv[1:]
+    demos, bar = ((DARK_DEMOS, DARK_BAR) if dark else (AMBIENT_DEMOS, AH_BAR) if "--ambienthouse" in sys.argv[1:] else (SAW_DEMOS, BAR) if "--saws" in sys.argv[1:]
                   else (BELL_DEMOS, BAR) if "--bell" in sys.argv[1:]
                   else (LEAD_DEMOS, BAR) if "--leads" in sys.argv[1:]
                   else (CHOIR_DEMOS, BAR) if "--choir" in sys.argv[1:]
@@ -399,6 +458,14 @@ def main() -> None:
                   else (INSTRUMENT_DEMOS, BAR) if "--instruments" in sys.argv[1:]
                   else (melody_demos(), BAR) if "--melodies" in sys.argv[1:] else (DEMOS, BAR))
     os.makedirs(OUT_DIR, exist_ok=True)
+    tmp = render_stems(demos, bar)
+    for demo, stems in demos.items():
+        print(mix_demo({stem: f"{tmp}/{demo}__{stem}.wav" for stem in stems}, os.path.join(OUT_DIR, f"{demo}.wav")))
+
+
+def render_stems(demos: dict, bar: float, bars: int = BARS) -> str:
+    """Render every demo's stems offline (scsynth NRT, the stream's SynthDefs)
+    into a temporary folder, as <demo>__<stem>.wav; returns the folder."""
     tmp = tempfile.mkdtemp()
     defs = open(os.path.join(config.REPO_DIR, "tidal", "synthdefs.scd")).read()
     # SuperDirt isn't running: its panner becomes a plain one (stereo sounds stay stereo).
@@ -409,7 +476,7 @@ def main() -> None:
                         "if(a.size > 1) { Balance2.ar(a[0], a[1], pan) * env } { Pan2.ar(a[0], pan) * env } };")
     with open(os.path.join(tmp, "defs.scd"), "w") as f:
         f.write(defs)
-    length = BARS * bar + 3
+    length = bars * bar + 3
     # The sampled instruments (music/instruments.py) as the stream loads them
     # (YS_PREVIEW_MODELLED=1: the modelled SynthDefs instead).
     from music.instruments import nrt_sclang
@@ -444,22 +511,24 @@ Routine {{
     errors = [l for l in run.stdout.splitlines() if "ERROR" in l or "FAILURE" in l]
     if errors:
         print("\n".join(errors[:10]))
-    for demo, stems in demos.items():
-        inputs, filters = [], []
-        for n, stem in enumerate(stems):
-            path = f"{tmp}/{demo}__{stem}.wav"
-            if not os.path.exists(path):
-                sys.exit(f"{path} wasn't rendered (see the errors above)")
-            inputs += ["-i", path]
-            wet = f"{WET[stem]}," if stem in WET else ""
-            filters.append(f"[{n}:a]{wet}volume={LEVELS[stem]}dB[s{n}]")
-        mix = "".join(f"[s{n}]" for n in range(len(stems)))
-        graph = ";".join(filters) + f";{mix}amix=inputs={len(stems)}:normalize=0,loudnorm=I=-14:TP=-1.5:LRA=9[out]"
-        out = os.path.join(OUT_DIR, f"{demo}.wav")
-        subprocess.run(["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", graph, "-map", "[out]",
-                        "-ar", "48000", out], check=True)
-        print(out)
+    return tmp
 
+
+def mix_demo(stems: dict, out: str) -> str:
+    """Mix stems ({stem name: wav path}) at the stream's levels, the stems
+    heard in a space (WET) put there, normalised to -14 LUFS."""
+    inputs, filters = [], []
+    for n, (stem, path) in enumerate(stems.items()):
+        if not os.path.exists(path):
+            sys.exit(f"{path} wasn't rendered (see the errors above)")
+        inputs += ["-i", path]
+        wet = f"{WET[stem]}," if stem in WET else ""
+        filters.append(f"[{n}:a]{wet}volume={LEVELS[stem]}dB[s{n}]")
+    mix = "".join(f"[s{n}]" for n in range(len(stems)))
+    graph = ";".join(filters) + f";{mix}amix=inputs={len(stems)}:normalize=0,loudnorm=I=-14:TP=-1.5:LRA=9[out]"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", graph, "-map", "[out]",
+                    "-ar", "48000", out], check=True)
+    return out
 
 if __name__ == "__main__":
     main()

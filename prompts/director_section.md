@@ -41,10 +41,10 @@ in the next section**.
   "lively". Builds always open the filter and roll into the next peak.
 - Listener feedback says avoid: {avoid}
 - `reason`: one or two sentences, in plain words, on what you changed and why.
-- `narration`: ONE short sentence (under 20 words) a warm, intimate late-night
-  radio host would say softly as this section begins: how the music now feels.
-  No numbers, no technical words, no preset or instrument codes. Use null if
-  nothing needs saying.
+- `narration`: ONE short sentence (under 25 words), in your own voice (first
+  person), telling listeners what you change in this section and why: the
+  change they will really hear and what it is for. No numbers, no preset
+  codes, no mood filler. Use null if the change isn't worth explaining.
 - Reply with ONE JSON object and nothing else.
 
 ## Reply format
@@ -54,5 +54,5 @@ in the next section**.
               "drums": "lofi_kit", "melody": null, "arp": null}},
   "melody_character": "flowing", "fills": true, "movement": "gentle",
   "reason": "The build needs more drive, so the drums come in while the pad keeps the harmony steady.",
-  "narration": "Here comes a soft little pulse. Just let it carry you."}}
+  "narration": "I'm bringing the drums in under the pad now, so the harmony has something to push against."}}
 ```

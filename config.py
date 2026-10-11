@@ -54,6 +54,15 @@ def _env_int(name: str, default: int) -> int:
 
 
 # --- Tidal / SuperCollider -------------------------------------------------
+# A set with an end (stream/live.sh --hours): its start and end as Unix
+# times, so the Director plans each track's length to finish on time.
+SESSION_START = float(_env("YS_SESSION_START", "0") or 0)
+SESSION_END = float(_env("YS_SESSION_END", "0") or 0)
+# The art director's persona: its character, ambition and goal (the Director's system prompt).
+DIRECTOR_PERSONA = _env("YS_DIRECTOR_PERSONA", os.path.join(REPO_DIR, "prompts", "director_persona.md"))
+# The art director's skills (song design, the basics and the advanced
+# techniques), every *.md in this folder, in her system prompt after the persona.
+DIRECTOR_SKILLS = _env("YS_DIRECTOR_SKILLS", os.path.join(REPO_DIR, "prompts", "skills"))
 TIDAL_BOOT_FILE = _env("YS_TIDAL_BOOT_FILE", os.path.join(REPO_DIR, "tidal", "BootTidal.hs"))
 SUPERDIRT_BOOT_FILE = _env("YS_SUPERDIRT_BOOT_FILE", os.path.join(REPO_DIR, "tidal", "superdirt_boot.scd"))
 SYNTHDEFS_FILE = _env("YS_SYNTHDEFS_FILE", os.path.join(REPO_DIR, "tidal", "synthdefs.scd"))
@@ -81,8 +90,27 @@ CHANNEL_NAME = _env("YS_CHANNEL_NAME", "InfiniTrance")
 # ys_sawlead; ys_sawpad): off until you've listened to them
 # (python -m eval.sound_preview, and --saws), then YS_HYPERSAW=1.
 HYPERSAW = _env("YS_HYPERSAW", "0") == "1"
+# The reversed voice (ys_revvox, the ambient-house texture): off until you've
+# listened to it (python -m eval.sound_preview --ambienthouse), then YS_REVVOX=1.
+REVVOX = _env("YS_REVVOX", "0") == "1"
+# A little human feel on what plays (livecode.HUMANIZE): velocities that vary
+# from hit to hit and notes a few milliseconds late, as hands play them; the
+# kick and bass stay tight. YS_HUMANIZE=0 plays everything exactly on the grid.
+HUMANIZE = _env("YS_HUMANIZE", "1") != "0"
 # The art director's surprises (music/surprises.py): at most one every N tracks.
 SURPRISE_EVERY = max(1, int(_env("YS_SURPRISE_EVERY", "2") or 2))
+# A drum kit and a bass sound for each track (music/kits.py, samples/kit_*
+# from eval/drum_kits.py); YS_DRUM_KITS=0 plays the stream's stock hits.
+DRUM_KITS = _env("YS_DRUM_KITS", "1") != "0"
+# The art director develops each track live (music/director.py,
+# develop_section): at every section change she hears what plays and writes
+# the next section's instructions. YS_DIRECTOR_DEVELOP=0: the plan as written.
+DIRECTOR_DEVELOP = _env("YS_DIRECTOR_DEVELOP", "1") != "0"
+# Explore or exploit (music/explore.py): the base chance that a track explores
+# (the least-tried touchstone, spark, mode and tempo, and the bold choice at
+# every turn) rather than build on what earned the host's thumbs. It rises
+# after a 👎, falls after a 👍. 0 always exploits, 1 always explores.
+EXPLORE = min(1.0, max(0.0, float(_env("YS_EXPLORE", "0.5") or 0.5)))
 # Licensed acapellas (music/vocals.py): the sources and their manifest, and
 # the share of tracks that sing one when one fits the style (0 = never).
 ACAPELLA_DIR = _env("YS_ACAPELLA_DIR", os.path.join(REPO_DIR, "acapellas"))

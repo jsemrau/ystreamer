@@ -82,8 +82,11 @@ def _claude(model: str, system: str, user: str, timeout: float, max_tokens: int,
     global _claude_client
     if _claude_client is None:
         # Credentials resolve from ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / `ant auth login`.
+        # A key not scoped to a workspace must name one (ANTHROPIC_WORKSPACE_ID).
+        workspace = os.getenv("ANTHROPIC_WORKSPACE_ID", "").strip()
         try:
-            _claude_client = anthropic.Anthropic(max_retries=2)
+            _claude_client = anthropic.Anthropic(
+                max_retries=2, default_headers={"anthropic-workspace-id": workspace} if workspace else None)
         except Exception as e:
             raise LLMError(f"no Claude credentials ({e})") from e
 

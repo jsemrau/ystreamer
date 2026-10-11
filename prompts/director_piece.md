@@ -18,13 +18,60 @@ The style is the frame, the theme the details. The style and its subgenre
 set the tempo range, the drum kit, the bass, which parts play and how the
 track is built. Inside that frame, take everything else from the theme: the
 sounds, the key and mode, the title, the mood, the hook's shape and the
-story your cues tell.
+story your cues tell. The theme stays for hours, so never restate it: each
+track is a new angle on it (another time of night, place, character,
+weather or feeling), and no two tracks in a row share a mood.
 
 ## What you can use
 
 ```json
 {options}
 ```
+
+## First, reason
+
+Before any choice, think it through as yourself, in `reasoning` (4-6 plain
+sentences, shown on screen): what your memory says (below: your last
+tracks and how the host took each, what worked best, what they pushed
+away), what the style, its subgenre and the theme ask for, and so: what this
+track will be, which of your song-design techniques serve it, and how it
+will develop over its lifetime: where it starts, what changes from section
+to section, what is saved for the end. This is live coding: you come back
+at every section change, hear what is playing and develop it from there, so
+plan the direction and the moments, not every detail.
+
+## Then, your recommendation
+
+Before any notes, decide as yourself, the stream's art director, with your
+ambition and your goal for the set in mind, and write it first in your
+reply, as `recommendation`:
+- `concept`: this track's idea in one sentence, the one every choice below
+  serves (shown to the audience);
+- `sounds`: the voice for each part and why, from three things: the host's
+  taste (below: the sounds they liked, the ones they pushed away, what they
+  keep asking for), the theme's imagery, and the style's frame. The lead is
+  what people remember: give it a voice with character for this track, not
+  the style's default. If the host asked for something this session,
+  answer it once, in your own way, not on every track; otherwise the
+  choice is yours: surprise them.
+- `arc`: the tension arc, in one or two sentences: what builds the tension
+  (a pedal bass under moving chords, a filter held shut, the hook withheld,
+  a darker breakdown progression, a line climbing in register, a part that
+  drops out), where it peaks, how it releases, and what is saved for the
+  peak. Your `sections`, `section_progressions`, `motion` and `cues` carry
+  it out.
+- `techniques`: the advanced techniques from your song-design skill this
+  track uses, by number (e.g. ["A5", "A11"]): one at most when you
+  exploit, two new ones when you explore, none of those used lately
+  (below).
+- `bold`: the one choice that makes this track interesting rather than
+  safe: a voice the style rarely uses but the theme suggests, a borrowed or
+  chromatic chord before the peak, a false drop, a hook that starts off the
+  beat, the breakdown in another voice, a tempo at the edge of the range.
+When two choices fit, take the more interesting one. Interesting is never
+atonal: every note stays in the key and on its chords (that is checked);
+the tension comes from where the notes and the parts go, not from wrong
+notes.
 
 ## What to write
 
@@ -42,7 +89,8 @@ story your cues tell.
   = major, lower case = minor, exactly as listed), e.g. "i-VI-III-VII". The
   examples are only examples. Chords may repeat ("i-i-VI-VII").
 - `section_progressions`: four other chords for the `breakdown` and for the
-  `chorus` (the peak), same rules, so the harmony moves with the track.
+  `chorus` (the peak), and for the `bridge` if your form has one, same
+  rules, so the harmony moves with the track.
 - `chromatic` (optional, rare; see "Chromatic colour" below): chords from
   outside the key that play all track instead of `progression`, sliding in
   parallel the way Radiohead's "Everything In Its Right Place" does: major
@@ -131,8 +179,9 @@ story your cues tell.
   high every `bars` bars (4-64), inside the knob's range. E.g. the acid knob
   opening over 32 bars, the chord filter breathing over 16.
 - `cues`: your instructions to the performer, for each part of the track:
-  `build`, `groove`, `breakdown`, `rebuild`, `peak`, `outro`, 2-4 per part,
-  in order. The performer carries out one per move (one every 15-30 s), so
+  `build`, `groove`, `breakdown`, `rebuild`, `peak`, `outro`, and `lift`,
+  `tag`, `bridge`, `interlude`, `break` where your form has them, 2-4 per
+  part, in order. The performer carries out one per move (one every 15-30 s), so
   each must say exactly what you want to hear, with the exact names from
   `blocks`, `sounds` and `knobs`, so the right sound comes in. A cue is:
   {{"do": <action>, "part": <part>, ..., "say": <the instruction in plain
@@ -163,38 +212,59 @@ story your cues tell.
   what drops out. Develop the hook, never wear it down: an answer bar, the
   phrase an octave up or with a new ending at the peak, a held note added;
   don't cut it to one bar or lock it to one of its bars.
-- `sounds`: a sound per part from `sounds`, chosen for the theme: read
+- `sounds`: a sound per part from `sounds`, as you recommended, for the
+  host and the theme: never one the host pushed away to -2 or below (it is
+  replaced). Read
   `sound_character` and pick the sounds whose character matches the theme's
   imagery and mood (a vampire night in London: dark, cold, haunting voices; a
   summer sunrise: bright, warm ones), the subgenre's sounds first, any other
   of `sounds` where the theme calls for it. Not a set a recent track used
   (below): change at least the lead or the arp.
 - `surprise`: see "This track's surprise" below.
-- `sections` (optional): the track's rough shape, 4-9 sections from
+- `sections`: your arc as the track's form, 4-10 sections from
   `section_types`, each {{"name", "bars" (a multiple of 8), "energy" 0.05-1}},
-  starting with an intro and ending with an outro, about {target_minutes}
-  minutes in all at your tempo (a bar is 240 / BPM seconds). Make the shape
-  differ from the previous track's: where the peaks and the breakdown fall,
-  how many there are. Leave it out and the performer picks a shape.
+  as long in all as this track's length ("The set's time" below) at your
+  tempo (a bar is 240 / BPM seconds). Real songs use far more than intro, verse, chorus, breakdown,
+  chorus, outro, and each type plays its own way:
+  - `intro`, `verse` (the groove), `chorus` (the peak), `breakdown`, `outro`;
+  - `lift`: a pre-chorus, tension rising into the peak (a riser, filters
+    opening, no new parts yet);
+  - `tag`: a post-chorus, the hook alone over the beat and bass;
+  - `bridge`: new ground: the `bridge` chords, the hook rests, another line
+    sings;
+  - `interlude`: instrumental: the hook rests, the arp or acid featured;
+  - `break`: the kick and bass out for a moment, then they slam back.
+  A form may start straight on a chorus and end on one (a short fade
+  follows). Start from the suggested form below (a real song's), change it
+  for your arc, and make it differ from the previous track's: which
+  sections, where the peaks fall, how many.
 - `title` (two or three evocative words), `mood` (a few words).
 - `reason`: one or two plain sentences on why this follows the last track;
   shown to the audience.
-- `narration`: ONE sentence (under 25 words) a warm late-night radio host
-  would say as the track begins. The feeling, not the technique: no numbers,
-  no instrument names.
+- `narration`: what you say to the listeners as the track begins, in your
+  own voice (first person, one or two sentences, under 35 words): what you
+  are making with this track and why, and the one thing to listen for (your
+  bold choice, the device you borrow from the touchstone, or the host's wish
+  you answer). Every word must be true of this plan: name the sound or move
+  they will really hear. No numbers, no mood filler ("let it carry you").
 
 Reply with ONE JSON object and nothing else:
 
 ```json
-{{"title": "...", "subgenre": "...", "surprise": "...", "melody": "...", "chromatic": "...", "key": "...", "bpm": 0,
+{{"reasoning": "...",
+  "recommendation": {{"concept": "...", "sounds": "...", "arc": "...", "techniques": ["A.."], "bold": "..."}},
+  "sounds": {{"chords": "...", "lead": "...", "arp": "..."}},
+  "minutes": 0, "set_plan": [0, 0],
+  "title": "...", "subgenre": "...", "surprise": "...", "melody": "...", "chromatic": "...", "key": "...", "bpm": 0,
   "progression": "...",
   "section_progressions": {{"breakdown": "...", "chorus": "..."}},
+  "sections": [{{"name": "intro", "bars": 16, "energy": 0.2}}, ...],
   "hook": {{"role": "...", "pattern": "..."}},
   "parts": {{"<part>": "<pattern>", "...": "..."}},
   "motion": {{"<part>": {{"<knob>": [0, 0, 32]}}}}, "voicing": "...",
   "cues": {{"build": [{{"do": "...", "part": "...", "say": "..."}}, ...], "groove": [...], "breakdown": [...],
             "rebuild": [...], "peak": [...], "outro": [...]}},
-  "sounds": {{"chords": "...", "lead": "...", "arp": "..."}}, "mood": "...",
+  "mood": "...",
   "reason": "...", "narration": "..."}}
 ```
 {cache_break}
@@ -203,15 +273,48 @@ Reply with ONE JSON object and nothing else:
 - Previous track: {previous}
 - Previous track's shape (if you write `sections`, make it different): {previous_shape}
 - Keys played recently (don't reuse them): {recent_keys}
+- Your concepts for the last tracks (find a new image, not a variation of these): {recent_concepts}
+- Techniques the last tracks used (`techniques_recent`: choose others): {recent_techniques}
+- The last tracks' frames (mode, tempo, subgenre): {recent_frames}. Move away from them: another mode
+  when the last ones shared one, a tempo at least 4 BPM from the last, another subgenre.
 - Hooks and lead melodies played recently (write something different): {recent_hooks}
 {melody_brief}{liked_hooks}- Progressions played recently (don't reuse them): {recent_progressions}
 - Sounds played recently (choose a different set): {recent_sounds}
 - Listeners disliked: {avoid}
 
+## Your memory (your journal, across tracks and restarts)
+
+{memory}
+
+## The host's taste (remembered across tracks)
+
+{taste}
+
+## Your progress this set
+
+{progress}
+
+## The set's time
+
+{set_line}
+
+## Explore or exploit
+
+{stance}
+
 ## A spark for this one
 
-Suggested key: **{suggested_key}** (drawn at random: take it unless your plan
-needs another key). Something to try: {spark}
+Suggested key: **{suggested_key}**, tempo **{suggested_bpm} BPM** (drawn at
+random, away from the recent ones: take them unless your plan needs others).
+Something to try: {spark}
+
+Suggested form: {suggested_form}
+
+## A touchstone from the host's favourites
+
+{touchstone}
+Learn from its craft (its device, sound or shape) in your own track: never
+copy its melody, lyrics or riff.
 
 ## Chromatic colour
 

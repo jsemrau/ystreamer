@@ -42,6 +42,14 @@ if [[ -n "$HOURS" ]] && { ! [[ "$HOURS" =~ ^[0-9]*\.?[0-9]+$ ]] || awk -v h="$HO
     exit 1
 fi
 
+# The set's start and end, for the Director to plan each track's length so
+# the set ends on time (absolute times: a restarted engine keeps them).
+# (The start always: the host's requests count only from it, music/taste.py.)
+export YS_SESSION_START="${YS_SESSION_START:-$(date +%s)}"
+if [[ -n "$HOURS" ]]; then
+    export YS_SESSION_END="$(awk -v s="$YS_SESSION_START" -v h="$HOURS" 'BEGIN { printf "%d", s + h * 3600 + 0.5 }')"
+fi
+
 "$REPO/stream/setup_audio.sh" || { echo "Couldn't create the audio sink (see above)" >&2; exit 1; }
 
 PIDS=()

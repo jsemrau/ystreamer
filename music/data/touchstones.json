@@ -1,0 +1,117 @@
+{
+  "_source": "The host's favourites (their Spotify playlist), described from memory: the craft to learn from, never the tunes to copy.",
+  "songs": [
+    {
+      "title": "Halcyon + On + On", "artist": "Orbital", "year": 1993,
+      "styles": ["trance", "deephouse", "ambient"],
+      "tempo": "around 130 BPM, unhurried",
+      "sounds": "a pitched-up, cut-up female vocal used as texture, a soft bubbling arpeggio, warm analogue pads, a light swinging groove",
+      "signature": "it never drops: layer after layer joins the same few chords until the whole thing glows",
+      "borrow": "build by accumulation, not by a drop: add one voice every few bars over an unchanging loop, and let a sung phrase become an instrument"
+    },
+    {
+      "title": "Lush 3-5 (C.J. Bolland)", "artist": "Orbital, CJ Bolland", "year": 1993,
+      "styles": ["techno", "trance"],
+      "tempo": "early-90s techno pace, driving",
+      "sounds": "a rolling bassline, sharp synth stabs, hypnotic repeating sequences, dry hard drums",
+      "signature": "a melodic Orbital track remade as relentless, hypnotic techno",
+      "borrow": "take a lovely melodic idea and play it as a tool for the dancefloor: one short motif, repeated and filtered, over a driving bass"
+    },
+    {
+      "title": "It's a Fine Day", "artist": "Opus III", "year": 1992,
+      "styles": ["deephouse", "trance", "downtempo"],
+      "tempo": "around 120 BPM, a light rave-pop bounce",
+      "sounds": "an airy, high, breathy female vocal, a skipping breakbeat, bright piano stabs, a warm bass",
+      "signature": "a folk melody sung almost unaccompanied, set over rave drums: innocence over the beat",
+      "borrow": "a simple, singable, folk-like hook in a major key, high and floating above the rhythm with lots of air around it"
+    },
+    {
+      "title": "Children (Dream Version)", "artist": "Robert Miles", "year": 1995,
+      "styles": ["trance", "piano", "deephouse"],
+      "tempo": "around 137 BPM",
+      "sounds": "a solo piano riff, a soft string pad, a steady kick with offbeat hats, a round bass",
+      "signature": "dream house: one plaintive piano riff carries the whole track, first alone, then over the beat",
+      "borrow": "give the hook to a plain piano and play it bare first, then bring the beat in under it: the melody alone is the drop"
+    },
+    {
+      "title": "Angels", "artist": "The xx", "year": 2012,
+      "styles": ["downtempo", "ambient", "lofi"],
+      "tempo": "slow and still",
+      "sounds": "a clean, reverbed electric guitar, a hushed intimate vocal, almost no drums, deep silence between notes",
+      "signature": "restraint: very few notes and a lot of space, each one heard",
+      "borrow": "less is more: two or three parts at most, long rests, a melody of few notes, the silence as part of the arrangement"
+    },
+    {
+      "title": "Loud Places", "artist": "Jamie xx, Romy", "year": 2015,
+      "styles": ["deephouse", "downtempo"],
+      "tempo": "a relaxed house tempo",
+      "sounds": "a soft, low, intimate vocal, a gentle house groove, steel-drum-like colour, a huge gospel choir in the chorus",
+      "signature": "a quiet, lonely verse that opens into a euphoric choir: the lift from intimate to communal",
+      "borrow": "a big contrast between sections: keep the verse small and close, then let the chorus open into a wide choir or massed voices"
+    },
+    {
+      "title": "One Love", "artist": "The Prodigy", "year": 1993,
+      "styles": ["hardcore", "techno"],
+      "tempo": "fast breakbeat rave",
+      "sounds": "chopped, hard breakbeats, a reedy Middle-Eastern-sounding melodic sample, rave stabs, a heavy sub bass",
+      "signature": "an exotic, modal melody riding over hard, busy breaks",
+      "borrow": "a modal hook (phrygian colour, a flat second) played on a reedy, wind-like voice over a busy, chopped beat"
+    },
+    {
+      "title": "Sandstorm", "artist": "Darude", "year": 1999,
+      "styles": ["trance", "techno"],
+      "tempo": "around 136 BPM",
+      "sounds": "a single buzzy saw lead in relentless sixteenth notes, a pounding kick, filter sweeps, a siren-like rise",
+      "signature": "one rhythmic lead riff, almost one note, that moves up and down in blocks: rhythm as the hook",
+      "borrow": "a hook made of rhythm more than melody: a sixteenth-note lead on two or three notes, shifted up a step for tension, with the filter opening as the build"
+    },
+    {
+      "title": "K.I.S.S.E.S", "artist": "Bent", "year": 2003,
+      "styles": ["downtempo", "lofi"],
+      "tempo": "a laid-back downtempo groove",
+      "sounds": "warm, kitschy vintage-sounding vocals and instruments, a soft loose beat, playful details",
+      "signature": "British chillout with a wink: old-fashioned sweetness made into something odd and warm",
+      "borrow": "a sweet, slightly retro, playful colour: a lounge-like voice or vintage keys, a little humour in the details"
+    },
+    {
+      "title": "Feather", "artist": "Nujabes, Cise Starr & Akin", "year": 2005,
+      "styles": ["lofi", "piano", "downtempo"],
+      "tempo": "around 90 BPM, a dusty swing",
+      "sounds": "a looping jazz piano, a dusty swung hip-hop beat, warm bass, soft strings",
+      "signature": "a melancholy-but-hopeful jazz piano loop with seventh chords under a laid-back swing",
+      "borrow": "jazz harmony (sevenths and ninths) on a looping piano phrase, a swung beat with a lazy snare, warmth over polish"
+    },
+    {
+      "title": "Voodoo People", "artist": "The Prodigy", "year": 1994,
+      "styles": ["hardcore", "techno", "darkwave"],
+      "tempo": "fast breakbeat",
+      "sounds": "a gritty, distorted riff, a flute-like phrase, hard breakbeats, a menacing bass",
+      "signature": "a dirty, repeating riff that is part rock, part rave, over relentless breaks",
+      "borrow": "a short, gritty, distorted riff as the hook, with an unexpected woodwind colour against it, and real menace in the bass"
+    },
+    {
+      "title": "Sonic Empire", "artist": "Members Of Mayday", "year": 1997,
+      "styles": ["techno", "hardcore", "trance"],
+      "tempo": "fast late-90s rave",
+      "sounds": "a huge synth anthem riff, a pounding four-to-the-floor kick, rave stabs, crowd-sized reverb",
+      "signature": "a Love Parade anthem: one big, simple riff made for a million people",
+      "borrow": "a big, simple anthem riff in a minor key that a crowd could chant, held back in the breakdown and returned at full size"
+    },
+    {
+      "title": "Not In Love", "artist": "Crystal Castles, Robert Smith", "year": 2010,
+      "styles": ["darkwave"],
+      "tempo": "a mid-tempo synth-pop pulse",
+      "sounds": "bright, glassy chiptune-like arpeggios, a wistful, distant male vocal, a hard synthetic beat, washes of reverb",
+      "signature": "a melancholy pop song in cold, glittering electronics",
+      "borrow": "sad melody, bright cold sound: a glassy, fast arpeggio under a slow, aching lead"
+    },
+    {
+      "title": "What Else Is There?", "artist": "Röyksopp", "year": 2005,
+      "styles": ["darkwave", "downtempo"],
+      "tempo": "a mid-tempo, brooding pulse",
+      "sounds": "a dark, pulsing synth bass, an eerie, haunting female vocal, mournful strings, sparse, heavy drums",
+      "signature": "a slow-burning, cinematic darkness that grows without ever speeding up",
+      "borrow": "a brooding minor pulse that builds tension by adding strings and weight, never tempo; an eerie lead voice"
+    }
+  ]
+}

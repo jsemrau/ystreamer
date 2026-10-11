@@ -84,7 +84,7 @@ LIVE_SOUNDS = {
              "ys_harpsichord": "harpsichord: bright quill pluck (Massive Attack's Teardrop)",
              "ys_sax": "saxophone: a soaring, bending sax (Guru Josh's Infinity)",
              "ys_angelchoir": "angel choir: ethereal layered female voices on long notes (Chicane's Saltwater, Celtic)",
-             "ys_chipvox": "sped-up chipmunk vocal: a bright sung ya (happy hardcore, Wonderful Days)",
+             "ys_chipvox": "sped-up chipmunk vocal: a bright sung ya (happy hardcore only, Wonderful Days)",
              "ys_housepiano": "house piano melody (happy hardcore, piano house)",
              "ys_cafepluck": "Cafe del Mar pluck: a soft plucked synth through a resonant filter, in a long dotted "
                              "delay (Energy 52, 90s Balearic trance)"},
@@ -116,6 +116,34 @@ if config.HYPERSAW:
     LIVE_SOUNDS["lead"]["ys_sawlead"] = "saw lead: two band-limited saws, the filter opening on each note (90s trance, hardcore)"
     LIVE_SOUNDS["texture"]["ys_sawpad"] = "lush saw pad bed (seven band-limited saws, dark), behind everything"
     LIVE_SOUNDS["lead"]["ys_hoover"] = "the hoover: swooping detuned saws (The Prodigy, 90s rave and hardcore)"
+# The reversed voice goes on air once it's been heard (eval.sound_preview --ambienthouse).
+if config.REVVOX:
+    LIVE_SOUNDS["texture"]["ys_revvox"] = ("reversed voice: a wordless sung vowel swelling in and stopping dead, "
+                                           "as if played backwards (early-90s ambient house: Orbital, The Orb)")
+    LIVE_SOUNDS["lead"]["ys_revvox"] = "reversed voice lead: long wordless swells that stop dead (ambient house)"
+
+# The voice singing the hook (music/instruments.py: owstu's sung notes, CC0):
+# the refrain. A phrase hook is sung in long notes (held_phrase: at most a
+# note a beat, held into the next), close and a little roomy, a dotted echo
+# behind it; a riff hook (ambient house's arp cycle) is sung as vocal chops,
+# eighths, short syllables bouncing off a dotted 16th echo. Both come in with
+# the vocal: for the breakdown, the voice alone over the pads, through the peak.
+def _sung_hook() -> Block:
+    return _melodic("sung_hook", "vocal", "ys_femalevox", "melody",
+                    ["<[4 _ _ _ 2 _ _ _] [0 _ _ _ ~ ~ ~ ~]>", "<[0 _ _ _ 4 _ _ _] [2 _ _ _ ~ ~ ~ ~]>"],
+                    [["gain", "1.0"], ["legato", "1.0"], ["room", "0.35"], ["size", "0.7"], ["delay", "0.2"],
+                     ["delaytime", "0.375"], ["delayfeedback", "0.25"], ["hpf", "180"]],
+                    keep_sound=True, phrasing=held_phrase, sings=True)
+
+
+def _chopped_hook() -> Block:
+    return Block("chopped_hook", "vocal",
+                 'n (scale "{mode}" ("<{motif}>*8" |+ "<{roots}>") {root}) # s "ys_voxchop"',
+                 {"motif": ["0 2 4 2", "4 2 0 2", "0 4 7 4"]},
+                 fx=[["gain", "1.0"], ["legato", "0.8"], ["room", "0.25"], ["delay", "0.25"], ["delaytime", "0.1875"],
+                     ["delayfeedback", "0.3"], ["hpf", "200"]],
+                 pool=[0, 2, 4, 7], keep_sound=True, sings=True)
+
 
 # Real instruments with no modelled SynthDef (music/instruments.py: the
 # FreePats harp and kalimba, CC0) are offered only where they're installed.
@@ -127,6 +155,66 @@ if _instruments.installed("harp"):
 if _instruments.installed("kalimba"):
     LIVE_SOUNDS["arp"]["ys_kalimba"] = "kalimba: real, soft metal tines, a little out of tune (Balearic, lounge, ambient)"
     LIVE_SOUNDS["keys"]["ys_kalimba"] = "kalimba: real, soft metal tines"
+# The Versilian recordings (music/instruments.py: VSCO-2 CE and VCSL, CC0):
+# an orchestra, mallets, reeds and voices from further away, each offered
+# where it's installed. "real" tells the Director it's a recording.
+REAL_SOUNDS = {
+    "ys_grandpiano": ("grandpiano", {
+        "chords": "grand piano chords: real, a Kawai concert grand (piano house, Robert Miles' Children)",
+        "keys": "grand piano: real, a Kawai concert grand",
+        "lead": "grand piano melody: real, bare and plaintive (dream house: Robert Miles' Children)"}),
+    "ys_violins": ("violins", {
+        "chords": "violin section: real strings held with vibrato (cinematic, a trance breakdown)",
+        "lead": "violin section melody: real, soaring strings (Bittersweet Symphony, a trance breakdown)",
+        "texture": "violin section bed: real strings held far behind"}),
+    "ys_cellos": ("cellos", {
+        "chords": "cello section: real, low and dark strings (cinematic, melancholic)",
+        "lead": "cello section melody: real, low and mournful"}),
+    "ys_pizz": ("pizz", {
+        "arp": "pizzicato strings: real, plucked, playful and light",
+        "keys": "pizzicato strings: real, plucked"}),
+    "ys_violin": ("violin", {"lead": "solo violin: real, bowed with vibrato, intimate and singing"}),
+    "ys_concertflute": ("flute", {"lead": "concert flute: real, round and airy with vibrato (orchestral, Balearic)"}),
+    "ys_oboe": ("oboe", {"lead": "oboe: real, a reedy, plaintive double reed (pastoral, melancholic)"}),
+    "ys_clarinet": ("clarinet", {"lead": "clarinet: real, warm and woody, dark low notes (jazz, klezmer, lounge)"}),
+    "ys_horn": ("horn", {
+        "lead": "French horn: real, noble and round (cinematic, heroic)",
+        "chords": "French horn chords: real, warm brass swells (cinematic)"}),
+    "ys_dantranh": ("dantranh", {
+        "lead": "dan tranh: real Vietnamese zither, bright plucked strings that bend",
+        "arp": "dan tranh arpeggio: real Vietnamese zither, shimmering plucks"}),
+    "ys_harmonica": ("harmonica", {"lead": "harmonica: real, reedy and bluesy (folk, a lonely road)"}),
+    "ys_ocarina": ("ocarina", {"lead": "ocarina: real, a hollow clay flute, pure and ancient (folk, video-game wistful)"}),
+    "ys_mbira": ("mbira", {
+        "arp": "mbira: real Zimbabwean thumb piano, buzzing metal keys in interlocking patterns",
+        "keys": "mbira: real Zimbabwean thumb piano, buzzing metal keys"}),
+    "ys_glockenspiel": ("glockenspiel", {
+        "arp": "glockenspiel: real, tiny bright bells, a music box",
+        "keys": "glockenspiel: real, tiny bright bells",
+        "lead": "glockenspiel melody: real, tiny bright bells (Loud Places, a lullaby)"}),
+    "ys_chimes": ("chimes", {"keys": "tubular bells: real, big church-like chimes, long ring (cinematic, sacred)"}),
+    # Voices (Freesound, CC0).
+    "ys_femalevox": ("femalevox", {
+        "lead": "female voice: real, a woman singing the melody on ah, airy and close (Opus III's It's a Fine "
+                "Day, a vocal trance hook)",
+        "texture": "female voice bed: real, sung notes far behind (Orbital's Halcyon)"}),
+    "ys_voxchop": ("voxchop", {
+        "arp": "vocal chops: real, short sung syllables in rhythm (trance and house vocal chops)",
+        "keys": "vocal chops: real, short sung syllables on the offbeats"}),
+    "ys_crowdchoir": ("crowdchoir", {
+        "chords": "crowd choir chords: real, many voices singing ahh together (a stadium, a church)",
+        "texture": "crowd choir bed: real, many voices on ahh, far behind"}),
+}
+for _synth, (_name, _roles) in REAL_SOUNDS.items():
+    if _instruments.installed(_name):
+        for _role, _about in _roles.items():
+            LIVE_SOUNDS[_role][_synth] = _about
+# Models with a recording to play now (music/instruments.py): the description says so.
+for _name, _synth in (("trumpet", "ys_trumpet"), ("vibes", "ys_vibes"), ("marimba", "ys_marimba")):
+    if _instruments.installed(_name):
+        for _palette in LIVE_SOUNDS.values():
+            if _synth in _palette and "real" not in _palette[_synth]:
+                _palette[_synth] = _palette[_synth].replace(": ", ": real, ", 1)
 
 # Sounds taken off air after listening to them (eval.sound_preview): the
 # square lead (12_square_lead_today), the saw pad (13_saw_pad) and darkwave's
@@ -174,9 +262,28 @@ SOUND_CHARACTER = {
     "ys_sax": ("warm", "euphoric", "retro", "melancholic"),
     "ys_angelchoir": ("dreamy", "mystic", "cinematic", "euphoric", "eerie"),
     "ys_chipvox": ("euphoric", "bright", "retro"),
+    "ys_revvox": ("dreamy", "melancholic", "euphoric", "mystic"),
     "ys_cafepluck": ("dreamy", "warm", "bright", "retro"),
     "ys_harp": ("dreamy", "cinematic", "mystic", "warm"),
     "ys_kalimba": ("bright", "warm", "dreamy", "mystic"),
+    "ys_grandpiano": ("melancholic", "dreamy", "warm", "cinematic", "euphoric"),
+    "ys_violins": ("cinematic", "euphoric", "melancholic", "dreamy"),
+    "ys_cellos": ("dark", "melancholic", "cinematic", "warm"),
+    "ys_pizz": ("bright", "warm", "retro"),
+    "ys_violin": ("melancholic", "warm", "cinematic", "mystic"),
+    "ys_concertflute": ("dreamy", "bright", "warm", "mystic"),
+    "ys_oboe": ("melancholic", "warm", "cinematic"),
+    "ys_clarinet": ("warm", "melancholic", "retro", "dark"),
+    "ys_horn": ("cinematic", "euphoric", "warm", "dark"),
+    "ys_dantranh": ("mystic", "bright", "dreamy"),
+    "ys_harmonica": ("melancholic", "warm", "retro"),
+    "ys_ocarina": ("mystic", "dreamy", "melancholic", "eerie"),
+    "ys_mbira": ("mystic", "warm", "bright", "hard"),
+    "ys_glockenspiel": ("bright", "dreamy", "eerie", "cold"),
+    "ys_chimes": ("cinematic", "mystic", "dark", "eerie"),
+    "ys_femalevox": ("dreamy", "euphoric", "melancholic", "warm"),
+    "ys_voxchop": ("euphoric", "bright", "retro"),
+    "ys_crowdchoir": ("cinematic", "euphoric", "mystic", "eerie"),
 }
 
 
@@ -232,12 +339,15 @@ class Block:
     # Its note budget a bar (0: its role's, livecode.NOTE_BUDGET): a tune it
     # is given (the hook, the sketch) is thinned to it.
     max_notes: int = 0
+    # A voice that sings the track's hook, whichever part it was written for
+    # (the vocal: the hook heard on an instrument comes back sung, the refrain).
+    sings: bool = False
 
     def hook_slot(self) -> tuple[str, str] | None:
         """(slot, kind) of the pattern that carries this block's tune, or None:
         kind "cycle" is a note cycle played as 16ths ("<{motif}>*16"),
         "phrase" a melody over the bar ("{melody}")."""
-        if self.drums or self.role not in HOOK_ROLES:
+        if self.drums or (self.role not in HOOK_ROLES and not self.sings):
             return None
         m = _TUNE_SLOT_RE.search(self.body)
         if not m or m.group(2) not in self.patterns:
@@ -280,7 +390,8 @@ class Block:
         tune = self.hook_slot()
         slot = self.sketch_slot()
         body = self.body
-        carries = bool(hook and tune and hook.get("role") == self.role and hook.get("kind", tune[1]) == tune[1])
+        carries = bool(hook and tune and (hook.get("role") == self.role or self.sings)
+                       and hook.get("kind", tune[1]) == tune[1])
         key_tune = carries and hook.get("relative") == "key" and tune[1] == "phrase"
         if carries:
             patterns[tune[0]] = hook["pattern"]
@@ -294,6 +405,10 @@ class Block:
             patterns[slot[0]] = parts[self.role]["pattern"]
             if self.phrasing:
                 patterns[slot[0]] = self.phrasing(patterns[slot[0]])
+        # The track's bass sound (music/kits.py: Performer._kit), whatever the
+        # bass line: the sub, the TB, the picked bass, the upright.
+        if self.role == "bass" and (kit or {}).get("bass") and not self.keep_sound:
+            body = re.sub(r'# s "ys_\w+"', f'# s "{kit["bass"]}"', body)
         sound = (sounds or {}).get(self.role)
         palette = LIVE_SOUNDS.get(self.role, {})
         own = {mix.synth_of(body), *(self.patterns.get("synth") or [])}
@@ -501,10 +616,12 @@ BLOCKS: dict[str, list[Block]] = {
     "trance": [
         # The kick alone, on every beat; hats and claps on their own line,
         # quieter and above the low end, so neither fights the kick.
-        Block("trance_beat", "beat", 's "{kick}"', {"kick": ["ys_kick909*4"]},
+        # The 909, or the rounder, punchier kick of psy and acid trance.
+        Block("trance_beat", "beat", 's "{kick}"', {"kick": ["ys_kick909*4", "ys_kick909*4", "ys_kick*4"]},
               fx=[["gain", "1.0"]], drums=True),
         Block("trance_hats", "perc", 's "[{hats}, {clap}]"',
-              {"hats": ["[~ 808oh]*4", "[~ 808oh]*4, hh*16", "[~ hh]*4"], "clap": ["~ cp ~ cp", "~"]},
+              {"hats": ["[~ 808oh]*4", "[~ 808oh]*4, hh*16", "[~ hh]*4", "[~ hh27]*4, hh*8", "[hh hh 808oh hh]*4"],
+               "clap": ["~ cp ~ cp", "~", "~ ~ ~ cp"]},
               fx=[["gain", "0.8"], ["hpf", "500"]], drums=True),
         Block("acid", "acid",
               'n (scale "{mode}" ("<{motif}>*16" |+ "<{roots}>") {root} - 12) # s "ys_acid"',
@@ -514,8 +631,11 @@ BLOCKS: dict[str, list[Block]] = {
               pfs=[["acid", "(slow 16 $ range 0.35 0.75 sine)"], ["accent", '"[0 0 1 0 0 1 0 0]*2"'],
                    ["drive", "1.4"]],
               wrappers=['(|* gain "[0.67 0.91 1 1]*4")'], pool=[0, 2, 4, 6, 7, 9, 11]),
+        # Rolling 16ths, the psy gallop, the octave offbeat: the bass sets a
+        # track's drive as much as the kick does.
         _melodic("rolling_bass", "bass", "ys_tbass", "rhythm",
-                 ["[~ 0 0 0]*4", "[~ 0 0 0]*3 [~ 0 0 7]", "[~ ~ 0 ~]*4"],
+                 ["[~ 0 0 0]*4", "[~ 0 0 0]*3 [~ 0 0 7]", "[~ ~ 0 ~]*4", "[0 ~ 0 0]*4", "[~ 0 ~ 7]*4",
+                  "<[~ 0 0 0]*4 [~ 0 0 0]*3 [7 0 7 0]>"],
                  [["gain", "1.05"], ["lpf", "(slow 16 $ range 800 1600 sine)"], ["legato", "0.85"]], octave=" - 24",
                  pool=[0, 7],
                  wrappers=['(|* gain "[0.67 0.91 1 1]*4")']),
@@ -530,6 +650,18 @@ BLOCKS: dict[str, list[Block]] = {
               {"stab": TRANCE_GATES + ["~ t ~ t ~ t ~ t", "t ~ ~ t ~ ~ t ~", "~ ~ t ~ ~ t ~ t", "t ~ t ~ ~ t ~ ~"]},
               fx=[["gain", "0.8"], ["legato", "0.7"], ["room", "0.3"], ["lpf", "(slow 16 $ range 2500 4500 sine)"]],
               wrappers=['(|* gain "[0.67 0.91 1 1]*4")']),
+        # The other way trance plays its chords: held through the bar and
+        # swelling through a slow filter under the kick (the track's chord
+        # sound, a supersaw at its best), instead of chopped by a gate.
+        Block("held_chords", "chords",
+              'n (scale "{mode}" "<{chords}>" {root}) # s "ys_housepiano"', {},
+              fx=[["gain", "0.7"], ["legato", "1"], ["room", "0.35"], ["lpf", "(slow 32 $ range 700 3200 sine)"]],
+              wrappers=['(|* gain "[0.67 0.91 1 1]*4")']),
+        # A sub under the kick on the offbeats, deep rather than rolling.
+        _melodic("offbeat_sub", "bass", "ys_sub", "rhythm",
+                 ["[~ 0]*4", "[~ 0 ~ 0]*4", "[~ 0]*3 [~ 7]", "<[~ 0]*4 [~ 0]*3 [0 7]>"],
+                 [["gain", "1.0"], ["lpf", "900"], ["legato", "0.8"]], octave=" - 24", pool=[0, 7],
+                 wrappers=['(|* gain "[0.67 0.91 1 1]*4")']),
         # Melodies, not arpeggios: steps with passing notes between the beats,
         # a call and its answer, long held notes (_) to close a phrase.
         _melodic("glass_lead", "lead", "ys_glass", "melody",
@@ -574,6 +706,15 @@ BLOCKS: dict[str, list[Block]] = {
               fx=[["gain", "0.85"], ["lpf", "(slow 8 $ range 1500 5000 sine)"], ["delay", "0.3"],
                   ["delaytime", "0.375"], ["delayfeedback", "0.09"], ["room", "0.3"]],
               wrappers=['(|* gain "[0.67 0.91 1 1]*4")'], pool=[0, 2, 4, 6, 7, 9]),
+        # A riff, not an arpeggio: a short cycle on the chord in 8ths with rests,
+        # in a dotted echo, repeated until it's hypnotic (ambient house: the
+        # track's hook is a loop that slowly opens, not a sung melody).
+        Block("echo_riff", "arp",
+              'n (scale "{mode}" ("<{arp}>*8" |+ "<{roots}>") {root} + 12) # s "ys_pluck"',
+              {"arp": ["0 ~ 4 7 ~ 4 9 ~", "0 4 ~ 2 4 ~ 7 ~", "7 ~ 4 ~ 2 4 0 ~", "0 ~ 2 4 ~ 7 4 ~ 2"]},
+              fx=[["gain", "0.85"], ["lpf", "(slow 32 $ range 1200 4500 sine)"], ["delay", "0.35"],
+                  ["delaytime", "0.357"], ["delayfeedback", "0.35"], ["room", "0.35"]],
+              pool=[0, 2, 4, 7, 9]),
         Block("soft_bed", "texture", 'n (scale "{mode}" "<{chords}>" {root}) # s "ys_softpad"', {},
               fx=[["gain", "0.6"], ["legato", "1.1"], ["lpf", "1800"], ["room", "0.6"], ["size", "0.9"]]),
         Block("air", "texture", 'n (scale "{mode}" "<{roots}>" {root} - 12) # s "ys_air"', {},
@@ -811,6 +952,13 @@ BLOCKS["hardcore"] = _techno_blocks(hard=True)
 # Rave voices over the gabber kick: short phrases (a bar is 1.3-1.5 s here).
 BLOCKS["hardcore"].append(_vocal_chop(["~ ~ ~ bsvocals:11", "~ ~ bsvocals:5 ~", "~ bsvocals:2 ~ ~",
                                        "~ ~ ~ [bsvocals:5 bsvocals:5]"]))
+# Every style's vocal can sing the hook, where the voices are installed.
+if _instruments.installed("femalevox"):
+    for _style in BLOCKS:
+        BLOCKS[_style].append(_sung_hook())
+if _instruments.installed("voxchop"):
+    for _style in BLOCKS:
+        BLOCKS[_style].append(_chopped_hook())
 
 
 # The real kalimba (music/instruments.py) plays slowly: a note on the beat or
@@ -844,9 +992,10 @@ SUBGENRES = {
         "progressive": {
             "about": "deep and rolling: offbeat bass, soft hats, e-piano and bells, long filter rides",
             "bpm": (126, 132),
+            "modes": ["minor", "phrygian", "dorian"],
             "kit": {"hats": ["[~ hh27]*4", "[~ hh27]*4, [~ ~ hh27 ~]*4", "[~ 808oh]*2 [~ hh27]*2"],
                     "clap": ["~ ~ ~ cp", "~ cp ~ cp"],
-                    "rhythm": ["[~ 0]*4", "[~ 0 ~ 0]*4", "[~ 0 0 ~]*4"]},
+                    "rhythm": ["[~ 0]*4", "[~ 0 ~ 0]*4", "[~ 0 0 ~]*4", "[~ 0 ~ 7]*4"]},
             "sounds": {"chords": ["ys_epiano", "ys_glass"],
                        "lead": ["ys_glass", "ys_pluck", "ys_flute", "ys_marimba", "ys_vox", "ys_nylon"],
                        "arp": ["ys_pluck", "ys_glass", "ys_marimba", "ys_nylon"], "texture": ["ys_softpad"]},
@@ -855,9 +1004,10 @@ SUBGENRES = {
         "uplifting": {
             "about": "big and euphoric: rolling bass, supersaw chords and lead, epic voicings, a long breakdown",
             "bpm": (136, 140),
-            "kit": {"hats": ["[~ 808oh]*4, hh*16", "[~ 808oh]*4"],
+            "modes": ["minor", "phrygian", "dorian"],
+            "kit": {"hats": ["[~ 808oh]*4, hh*16", "[~ 808oh]*4", "[~ 808oh]*4, [~ hh]*8"],
                     "clap": ["~ cp ~ cp", "~ cp ~ <cp cp cp [cp cp]>"],
-                    "rhythm": ["[~ 0 0 0]*4", "[~ 0 0 0]*3 [~ 0 0 7]"]},
+                    "rhythm": ["[~ 0 0 0]*4", "[~ 0 0 0]*3 [~ 0 0 7]", "[~ 0 ~ 7]*4", "<[~ 0 0 0]*4 [~ 0 0 0]*3 [7 0 7 0]>"]},
             "sounds": {"chords": ["ys_hypersaw", "ys_housepiano"],
                        "lead": ["ys_hypersaw", "ys_sawlead", "ys_vox", "ys_fmlead"],
                        "arp": ["ys_pluck", "ys_glass"], "texture": ["ys_softpad"]},
@@ -867,9 +1017,10 @@ SUBGENRES = {
             "about": "driving and hypnotic: galloping bass on the three 16ths after every kick, busy hats, "
                      "phrygian, acid and square-wave leads, few chords",
             "bpm": (142, 146),
+            "modes": ["minor", "phrygian", "dorian"],
             "kit": {"kick": ["ys_kick*4"], "hats": ["hh*16", "[~ hh]*4, hh*16", "[hh hh 808oh hh]*4"],
                     "clap": ["~ cp ~ cp", "~"],
-                    "rhythm": ["[~ 0 0 0]*4", "[~ 0 0 0]*3 [~ 0 7 0]"]},
+                    "rhythm": ["[~ 0 0 0]*4", "[~ 0 0 0]*3 [~ 0 7 0]", "[0 ~ 0 0]*4", "[~ 0 0 0]*2 [0 ~ 0 0]*2"]},
             "sounds": {"lead": ["ys_sawlead", "ys_glass", "ys_sitar", "ys_fmlead"],
                        "arp": ["ys_pluck", "ys_sitar"],
                        "chords": ["ys_glass", "ys_epiano"]},
@@ -878,9 +1029,10 @@ SUBGENRES = {
         "acid": {
             "about": "the 303 up front: the acid line carries the track, house piano stabs, a plain kick",
             "bpm": (134, 140),
+            "modes": ["minor", "phrygian", "dorian"],
             "kit": {"kick": ["ys_kick*4", "ys_kick909*4"], "hats": ["[~ 808oh]*4", "[~ hh]*4, hh*8"],
                     "clap": ["~ cp ~ cp", "~ ~ ~ cp"],
-                    "rhythm": ["[~ 0 0 0]*4", "[~ 0 ~ 0]*4"]},
+                    "rhythm": ["[~ 0 0 0]*4", "[~ 0 ~ 0]*4", "[0 ~ 0 0]*4", "[~ 0 ~ 7]*4"]},
             "sounds": {"chords": ["ys_housepiano", "ys_epiano", "ys_m1organ"],
                        "lead": ["ys_glass", "ys_fmlead", "ys_hoover"],
                        "arp": ["ys_pluck"]},
@@ -892,8 +1044,8 @@ SUBGENRES = {
                      "supersaw stabs, a long breakdown",
             "bpm": (130, 136),
             "modes": ["dorian", "minor"],
-            "kit": {"hats": ["[~ hh27]*4", "[~ 808oh]*4"], "clap": ["~ cp ~ cp", "~ ~ ~ cp"],
-                    "rhythm": ["[~ 0 0 0]*4", "[~ 0]*4"]},
+            "kit": {"hats": ["[~ hh27]*4", "[~ 808oh]*4", "[~ hh27]*4, hh*8"], "clap": ["~ cp ~ cp", "~ ~ ~ cp"],
+                    "rhythm": ["[~ 0 0 0]*4", "[~ 0]*4", "[~ 0 ~ 7]*4", "[~ 0 ~ 0]*4"]},
             # The lead: the Cafe del Mar pluck or the nylon guitar playing the tune
             # (the choir sings as the bed behind, not the lead).
             "blocks": {"lead": ["cafe_lead"]},
@@ -908,10 +1060,44 @@ SUBGENRES = {
             "bpm": (128, 134),
             "modes": ["minor", "phrygian"],
             "kit": {"hats": ["hh*16", "[~ hh]*8"], "clap": ["~ cp ~ cp"],
-                    "rhythm": ["[~ 0 0 0]*4", "[~ 0 ~ 0]*4"]},
+                    "rhythm": ["[~ 0 0 0]*4", "[~ 0 ~ 0]*4", "[~ 0 0 ~]*4", "[0 ~ 0 0]*4"]},
             "sounds": {"arp": ["ys_pluck", "ys_fmlead"], "lead": ["ys_fmlead", "ys_glass"],
                        "chords": ["ys_hypersaw", "ys_glass", "ys_epiano"], "texture": ["ys_softpad"]},
             "voicings": ["spread triad", "open triad"],
+        },
+        # Early-90s ambient house (Orbital's Brown Album, The Orb, FSOL): what
+        # makes those records work, not their notes. A bright but wistful major
+        # key, a slower tempo, a few layers that come in and then stay for
+        # minutes, a wordless voice as a texture, the hook a riff that repeats
+        # until it's hypnotic; long tracks that change slowly (its "pace").
+        "ambient house": {
+            "about": "early-90s ambient house (Orbital's Brown Album, The Orb): a bright, wistful major key, "
+                     "few layers that come in one at a time and then stay, a wordless voice swelling as a "
+                     "texture, the hook a short riff on the arp repeated until it's hypnotic (not a sung "
+                     "melody), held chords, an offbeat sub, the 909 with light hats; long tracks that change "
+                     "slowly: less, for longer",
+            "bpm": (124, 128),
+            "modes": ["major", "lydian"],
+            "kit": {"kick": ["ys_kick909*4"],
+                    "hats": ["[~ 808oh]*4", "[~ hh27]*4", "[~ 808oh]*4, [~ ~ hh27 ~]*4"],
+                    "clap": ["~ ~ ~ cp", "~"],
+                    "rhythm": ["[~ 0]*4", "[~ 0 ~ 0]*4", "[~ 0]*3 [~ 7]", "<[~ 0]*4 [~ 0]*3 [0 7]>"]},
+            "blocks": {"chords": ["held_chords"], "bass": ["offbeat_sub"], "arp": ["echo_riff"],
+                       "texture": ["soft_bed"]},
+            "sounds": {"chords": ["ys_epiano", "ys_hypersaw", "ys_glass"],
+                       "texture": (["ys_revvox"] if config.REVVOX else []) + ["ys_angelchoir", "ys_softpad"],
+                       "lead": ["ys_glass", "ys_fmlead", "ys_pluck"], "arp": ["ys_pluck", "ys_glass"]},
+            "voicings": ["open triad", "add octave", "spread triad"],
+            # The hook is a riff on the arp (music/hooks.write_riff), and the
+            # track takes its time: an edit every 32 bars, about 8.5 minutes,
+            # gentle moves (peaks medium), a lower density target.
+            # Chosen by the Director or a theme that asks for it ("Orbital",
+            # "ambient house"), not drawn at random by the built-in planner.
+            "rotate": False,
+            "hook": "riff",
+            # No acid line: it's the hard side of trance this sound leaves out.
+            "without": ["acid"],
+            "pace": {"edit_bars": 32, "minutes": 8.5, "calm": True, "complexity": 0.75},
         },
     },
     "hardcore": {
@@ -1008,11 +1194,29 @@ def subgenre_blocks(style: str, name: str | None, role: str, track=None) -> list
 def track_blocks(style: str, subgenre_name: str | None, sounds: dict | None, role: str, track=None) -> list[Block]:
     """The blocks a track can bring in for `role`: the subgenre's, and of those
     the ones written for the sound the track picked for the part, if any (a
-    wave lead plays the long held notes written for it, not a choppy phrase)."""
+    wave lead plays the long held notes written for it, not a choppy phrase).
+    The vocal sings the track's hook where a voice can (a held phrase sung,
+    a riff in vocal chops)."""
     options = subgenre_blocks(style, subgenre_name, role, track)
+    hook = getattr(track, "hook", None) or {}
+    singing = [b for b in options if b.sings and b.hook_slot() and b.hook_slot()[1] == hook.get("kind", "phrase")]
+    if singing and hook.get("pattern"):
+        return singing
+    options = [b for b in options if not b.sings] or options
     sound = (sounds or {}).get(role)
     own = [b for b in options if b.keep_sound and mix.synth_of(b.body) == sound]
     return own or [b for b in options if not b.keep_sound or mix.synth_of(b.body) == sound] or options
+
+
+# Sounds so much one subgenre's that anywhere else they turn the track into
+# it: the chipmunk vocal is happy hardcore, and on a trance lead it shrieked.
+# Only a style whose subgenres name one may play it.
+SIGNATURE_SOUNDS = {"ys_chipvox"}
+
+
+def sound_fits_style(style: str, synth: str) -> bool:
+    return synth not in SIGNATURE_SOUNDS or any(
+        synth in options for name in SUBGENRES.get(style, {}) for options in subgenre(style, name).get("sounds", {}).values())
 
 
 def subgenre_sounds(style: str, name: str | None) -> dict[str, list[str]]:

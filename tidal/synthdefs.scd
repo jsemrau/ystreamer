@@ -13,6 +13,32 @@
 (
 var numChannels = ~dirt.numChannels;
 
+// Width: a mono voice becomes a stereo ensemble, two slowly drifting short
+// delays (one per side) under the dry tone, so chords, pads, keys and leads
+// stand in space instead of on one point in the middle (the stream measured
+// L/R correlation 0.99: a mono mix, the "cheap MIDI" sound). Like a chorus it
+// sums back to mono cleanly; below 220 Hz nothing is copied, so the low end
+// stays mono. A voice that's already stereo passes through. YS_WIDTH scales
+// it (0 = off, 1 = as tuned).
+~ysWideAmt = ("YS_WIDTH".getenv ? "1").asFloat;
+~ysWide = { |sig, amt = 0.6|
+    if(sig.isArray and: { sig.size > 1 }) { sig } {
+        var hi = HPF.ar(sig, 220), a = amt * ~ysWideAmt;
+        var l = DelayC.ar(hi, 0.04, LFNoise2.kr(Rand(0.17, 0.27)).range(0.008, 0.019));
+        var r = DelayC.ar(hi, 0.04, LFNoise2.kr(Rand(0.15, 0.25)).range(0.011, 0.024));
+        [sig + (l * a), sig + (r * a)] / (1 + (a * 0.5))
+    }
+};
+
+// A plucked string's loop length for frequency f (Karplus-Strong, Pluck.ar):
+// the damping filter in the loop (a one-pole low-pass, `coef`) delays it too,
+// so a loop of 1/f rings flat, the more the higher the note (up to 40 cents
+// in an arp's register, against pads in tune). Take that delay off.
+~ysKS = { |f, coef|
+    var w = 2pi * f / SampleRate.ir;
+    ((1 / f) - ((coef * sin(w)).atan2(1 - (coef * cos(w))) / w / SampleRate.ir)).max(0.0001)
+};
+
 // Warm pad: five detuned saws + sub sine through a slowly drifting low-pass.
 SynthDef(\ys_pad, { |out, sustain = 4, pan, freq = 440, speed = 1|
     var detune = [-0.11, -0.04, 0, 0.05, 0.12];
@@ -23,7 +49,7 @@ SynthDef(\ys_pad, { |out, sustain = 4, pan, freq = 440, speed = 1|
     var cutoff = LFTri.kr(Rand(0.05, 0.12), Rand(0, 2)).range(f * 1.5, f * 3.5).clip(200, 3500);
     var sig = RLPF.ar(saws, cutoff, 0.8) + sub;
     sig = LPF.ar(sig, 4500) * 0.28;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // Electric piano (Rhodes-ish): phase-modulated sine whose FM index decays,
@@ -36,7 +62,7 @@ SynthDef(\ys_epiano, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var car = SinOsc.ar(f, SinOsc.ar(f) * (0.4 + (1.6 * modEnv)));
     var tine = SinOsc.ar(f * 4.01) * EnvGen.ar(Env.perc(0.001, 0.12)) * 0.06;
     var sig = (car + tine) * (1 + (SinOsc.kr(4.2) * 0.12)) * 0.4;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // Felt piano: a few slightly inharmonic sine partials with per-partial decay
@@ -53,7 +79,7 @@ SynthDef(\ys_keys, { |out, sustain = 1, pan, freq = 440, speed = 1|
     });
     var hammer = LPF.ar(WhiteNoise.ar, 1800) * EnvGen.ar(Env.perc(0.001, 0.03)) * 0.05;
     var sig = LPF.ar(partials + hammer, (f * 6).clip(800, 7000)) * 0.35;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // Round sub bass: sine + a touch of 2nd harmonic, softly saturated.
@@ -71,10 +97,10 @@ SynthDef(\ys_pluck, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var decay = sustain.max(0.3) * 3;
     var env = EnvGen.ar(Env.perc(0.001, decay + 0.2, 1, -2), doneAction: 2);
     var exc = LPF.ar(PinkNoise.ar(0.5), 3000);
-    var sig = Pluck.ar(exc, Impulse.ar(0), 1 / 30, 1 / f, decay, 0.35);
+    var sig = Pluck.ar(exc, Impulse.ar(0), 1 / 30, ~ysKS.(f, 0.35), decay, 0.35);
     // Karplus-Strong output is very quiet; calibrated to the other voices.
     sig = LPF.ar(sig, 4500) * 4;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.4), numChannels, pan, env));
 }).add;
 
 // Glass/bell lead: sine with a quiet partial that rings briefly at each note,
@@ -89,7 +115,7 @@ SynthDef(\ys_glass, { |out, sustain = 1, pan, freq = 440, speed = 1, partial = 3
     var vib = SinOsc.kr(5, 0, 0.003, 1);
     var sig = SinOsc.ar(f * vib) + (SinOsc.ar(f * partial) * 0.12 * EnvGen.ar(Env.perc(0.005, decay * 0.3)));
     sig = sig * 0.3;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.4), numChannels, pan, env));
 }).add;
 
 // Airy drone texture: band-passed pink noise shaped around the note.
@@ -121,7 +147,7 @@ SynthDef(\ys_strings, { |out, sustain = 4, pan, freq = 440, speed = 1|
     var saws = Mix(Saw.ar(f * vib * detune.midiratio)) / 3;
     var sig = LPF.ar(saws, (f * 4).clip(600, 3000));
     sig = BPeakEQ.ar(sig, 1200, 1, -4) * 0.75;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // Soft pad, no saws and no organ: three slightly detuned triangles (odd
@@ -137,7 +163,7 @@ SynthDef(\ys_softpad, { |out, sustain = 4, pan, freq = 440, speed = 1|
     var shimmer = SinOsc.ar(f * 3.003, 0, 0.04) * LFNoise1.kr(0.2).range(0.2, 1);
     var sig = LPF.ar(tri + sines + shimmer, (f * 3).clip(400, 2400));
     sig = sig * 0.29;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // --- 1990s trance and house (no saws, no organ) ---------------------------
@@ -152,7 +178,7 @@ SynthDef(\ys_pulsepad, { |out, sustain = 4, pan, freq = 440, speed = 1|
     var osc = Mix(Pulse.ar(f * [-0.07, 0.07].midiratio, widths)) / 2;
     var sig = RLPF.ar(osc, (f * 3).clip(400, 1600), 0.8) + SinOsc.ar(f * 0.5, 0, 0.12);
     sig = LPF.ar(LPF.ar(sig, 1800), 2200) * 0.34;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // M1-style house piano: bright additive partials that die away faster the
@@ -168,7 +194,7 @@ SynthDef(\ys_housepiano, { |out, sustain = 1, pan, freq = 440, speed = 1|
     });
     var ding = BPF.ar(WhiteNoise.ar, (f * 6).clip(800, 6000), 0.3) * EnvGen.ar(Env.perc(0.001, 0.03)) * 0.3;
     var sig = LPF.ar(LPF.ar(partials + ding, 3500), 4000) * 0.16;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // Square lead: two pulse waves a few cents apart with a light vibrato, a
@@ -181,7 +207,7 @@ SynthDef(\ys_pulselead, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var osc = Pulse.ar(f * vib, 0.4) + (Pulse.ar(f * 1.004 * vib, 0.45) * 0.6);
     var cutoff = EnvGen.kr(Env([f * 3, f * 1.4], [0.25], -3)).clip(300, 1800);
     var sig = LPF.ar(LPF.ar(RLPF.ar(osc, cutoff, 0.7), 2000), 2400) * 0.17;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.4), numChannels, pan, env));
 }).add;
 
 // Soft drawbar organ with a slow rotary-speaker shimmer.
@@ -193,7 +219,7 @@ SynthDef(\ys_organ, { |out, sustain = 2, pan, freq = 440, speed = 1|
     var sig = Mix(SinOsc.ar(bars, 0, amps)) / 1.8;
     sig = sig * (1 + (SinOsc.kr(0.8) * 0.15));
     sig = LPF.ar(sig, 3500) * 0.22;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // Airy "aah" choir: a saw through vowel formants, slow attack.
@@ -206,7 +232,7 @@ SynthDef(\ys_choir, { |out, sustain = 4, pan, freq = 440, speed = 1|
         BPF.ar(src, fm[0], fm[2]) * fm[1]
     });
     sig = sig * 1.9;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // --- Trance (after Switch Angel's SuperCollider trance) --------------------
@@ -316,7 +342,7 @@ SynthDef(\ys_hypersaw, { |out, sustain = 0.5, pan, freq = 440, speed = 1, detune
     sig = LPF.ar(sig, (6000 * bright).clip(400, 18000));
     sig = HPF.ar(sig, 160);
     sig = (sig * 1.4).tanh * 0.7 * duck;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 SynthDef(\ys_gatesaw, { |out, sustain = 4, pan, freq = 440, speed = 1,
                          gatetime = 1.74, gatepat = 1, gatedepth = 0.9,
@@ -430,12 +456,12 @@ SynthDef(\ys_coldguitar, { |out, sustain = 0.5, pan, freq = 440, speed = 1|
     var decay = sustain.max(0.3) * 2.5 + 0.3;
     var env = EnvGen.ar(Env.perc(0.001, decay + 0.2, 1, -3), doneAction: 2);
     var exc = HPF.ar(LPF.ar(WhiteNoise.ar(0.6), 7000), 250);
-    var str = Pluck.ar(exc, Impulse.ar(0), 1 / 30, 1 / f, decay, 0.18);
+    var str = Pluck.ar(exc, Impulse.ar(0), 1 / 30, ~ysKS.(f, 0.18), decay, 0.18);
     var dry = BPeakEQ.ar(LPF.ar(HPF.ar(str, 120), 7500), 2600, 1, 5);
     var sweep = SinOsc.kr(0.9, Rand(0, 2pi) + [0, pi]).range(0.005, 0.014);
     var wet = DelayC.ar(dry, 0.02, sweep);
     var sig = ([dry + (wet[0] * 0.8), dry + (wet[1] * 0.8)] * 3).tanh * 0.27;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // String machine (Solina / ARP Omni) without the saws: hollow triangles an
@@ -451,7 +477,7 @@ SynthDef(\ys_coldstrings, { |out, sustain = 4, pan, freq = 440, speed = 1|
         DelayC.ar(dry, 0.03, SinOsc.kr(0.55, p, 0.0035, 0.009) + SinOsc.kr(6.1, p, 0.0006))
     };
     var sig = (([taps[0] + (taps[1] * 0.6), taps[2] + (taps[1] * 0.6)] * 0.45) + (dry * 0.3)) * 0.22;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // The drum machine's gated-reverb snare: a tuned body, a noise crack, and
@@ -484,7 +510,7 @@ SynthDef(\ys_wavelead, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var osc = VarSaw.ar(fr, 0, width) + (VarSaw.ar(fr * 1.003, 0.3, width) * 0.6) + SinOsc.ar(fr * 0.5, 0, 0.35);
     var cut = EnvGen.kr(Env([f * 1.2, f * 4, f * 2.5], [0.25, len], [2, -2])).clip(300, 3500);
     var sig = LPF.ar(LPF.ar(osc, cut), 4000) * 0.2;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.4), numChannels, pan, env));
 }).add;
 
 // Wave synth: a soft polysynth note that blooms and rings on for seconds, so
@@ -500,7 +526,7 @@ SynthDef(\ys_wavesynth, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var sweep = SinOsc.kr(0.6, Rand(0, 2pi) + [0, pi]).range(0.004, 0.011);
     var wet = DelayC.ar(dry, 0.02, sweep);
     var sig = [dry + (wet[0] * 0.7), dry + (wet[1] * 0.7)] * 0.09;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 // --- saws, done properly (YS_HYPERSAW) ------------------------------------
 // The old saws (ys_supersaw, ys_pad, ys_strings) are raw LFSaw/Saw stacks:
@@ -525,7 +551,7 @@ SynthDef(\ys_sawlead, { |out, sustain = 0.5, pan, freq = 440, speed = 1|
     var cut = EnvGen.kr(Env([f * 6, f * 2.5], [0.18 + (len * 0.3)], -4)).clip(400, 5000);
     sig = HPF.ar(RLPF.ar(sig, cut, 0.6), 150);
     sig = (sig * 1.2).tanh * 0.18;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.4), numChannels, pan, env));
 }).add;
 
 // Saw pad: seven band-limited saws on the JP-8000's detune curve, spread
@@ -541,7 +567,7 @@ SynthDef(\ys_sawpad, { |out, sustain = 4, pan, freq = 440, speed = 1, detune = 0
     var sig = [v[0] + v[2] + v[5] + (v[3] * 0.8), v[1] + v[4] + v[6] + (v[3] * 0.8)] * 0.12;
     var cut = LFTri.kr(Rand(0.05, 0.1), Rand(0, 2)).range(f * 1.8, f * 4.5).clip(500, 2500);
     sig = HPF.ar(LPF.ar(LPF.ar(sig, cut), 4500), 180);
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 // --- more lead voices: each one a different instrument ---------------------
 
@@ -557,7 +583,7 @@ SynthDef(\ys_flute, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var breath = BPF.ar(PinkNoise.ar, f * vib, 0.08) * (0.5 + EnvGen.ar(Env([2.5, 0.6], [0.12], -4)));
     var chiff = BPF.ar(WhiteNoise.ar, (f * 4).clip(500, 8000), 0.5) * EnvGen.ar(Env.perc(0.002, 0.04)) * 0.15;
     var sig = LPF.ar((tone * 0.32) + (breath * 0.5) + chiff, 6000) * 0.5;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.4), numChannels, pan, env));
 }).add;
 
 // Marimba: a struck wooden bar, its partials tuned 1 : 4 : 10 the way a
@@ -571,7 +597,7 @@ SynthDef(\ys_marimba, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var p3 = SinOsc.ar(f * 10) * EnvGen.ar(Env.perc(0.001, decay * 0.08, 1, -8)) * 0.12;
     var mallet = LPF.ar(WhiteNoise.ar, 3000) * EnvGen.ar(Env.perc(0.0005, 0.008)) * 0.2;
     var sig = (p1 + p2 + p3 + mallet) * 0.35;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // Sitar (Goa and psy trance): a plucked string (Karplus-Strong) slid up into
@@ -583,10 +609,10 @@ SynthDef(\ys_sitar, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var env = EnvGen.ar(Env.perc(0.001, decay + 0.2, 1, -3), doneAction: 2);
     var slide = EnvGen.kr(Env([-0.6, 0], [0.07], -3)).midiratio;
     var exc = HPF.ar(WhiteNoise.ar(0.7), 400);
-    var str = Pluck.ar(exc, Impulse.ar(0), 1 / 30, 1 / (f * slide), decay, 0.1);
+    var str = Pluck.ar(exc, Impulse.ar(0), 1 / 30, ~ysKS.(f * slide, 0.1), decay, 0.1);
     var buzz = (str * 6).fold2(1) * 0.25;
     var sig = LPF.ar(HPF.ar(BPeakEQ.ar(str + buzz, 2500, 1, 6), 150), 8000) * 0.48;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.4), numChannels, pan, env));
 }).add;
 
 // Vocal lead (Delerium, 90s trance vocal pads): a voice singing "aah" that
@@ -602,7 +628,28 @@ SynthDef(\ys_vox, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var aah = [800, 1150, 2900], ooh = [450, 800, 2830], amps = [1, 0.5, 0.25];
     var sig = Mix.fill(3, { |i| BPF.ar(src, morph.linlin(0, 1, aah[i], ooh[i]), 0.1) * amps[i] });
     sig = (sig * 2.2).tanh * 0.35;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
+}).add;
+
+// Reversed voice (early-90s ambient house: Orbital, The Orb): a sung vowel
+// played backwards. It swells in out of its own reverb, opens from "ooh" to
+// "aah" and stops dead, as a reversed sample does; two voices a few cents
+// apart, breath that fades as the tone grows, and a vibrato that dies away
+// toward the end (a sung note's late vibrato, backwards). No words: a human
+// texture, not a vocal line.
+SynthDef(\ys_revvox, { |out, sustain = 1, pan, freq = 440, speed = 1|
+    var f = freq * speed;
+    var len = sustain.max(0.3);
+    var env = EnvGen.ar(Env([0, 0.08, 1, 0], [len * 0.55, len * 0.43, 0.03], [3, 2.5, -2]), doneAction: 2);
+    var vib = 1 + (SinOsc.kr(5, Rand(0, 2pi)) * 0.006 * EnvGen.kr(Env([1, 1, 0], [len * 0.4, len * 0.5])));
+    var src = [-0.06, 0.06].collect { |d| Saw.ar(f * vib * d.midiratio) } * 0.5;
+    var breath = PinkNoise.ar(0.06 ! 2) * EnvGen.kr(Env([1, 0.6, 0.15], [len * 0.5, len * 0.5]));
+    var morph = EnvGen.kr(Env([0, 1], [len], 2));
+    var ooh = [430, 820, 2700], aah = [850, 1220, 2810], amps = [1, 0.5, 0.25];
+    var sig = Mix.fill(3, { |i| BPF.ar(src + breath, morph.linlin(0, 1, ooh[i], aah[i]), 0.09) * amps[i] });
+    sig = LPF.ar(sig, 6000);
+    sig = (sig * 7.0).tanh * 0.42;          // (the narrow formants take most of the level)
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // FM lead (DX7): a sine modulated by one an octave up, the modulation bright
@@ -616,7 +663,7 @@ SynthDef(\ys_fmlead, { |out, sustain = 0.5, pan, freq = 440, speed = 1|
     var vib = 1 + (SinOsc.kr(5.8, Rand(0, 2pi)) * 0.004 * EnvGen.kr(Env([0, 0, 1], [0.3, 0.4])));
     var mod = SinOsc.ar(f * 2 * vib) * f * 2 * index;
     var sig = LPF.ar(SinOsc.ar((f * vib) + mod), 6000) * 0.22;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.4), numChannels, pan, env));
 }).add;
 // --- 1990s signature sounds (The Prodigy, Chicane, Thievery Corporation,
 // Nightmares on Wax, Yonderboi, Massive Attack, Axelle Red) ----------------
@@ -634,7 +681,7 @@ SynthDef(\ys_hoover, { |out, sustain = 0.5, pan, freq = 440, speed = 1|
     var wet = DelayC.ar(dry, 0.03, SinOsc.kr(0.9, [0, pi]).range(0.005, 0.015));
     var sig = HPF.ar(LPF.ar([dry + wet[0], dry + wet[1]], 4500), 120);
     sig = (sig * 1.3).tanh * 0.16;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.4), numChannels, pan, env));
 }).add;
 
 // M1 organ stab (Robin S, 90s house and rave): drawbars an octave down to
@@ -647,7 +694,7 @@ SynthDef(\ys_m1organ, { |out, sustain = 0.3, pan, freq = 440, speed = 1|
     var tone = Mix(ratios.collect { |r, i| SinOsc.ar(f * r, 0, amps[i]) });
     var click = BPF.ar(WhiteNoise.ar, 3000, 0.6) * EnvGen.ar(Env.perc(0.0005, 0.01)) * 0.4;
     var sig = LPF.ar((tone + click) * 0.16, 5000);
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // Nylon-string guitar (Chicane's Balearic guitar): a soft, warm pluck
@@ -657,11 +704,11 @@ SynthDef(\ys_nylon, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var decay = (sustain * 3).clip(0.8, 4);
     var env = EnvGen.ar(Env.perc(0.002, decay + 0.2, 1, -3), doneAction: 2);
     var exc = LPF.ar(WhiteNoise.ar(0.8), 1600) * EnvGen.ar(Env.perc(0.002, 0.02));
-    var str = Pluck.ar(exc, Impulse.ar(0), 1 / 30, 1 / f, decay, 0.45);
+    var str = Pluck.ar(exc, Impulse.ar(0), 1 / 30, ~ysKS.(f, 0.45), decay, 0.45);
     var body = (BPF.ar(str, 210, 0.6) * 1.5) + BPF.ar(str, 420, 0.8);
     // Soft saturation rounds off the pluck's spike, so fast notes never clip.
     var sig = (LPF.ar(str + body, 5000) * 4).tanh * 0.6;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // Melodica (Thievery Corporation's dub, Augustus Pablo): two reeds a hair
@@ -675,7 +722,7 @@ SynthDef(\ys_melodica, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var nasal = (BPF.ar(reed, 1400, 0.8) * 1.5) + LPF.ar(reed, 900);
     var breath = BPF.ar(PinkNoise.ar, 2500, 0.5) * 0.05 * EnvGen.ar(Env.perc(0.01, 0.2));
     var sig = LPF.ar(nasal + breath, 4500) * 0.22;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.4), numChannels, pan, env));
 }).add;
 
 // Vibraphone (Thievery Corporation, Nightmares on Wax, Yonderboi): metal bars
@@ -689,7 +736,7 @@ SynthDef(\ys_vibes, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var motor = SinOsc.kr(5.5, Rand(0, 2pi)).range(0.65, 1);
     var mallet = LPF.ar(WhiteNoise.ar, 4000) * EnvGen.ar(Env.perc(0.0005, 0.006)) * 0.15;
     var sig = (((SinOsc.ar(f) + p2 + p3) * motor) + mallet) * 0.3;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // Muted trumpet (Yonderboi, lounge jazz): a brass tone that brightens as it
@@ -704,7 +751,7 @@ SynthDef(\ys_trumpet, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var bright = EnvGen.kr(Env([f * 1.5, f * 6, f * 4], [0.05, len], [2, -2])).clip(300, 6000);
     var horn = LPF.ar(Saw.ar(f * lip * vib), bright);
     var sig = (((BPF.ar(horn, 1600, 0.5) * 2) + (HPF.ar(horn, 800) * 0.3)) * 0.9).tanh * 0.55;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.4), numChannels, pan, env));
 }).add;
 
 // Harpsichord (Massive Attack's "Teardrop"): two strings plucked by a quill,
@@ -714,11 +761,11 @@ SynthDef(\ys_harpsichord, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var decay = (sustain * 2).clip(0.5, 2.5);
     var env = EnvGen.ar(Env.perc(0.001, decay + 0.1, 1, -4), doneAction: 2);
     var exc = HPF.ar(WhiteNoise.ar(0.8), 1000) * EnvGen.ar(Env.perc(0.0005, 0.004));
-    var s8 = Pluck.ar(exc, Impulse.ar(0), 1 / 30, 1 / f, decay, 0.05);
-    var s4 = Pluck.ar(exc, Impulse.ar(0), 1 / 30, 1 / (f * 2), decay * 0.7, 0.05) * 0.5;
+    var s8 = Pluck.ar(exc, Impulse.ar(0), 1 / 30, ~ysKS.(f, 0.05), decay, 0.05);
+    var s4 = Pluck.ar(exc, Impulse.ar(0), 1 / 30, ~ysKS.(f * 2, 0.05), decay * 0.7, 0.05) * 0.5;
     // Soft saturation rounds off the quill's spike, so fast notes never clip.
     var sig = (HPF.ar(LPF.ar(s8 + s4, 9000), 120) * 2.5).tanh * 0.45;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 // --- voices of 90s trance and rave (Guru Josh, Charly Lownoise, Chicane) ---
 
@@ -738,7 +785,7 @@ SynthDef(\ys_sax, { |out, sustain = 1, pan, freq = 440, speed = 1|
     var growl = 1 + (SinOsc.ar(f * 0.5) * 0.08 * blow);
     var breath = BPF.ar(PinkNoise.ar, 2000, 0.8) * 0.06 * blow;
     var sig = (((horn * growl) + breath + (body * 0.15)) * 1.6).tanh * 0.25;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.4), numChannels, pan, env));
 }).add;
 
 // The first angel choir, kept to compare (eval.sound_preview --choir), off
@@ -757,7 +804,7 @@ SynthDef(\ys_angelchoir_v1, { |out, sustain = 2, pan, freq = 440, speed = 1|
     };
     var sig = [voices[0] + voices[1] + (voices[2] * 0.7), voices[3] + voices[4] + (voices[2] * 0.7)] * 0.5;
     sig = HPF.ar(LPF.ar(sig, 6000), 200) * 0.67;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // The angel choir (Chicane's "Saltwater", Clannad): a breathy soprano, not
@@ -798,7 +845,7 @@ SynthDef(\ys_angelchoir, { |out, sustain = 2, pan, freq = 440, speed = 1, breath
     };
     sig = [sig[0] + (sig[1] * 0.7), sig[2] + (sig[1] * 0.7)];
     sig = HPF.ar(LPF.ar(sig, 5500), 180) * 0.145;         // at the first choir's level (mix.SYNTH_LUFS)
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 // The sped-up vocal of happy hardcore ("Wonderful Days"): a short sung "ya",
@@ -813,7 +860,7 @@ SynthDef(\ys_chipvox, { |out, sustain = 0.3, pan, freq = 440, speed = 1|
     var ee = [270, 2290, 3010] * 1.6, aah = [850, 1200, 2800] * 1.6, amps = [1, 0.5, 0.3];
     var sig = Mix.fill(3, { |k| BPF.ar(src, glide.linlin(0, 1, ee[k], aah[k]), 0.12) * amps[k] });
     sig = (sig * 2.5).tanh * 0.47;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.4), numChannels, pan, env));
 }).add;
 
 
@@ -833,7 +880,7 @@ SynthDef(\ys_cafepluck, { |out, sustain = 0.3, pan, freq = 440, speed = 1|
     };
     var sig = RLPF.ar(osc, cut, 0.45);
     sig = (sig * 1.2).tanh * 0.3;
-    OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+    OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
 }).add;
 
 
@@ -895,7 +942,7 @@ SynthDef(\ys_cafepluck, { |out, sustain = 0.3, pan, freq = 440, speed = 1|
             var wet = DelayC.ar(sig, 0.02, sweep);
             sig = [sig + (wet[0] * chorus), sig + (wet[1] * chorus)] * 0.7;
         };
-        OffsetOut.ar(out, DirtPan.ar(sig, numChannels, pan, env));
+        OffsetOut.ar(out, DirtPan.ar(~ysWide.(sig, 0.6), numChannels, pan, env));
     }).add;
 };
 if(~ysInstruments.notNil) {
@@ -907,5 +954,42 @@ if(~ysInstruments.notNil) {
     if(have.(\bass)) { ~ysSampled.(\ys_chorusbass, ~ysInstruments[\bass], gain: 1.26, ring: 1.2, release: 0.12, chorus: 0.7) };
     if(have.(\harp)) { ~ysSampled.(\ys_harp, ~ysInstruments[\harp], gain: 1.68, ring: 1.5, release: 0.8) };
     if(have.(\kalimba)) { ~ysSampled.(\ys_kalimba, ~ysInstruments[\kalimba], gain: 1.78, ring: 1.2, release: 0.5) };
+    // The Versilian libraries (VSCO-2 CE, VCSL; CC0): the orchestra, the
+    // mallets, the reeds and some voices from further away. Bowed and blown
+    // notes swell in (`attack`) and hold for the note; struck and plucked
+    // ones ring on (`ring`). The muted trumpet, vibraphone and marimba take
+    // over from their models. `gain`: each at its level (mix.SYNTH_LUFS).
+    [
+        [\grandpiano, \ys_grandpiano, (gain: 2.31, ring: 1.5, release: 0.6, lpf: 9000)],
+        [\violins, \ys_violins, (gain: 1.29, ring: 1, release: 0.5, attack: 0.08, lpf: 9000)],
+        [\cellos, \ys_cellos, (gain: 1.49, ring: 1, release: 0.5, attack: 0.06, lpf: 8000)],
+        [\pizz, \ys_pizz, (gain: 1.54, ring: 1.2, release: 0.2)],
+        [\violin, \ys_violin, (gain: 1.25, ring: 1, release: 0.4, attack: 0.04, lpf: 9000)],
+        [\flute, \ys_concertflute, (gain: 1.54, ring: 1, release: 0.25, attack: 0.03)],
+        [\oboe, \ys_oboe, (gain: 1.33, ring: 1, release: 0.2, attack: 0.02, lpf: 8000)],
+        [\clarinet, \ys_clarinet, (gain: 1.70, ring: 1, release: 0.2, attack: 0.02, lpf: 8000)],
+        [\trumpet, \ys_trumpet, (gain: 1.02, ring: 1, release: 0.2, attack: 0.015, lpf: 8000)],
+        [\horn, \ys_horn, (gain: 1.33, ring: 1, release: 0.35, attack: 0.04, lpf: 6000)],
+        [\vibes, \ys_vibes, (gain: 1.70, ring: 2, release: 0.8)],
+        [\marimba, \ys_marimba, (gain: 1.34, ring: 1.5, release: 0.3)],
+        [\dantranh, \ys_dantranh, (gain: 1.84, ring: 1.5, release: 0.4)],
+        [\harmonica, \ys_harmonica, (gain: 1.29, ring: 1, release: 0.15, attack: 0.01, lpf: 7000)],
+        [\ocarina, \ys_ocarina, (gain: 1.56, ring: 1, release: 0.2, attack: 0.02)],
+        [\mbira, \ys_mbira, (gain: 1.74, ring: 1.5, release: 0.5)],
+        [\glockenspiel, \ys_glockenspiel, (gain: 1.41, ring: 2, release: 0.8, lpf: 12000)],
+        [\chimes, \ys_chimes, (gain: 1.80, ring: 3, release: 1.5)],
+        // Voices (Freesound, CC0): one singer's sung notes, held and short,
+        // and a crowd singing "ahh" together, swelling in as a bed.
+        [\uprightbass, \ys_uprightbass, (gain: 2.87, ring: 1.1, release: 0.15, lpf: 5000)],
+        [\femalevox, \ys_femalevox, (gain: 1.59, ring: 1, release: 0.3, attack: 0.03, lpf: 10000)],
+        [\voxchop, \ys_voxchop, (gain: 1.92, ring: 1, release: 0.08, lpf: 10000)],
+        [\crowdchoir, \ys_crowdchoir, (gain: 1.1, ring: 1, release: 0.8, attack: 0.3, lpf: 8000)]
+    ].do { |spec|
+        var o = spec[2];
+        if(have.(spec[0])) {
+            ~ysSampled.(spec[1], ~ysInstruments[spec[0]], gain: o[\gain], ring: o[\ring], release: o[\release],
+                attack: o[\attack] ? 0.002, lpf: o[\lpf] ? 12000)
+        };
+    };
 };
 )

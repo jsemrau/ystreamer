@@ -11,6 +11,7 @@ piper-tts     # local text-to-speech for the spoken narration
 
 # Development
 pytest
+pyguitarpro   # eval/tabs.py: Guitar Pro 3-5 tabs (music21, for MIDI/MusicXML, is optional)
 
 # Only needed for the old local-model/dataset scripts (QwenTest.py, sample_gen.py)
 # smolagents[transformers]

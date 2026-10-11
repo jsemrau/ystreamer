@@ -6,7 +6,8 @@
 const STAGE_W = 1920, STAGE_H = 1080;
 const POLL_MS = 500;
 const PHASE_NAMES = { build: "build", groove: "groove", breakdown: "breakdown", rebuild: "rebuild",
-                      groove2: "peak", outro: "outro" };
+                      groove2: "peak", outro: "outro", lift: "lift", tag: "tag", bridge: "bridge",
+                      interlude: "interlude", break: "break" };
 
 // Colours per style (the 3D wave field takes them).
 const STYLES = {
@@ -128,7 +129,8 @@ function renderTop() {
   const st = STYLES[t.style] || STYLES.techno;
   document.documentElement.style.setProperty("--accent", st.accent);
   document.documentElement.style.setProperty("--accent2", st.accent2);
-  targetIntensity = { build: 0.55, groove: 0.85, breakdown: 0.3, rebuild: 0.65, groove2: 1.0, outro: 0.35 }[ui.phase] ?? 0.7;
+  targetIntensity = { build: 0.55, groove: 0.85, breakdown: 0.3, rebuild: 0.65, groove2: 1.0, outro: 0.35,
+                     lift: 0.75, tag: 0.8, bridge: 0.6, interlude: 0.75, break: 0.25 }[ui.phase] ?? 0.7;
 }
 
 // How far into the current phase we are, against the bars planned for it.
@@ -226,7 +228,9 @@ function card(ev, old, fresh) {
     }).join("") + `</div>`;
   } else if (kind === "director") {
     meta = `<span class="badge">${esc(ev.model || "")}</span>`;
-    const parts = String(ev.decision || "").split(/,\s*/).map((p) => `<span>${esc(p.replace(/^'|'$/g, ""))}</span>`).join("");
+    // The recommendation is sentences (the bold choice, then sounds and arc), not a list.
+    const parts = ev.what === "Recommendation" ? `<span>${esc(ev.decision || "")}</span>`
+      : String(ev.decision || "").split(/,\s*/).map((p) => `<span>${esc(p.replace(/^'|'$/g, ""))}</span>`).join("");
     body = `<div class="plan">${parts}</div>` + (ev.reason ? `<div class="why">${esc(ev.reason)}</div>` : "");
   } else if (kind === "narrator") {
     body = `<div class="quote">“${esc(ev.text)}”</div>`;

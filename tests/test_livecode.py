@@ -410,7 +410,7 @@ def test_director_plans_the_track_in_live_mode():
     assert second.title and performer._last_piece.title == second.title
 
 
-def test_arc_moments_are_narrated_without_a_text_model():
+def test_arc_moments_are_explained_from_the_directors_cues_without_a_text_model():
     class Voice:
         def __init__(self):
             self.lines = []
@@ -432,6 +432,10 @@ def test_arc_moments_are_narrated_without_a_text_model():
     kinds = [k for k, _ in voice.lines]
     assert kinds[0] == "piece" and voice.lines[0][1].startswith("Now playing:")
     assert kinds.count("section") >= 3       # groove, breakdown, rebuild, ...
+    # What's said is what the art director asked of the section, never filler.
+    said = [t for k, t in voice.lines if k == "section"]
+    assert not any("breathe" in t or "carry you" in t for t in said)
+    assert any("hook" in t or "lead" in t for t in said)
 
 
 def test_edit_bars_override():
@@ -813,3 +817,20 @@ def test_a_control_the_synth_takes_can_be_added_even_as_an_effect():
     assert dict(after.lines["acid"].pfs)["acidres"] == "0.12"
     with pytest.raises(EditError):       # the acid synth has no trance gate
         apply_edit(program, Edit("set_pf", role="acid", name="gatedepth", value="0.5"))
+
+
+def test_the_chords_can_hold_their_notes_longer():
+    """The Performer asked to raise the chords' legato for a held feel and was
+    refused; it may, from 0.3 to 1.5 (longer would smear a trance gate)."""
+    from music.livecode import fx_range
+    from music.performer import Performer
+
+    program = _program_with("trance", "trance_beat", "piano_stabs")
+    performer = Performer(random.Random(0), style="trance", log=lambda *_: None)
+    edit = performer._edit_from_json({"op": "set_fx", "role": "chords", "name": "legato", "value": "1.4"}, program)
+    assert dict(apply_edit(program, edit).lines["chords"].fx)["legato"] == "1.4"
+    edit = performer._edit_from_json({"op": "set_fx", "role": "chords", "name": "legato", "value": "2"}, program)
+    assert dict(apply_edit(program, edit).lines["chords"].fx)["legato"] == "1.5"
+    with pytest.raises(EditError):
+        apply_edit(program, Edit("set_fx", role="chords", name="legato", value="1.9"))
+    assert fx_range("chords", "legato") == (0.3, 1.5) and fx_range("keys", "legato") == (0.1, 2.0)
