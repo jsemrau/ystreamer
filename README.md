@@ -36,6 +36,8 @@ behind the design.
 ./venv/bin/python orchestrator.py --dry-run --style lofi   # see the code it would play (no audio)
 ./venv/bin/python -m eval.preview --style lofi --out preview.wav   # rough audio sketch, no SuperCollider
 
+./venv/bin/python -m music.instruments       # the real instruments and voices (CC0; voices need FREESOUND_API_KEY)
+./venv/bin/python -m eval.drum_kits           # a drum kit for each track, built from the drum samples
 stream/setup_audio.sh --monitor               # create the stream sink and listen to it
 ./venv/bin/python orchestrator.py             # play forever, directed by the local model (default)
 ./venv/bin/python orchestrator.py --llm claude --free-layer
@@ -821,7 +823,9 @@ the review; the box itself is only on your view (the captured stream loads
 the page with `?capture=1`). Without an LLM, simple keyword rules answer
 (more / less / drop / bring back a part, darker / brighter, faster / slower).
 Requests are logged in the terminal (`📨`) and in the session memory; the
-page server only listens on 127.0.0.1.
+page server only listens on 127.0.0.1. A request steers the art director
+only during the session it was made in (`YS_SESSION_START`, set by
+`stream/live.sh`): an old wish never shapes a new set.
 
 ## Rating what plays (👍 / 👎)
 
@@ -913,9 +917,13 @@ and a goal for every set (each track recognisable within a minute, the
 host's thumbs going up, one memorable moment per track, an arc across the
 tracks). Each track's brief shows its progress toward that goal: the track
 number in the set, the host's 👍 and 👎 since the set began (the part and
-sound each was on) and their latest requests. Its recommendation starts
-with the track's `concept`, one sentence every choice serves (`🎨
-Recommendation` in the log and on the page).
+sound each was on) and their requests this session. Its reply starts with
+its `reasoning` (from its journal, the style and theme, and its skills:
+see below), then the recommendation: the track's `concept`, one sentence
+every choice serves, and the song-design `techniques` it uses (`🧠
+Reasoning` and `🎨 Recommendation` in the log and on the page). If the host
+asked for nothing, the choice is its own: the brief tells it to surprise
+them.
 
 Write another persona into a file and point `YS_DIRECTOR_PERSONA` at it in
 `.env` to change who directs; without the file the Director is the plain
@@ -933,6 +941,19 @@ Every decision prints in the terminal with the model's reason:
 🎛  Next section (build 3/8, energy 0.6) by the built-in planner: ...   <- LLM was unavailable
 ```
 
+With the art director (club and chill styles) the log reads like this:
+
+```
+🧠 Reasoning: First track of the set, so a clean exploit: one clear hook on a real voice ...
+🎨 Recommendation
+   concept: ...   techniques: A5 The sung refrain as payoff, A11 Polymeter
+🥁 Drum kit: oberheim · bass: ys_chorusbass
+🎛  Develop → breakdown: I strip to the hook alone, the voice over the pads ...
+```
+
+- `🎛 Develop` lines come at each section change: what she heard and how she
+  develops the next section (or "the plan stands"). They're also in
+  `runtime/director_journal.jsonl`, her memory across restarts.
 - `--show-llm` also prints the model's full raw reply.
 - `tail -f runtime/thoughts.log` follows just the decisions, in a second terminal.
 - Sections are planned one section ahead, so a "Next section" line appears
@@ -1170,11 +1191,19 @@ Tunables such as the layer cap, timeouts and paths live in `.env` (see
 | `music/theory.py` | keys, modes, progression library, voice leading |
 | `music/templates.py`, `music/melody.py` | role templates (pad, keys, bass, melody, arp, drums, texture) that render in-key Tidal code |
 | `music/presets.py` | curated, gain-balanced sound palette |
-| `music/plan.py`, `music/director.py` | piece/section plans, the LLM Director with validation and fallback |
+| `music/plan.py`, `music/director.py` | piece/section plans, the LLM Director with validation and fallback; her reasoning and live development (`develop_section`) |
+| `prompts/director_persona.md`, `prompts/skills/` | the art director's persona and her skills (song design: the basics, eighteen advanced techniques) |
+| `prompts/director_piece.md`, `prompts/director_develop.md` | her brief for a track, and for developing it live at each section change |
+| `music/journal.py` | her journal (`runtime/director_journal.jsonl`): each track's plan, kit, live decisions and how the host took it |
+| `music/explore.py` | explore or exploit: her suggestions as a bandit rewarded by the host's thumbs (`YS_EXPLORE`) |
+| `music/touchstones.py`, `music/data/touchstones.json` | the host's favourite songs, as craft to learn from |
+| `music/taste.py` | the host's taste: thumbs and this session's requests, matched to what played |
+| `music/kits.py`, `music/data/drum_kits.json` | a drum kit and a bass sound per track (`YS_DRUM_KITS`) |
+| `music/forms.py`, `music/data/song_forms.json` | real songs' forms (Harmonix Set) for each track's sections |
 | `music/engine.py` | cycle clock, phrase-quantised scheduling (`jumpMod`), state/overlay files |
 | `tidal/synthdefs.scd`, `tidal/superdirt_boot.scd` | custom SynthDefs and the master compressor/limiter |
 | `stream/` | `live.sh` (go live), `record.sh` (record a video file), audio sink, stream page and capture, watchdog, thumbnail |
-| `eval/` | analysis, quality monitor, feedback, preview renderer, dataset export |
+| `eval/` | analysis, quality monitor, feedback, preview renderer, dataset export; `drum_kits.py` (builds the kits), `instrument_levels.py` (levels the recordings) |
 | `tidal_backend.py`, `prompts/composer_prompt.md` | the old free-form agent loop (`orchestrator.py --legacy "..."`) |
 
 ## Troubleshooting
@@ -1186,6 +1215,9 @@ Tunables such as the layer cap, timeouts and paths live in `.env` (see
 | `[llama-server] stopped ... failed to allocate buffer for kv cache` / `cudaMalloc failed: out of memory` | The model fits but its context doesn't. Lower `LLAMA_CTX_SIZE` in `.env` (default 16384; 8192 is enough), add `LLAMA_SERVER_ARGS=-fa on --cache-type-k q8_0 --cache-type-v q8_0`, or lower `LLAMA_GPU_LAYERS`. The error and a likely fix are printed as soon as llama-server stops. |
 | `[Director] LLM unavailable (cannot reach http://127.0.0.1:8080/...)` | The local model isn't running. Set `LLAMA_SERVER_BIN` and `LLAMA_GGUF_MODEL` in `.env` (the engine then starts it), start llama-server yourself, or use `--llm none`. The music keeps playing on the built-in planner meanwhile. |
 | `apt-get update` fails on a third-party PPA | Harmless for this project; `install.sh` continues. To silence it: `sudo add-apt-repository --remove ppa:<name>`. |
+| `Claude API error 400 ... anthropic-workspace-id` | The API key isn't scoped to a workspace: set `ANTHROPIC_WORKSPACE_ID=wrkspc_...` in `.env`, or use a workspace key (then leave it empty: a wrong one gives `404 Workspace not found`). |
+| `Claude API error 400 ... credit balance is too low` | The key's organization has no credit: add some in the Console (Plans & Billing). The music keeps playing on the built-in planner meanwhile. |
+| `[stream] another stream.sh is already running` | An earlier `live.sh` still holds the stream: stop it (`pgrep -af "live.sh\|stream.sh"`, then `kill` the `live.sh`), then start again. |
 | No sound, but no errors | `pw-link -l \| grep -A2 SuperCollider`; if it isn't connected to `ystream_sink`, run `stream/route_audio.sh`. |
 
 ## Tests
